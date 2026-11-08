@@ -1,9 +1,10 @@
 //! Device chains: adding, removing and changing devices.
 
-use super::Session;
-use rlive_core::{DeviceId, ParamInfo, TrackId};
+use super::{build, Session};
+use rlive_core::param::mixer;
+use rlive_core::{DeviceId, ParamId, ParamInfo, TrackId};
 use rlive_devices::DeviceRole;
-use rlive_engine::{ChainTarget, EngineCommand, GraphCmd, ParamCmd};
+use rlive_engine::{mix_cell, CellIx, ChainTarget, EngineCommand, GraphCmd};
 use rlive_plugin_host::PluginDescriptor;
 use rlive_project::{Device, DeviceKind};
 use std::path::PathBuf;
@@ -57,6 +58,7 @@ impl Session {
         };
         let index = index.unwrap_or(devs.len()).min(devs.len());
         devs.insert(index, device);
+        self.place_device_cells(chain, index, &rt);
         self.runtimes.insert(id, rt);
         self.send(EngineCommand::Graph(GraphCmd::InsertDevice {
             target: chain.into(),
@@ -64,6 +66,35 @@ impl Session {
             device: slot,
         }));
         self.mark_edit("Add Device");
+    }
+
+    /// Give the device at `index` cells, and send the engine a new bus if that took one.
+    fn place_device_cells(&mut self, chain: ChainRef, index: usize, rt: &build::DeviceRuntime) {
+        let Some(dev) = self.chain(chain).and_then(|v| v.get(index)).cloned() else {
+            return;
+        };
+        let Some(layout) = self.layouts.get_mut(&chain) else {
+            return;
+        };
+        if build::place_device(layout, &dev, rt) {
+            let bus = layout.build();
+            self.send(EngineCommand::Graph(GraphCmd::SwapBus {
+                target: chain.into(),
+                bus,
+            }));
+        }
+    }
+
+    /// Update a device's cells after its parameter list changed.
+    pub(super) fn refit_device_cells(&mut self, chain: ChainRef, id: DeviceId) {
+        let Some(index) = self.devices(chain).iter().position(|d| d.id == id) else {
+            return;
+        };
+        let Some(rt) = self.runtimes.remove(&id) else {
+            return;
+        };
+        self.place_device_cells(chain, index, &rt);
+        self.runtimes.insert(id, rt);
     }
 
     pub fn add_builtin(&mut self, chain: ChainRef, type_id: &str) {
@@ -115,6 +146,9 @@ impl Session {
             }
             // The handle is dropped now; the processor half comes back as engine garbage.
         }
+        if let Some(l) = self.layouts.get_mut(&chain) {
+            l.remove_device(id);
+        }
         self.send(EngineCommand::Graph(GraphCmd::RemoveDevice {
             target: chain.into(),
             device: id,
@@ -158,11 +192,9 @@ impl Session {
         {
             d.bypass = bypass;
         }
-        self.send(EngineCommand::Param(ParamCmd::SetBypass {
-            target: chain.into(),
-            device: id,
-            bypass,
-        }));
+        if let Some(cell) = self.layouts.get(&chain).and_then(|l| l.activator_cell(id)) {
+            self.set_cell(chain, cell, !bypass as u8 as f64, true);
+        }
         self.touch();
     }
 
@@ -191,13 +223,61 @@ impl Session {
         if let Some(h) = self.runtimes.get_mut(&id).and_then(|r| r.plugin.as_mut()) {
             h.on_param_set(param, value);
         }
-        self.send(EngineCommand::Param(ParamCmd::SetParam {
-            target: chain.into(),
-            device: id,
-            param,
-            value,
-        }));
+        if let Some(cell) = self.device_cell(chain, id, param) {
+            self.set_cell(chain, cell, value, true);
+        }
         self.touch();
+    }
+
+    /// Records a value a device reported, in the project and the layout.
+    pub(super) fn note_device_param(
+        &mut self,
+        chain: ChainRef,
+        id: DeviceId,
+        param: u32,
+        value: f64,
+    ) {
+        if let Some(d) = self
+            .chain_mut(chain)
+            .and_then(|v| v.iter_mut().find(|d| d.id == id))
+        {
+            d.params.insert(param, value);
+        }
+        if let Some(l) = self.layouts.get_mut(&chain) {
+            if let Some(cell) = l.device_cell(id, param) {
+                l.note_value(cell, value);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------- parameter cells
+
+    /// The cell of a device parameter, in O(1).
+    pub fn device_cell(&self, chain: ChainRef, device: DeviceId, param: u32) -> Option<CellIx> {
+        self.layouts.get(&chain)?.device_cell(device, param)
+    }
+
+    /// The cell of a device's on/off switch, in O(1).
+    pub fn activator_cell(&self, chain: ChainRef, device: DeviceId) -> Option<CellIx> {
+        self.layouts.get(&chain)?.activator_cell(device)
+    }
+
+    /// The cell of a mixer control, in O(1). The Master has only volume.
+    pub fn mixer_cell(&self, chain: ChainRef, control: ParamId) -> Option<CellIx> {
+        self.layouts.get(&chain)?;
+        match (chain, control) {
+            (_, mixer::VOLUME) => Some(mix_cell::VOLUME),
+            (ChainRef::Track(_), mixer::PAN) => Some(mix_cell::PAN),
+            (ChainRef::Track(_), mixer::MUTE) => Some(mix_cell::MUTE),
+            (ChainRef::Track(_), mixer::SOLO) => Some(mix_cell::SOLO),
+            _ => None,
+        }
+    }
+
+    /// The normalized value a parameter is sounding at, after automation and modulation.
+    pub fn effective_norm(&self, chain: ChainRef, device: DeviceId, param: u32) -> Option<f32> {
+        let layout = self.layouts.get(&chain)?;
+        layout.effective(layout.device_cell(device, param)?)
     }
 
     /// Change the sample of a built-in sampler (re-creates the device).
@@ -222,6 +302,7 @@ impl Session {
         if let Some(e) = &rt.error {
             self.messages.push(e.clone());
         }
+        self.place_device_cells(chain, pos, &rt);
         self.runtimes.insert(id, rt);
         self.send(EngineCommand::Graph(GraphCmd::InsertDevice {
             target: chain.into(),
@@ -248,6 +329,7 @@ impl Session {
         }));
         let (mut b, _) = self.builder();
         let (slot, rt) = b.device(&d);
+        self.place_device_cells(chain, pos, &rt);
         self.runtimes.insert(id, rt);
         self.send(EngineCommand::Graph(GraphCmd::InsertDevice {
             target: chain.into(),

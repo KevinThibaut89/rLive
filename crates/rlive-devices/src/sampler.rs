@@ -2,7 +2,7 @@
 
 use crate::dsp::Adsr;
 use crate::SampleBuffer;
-use rlive_core::{db_to_gain, MidiMessage, ParamInfo, ProcessContext, Processor};
+use rlive_core::{db_to_gain, MidiMessage, ModMode, ParamInfo, ProcessContext, Processor};
 use std::sync::Arc;
 
 const VOICES: usize = 16;
@@ -23,7 +23,8 @@ pub fn params() -> Vec<ParamInfo> {
     vec![
         ParamInfo::continuous(p::ROOT, "Root Key", 0.0, 127.0, 60.0, ""),
         ParamInfo::continuous(p::TUNE, "Transpose", -48.0, 48.0, 0.0, "st"),
-        ParamInfo::continuous(p::VOLUME, "Volume", -48.0, 12.0, -3.0, "dB"),
+        ParamInfo::continuous(p::VOLUME, "Volume", -48.0, 12.0, -3.0, "dB")
+            .with_mod_mode(ModMode::Scale),
         ParamInfo::skewed(p::ATTACK, "Attack", 0.5, 2_000.0, 0.5, "ms", 3.0),
         ParamInfo::skewed(p::RELEASE, "Release", 1.0, 5_000.0, 50.0, "ms", 3.0),
         ParamInfo::toggle(p::ONE_SHOT, "One-shot", false),

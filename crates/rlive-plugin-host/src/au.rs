@@ -499,6 +499,8 @@ impl AuHandle {
                     default: info.defaultValue as f64,
                     unit: String::new(),
                     kind,
+                    mod_mode: Default::default(),
+                    flags: Default::default(),
                 });
             }
         }

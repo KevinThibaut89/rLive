@@ -1,61 +1,57 @@
-//! Mixer settings and device parameters.
+//! Parameter changes.
 
-use crate::{ChainTarget, Engine, MixSettings};
-use rlive_core::{DeviceId, TrackId};
+use crate::params::{CellIx, TrackRoutes};
+use crate::{retire, ChainTarget, Engine, Garbage};
+use std::sync::Arc;
 
 pub enum ParamCmd {
-    SetMix {
-        track: TrackId,
-        mix: MixSettings,
-    },
-    SetMasterVolume(f32),
-    SetBypass {
-        target: ChainTarget,
-        device: DeviceId,
-        bypass: bool,
-    },
-    SetParam {
-        target: ChainTarget,
-        device: DeviceId,
-        param: u32,
+    /// Set a parameter's knob, in plain units. `gesture` means the user moved it, which
+    /// overrides automation on that parameter.
+    Set {
+        track: ChainTarget,
+        cell: CellIx,
         value: f64,
+        gesture: bool,
+    },
+    /// Replace what modulates this track.
+    SetRoutes {
+        track: ChainTarget,
+        routes: Arc<TrackRoutes>,
+    },
+    /// Hand one parameter, or all of a track's, back to automation.
+    ReEnable {
+        track: ChainTarget,
+        cell: Option<CellIx>,
     },
 }
 
 impl Engine {
     pub(crate) fn handle_param(&mut self, cmd: ParamCmd) {
-        use ParamCmd as C;
         match cmd {
-            C::SetMix { track, mix } => {
-                if let Some(t) = self.track_mut(track) {
-                    t.mix = mix;
-                }
-            }
-            C::SetMasterVolume(db) => self.master.volume_db = db,
-            C::SetBypass {
-                target,
-                device,
-                bypass,
-            } => {
-                if let Some(chain) = self.chain_mut(target) {
-                    if let Some(d) = chain.iter_mut().find(|d| d.id == device) {
-                        d.bypass = bypass;
-                        if bypass {
-                            d.processor.reset();
-                        }
-                    }
-                }
-            }
-            C::SetParam {
-                target,
-                device,
-                param,
+            ParamCmd::Set {
+                track,
+                cell,
                 value,
+                gesture,
             } => {
-                if let Some(chain) = self.chain_mut(target) {
-                    if let Some(d) = chain.iter_mut().find(|d| d.id == device) {
-                        d.processor.set_param(param, value);
-                    }
+                if let Some(bus) = self.bus_mut(track) {
+                    bus.set_base(cell, value, gesture);
+                }
+            }
+            ParamCmd::SetRoutes { track, routes } => {
+                let old = match track {
+                    ChainTarget::Master => Some(std::mem::replace(&mut self.master.routes, routes)),
+                    ChainTarget::Track(id) => self
+                        .track_mut(id)
+                        .map(|t| std::mem::replace(&mut t.routes, routes)),
+                };
+                if let Some(old) = old {
+                    retire(&mut self.garbage, Garbage::Shared(old));
+                }
+            }
+            ParamCmd::ReEnable { track, cell } => {
+                if let Some(bus) = self.bus_mut(track) {
+                    bus.re_enable(cell);
                 }
             }
         }

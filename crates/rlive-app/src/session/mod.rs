@@ -25,8 +25,8 @@ use crate::recording::Recording;
 use rlive_core::{DeviceId, PluginFormat, TrackId};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
-    ChainTarget, EngineCommand, EngineEvent, EngineHandle, GraphCmd, ParamCmd, TransportCmd,
-    MAX_TRACKS,
+    BusLayout, CellIx, ChainTarget, EngineCommand, EngineEvent, EngineHandle, GraphCmd, ParamCmd,
+    TransportCmd, MAX_TRACKS,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{HostNotification, PluginDescriptor};
@@ -42,6 +42,8 @@ pub struct Session {
     pub engine: EngineHandle,
     pub runtimes: HashMap<DeviceId, DeviceRuntime>,
     pub track_shared: HashMap<TrackId, Arc<TrackShared>>,
+    /// Which cell each parameter lives in, per chain.
+    pub layouts: HashMap<ChainRef, BusLayout>,
     pub plugins: PluginCache,
     pub samples: SampleCache,
     /// Tracks that receive live MIDI; shared with the MIDI-input thread.
@@ -61,6 +63,7 @@ impl Session {
             engine,
             runtimes: HashMap::new(),
             track_shared: HashMap::new(),
+            layouts: HashMap::new(),
             plugins,
             samples: SampleCache::default(),
             midi_targets: Arc::new(Mutex::new(Vec::new())),
@@ -71,6 +74,19 @@ impl Session {
         };
         s.rebuild();
         s
+    }
+
+    /// Send a parameter's new value to the engine, keeping the layout's copy up to date.
+    pub(super) fn set_cell(&mut self, chain: ChainRef, cell: CellIx, value: f64, gesture: bool) {
+        if let Some(l) = self.layouts.get_mut(&chain) {
+            l.note_value(cell, value);
+        }
+        self.send(EngineCommand::Param(ParamCmd::Set {
+            track: chain.into(),
+            cell,
+            value,
+            gesture,
+        }));
     }
 
     fn send(&mut self, cmd: EngineCommand) {
@@ -108,16 +124,18 @@ impl Session {
         self.project.normalize();
         let mut runtimes = HashMap::new();
         let mut errors = Vec::new();
+        let mut layouts = HashMap::new();
         let mut shared_map = HashMap::new();
         let mut tracks = Vec::with_capacity(MAX_TRACKS);
         let (mut b, project) = self.builder();
         for t in &project.tracks {
             let shared = Arc::new(TrackShared::default());
             shared_map.insert(t.id, shared.clone());
-            tracks.push(b.track(t, shared, &mut runtimes, &mut errors));
+            tracks.push(b.track(t, shared, &mut runtimes, &mut layouts, &mut errors));
         }
-        let master = b.master(project, &mut runtimes, &mut errors);
+        let master = b.master(project, &mut runtimes, &mut layouts, &mut errors);
         self.runtimes = runtimes;
+        self.layouts = layouts;
         self.track_shared = shared_map;
         self.messages.extend(errors);
         self.send(EngineCommand::Graph(GraphCmd::ReplaceAll {
@@ -221,12 +239,7 @@ impl Session {
                         ChainTarget::Track(t) => ChainRef::Track(t),
                         ChainTarget::Master => ChainRef::Master,
                     };
-                    if let Some(d) = self
-                        .chain_mut(chain)
-                        .and_then(|v| v.iter_mut().find(|d| d.id == device))
-                    {
-                        d.params.insert(param, value);
-                    }
+                    self.note_device_param(chain, device, param, value);
                 }
                 EngineEvent::RecordedMidi {
                     track,
@@ -260,10 +273,10 @@ impl Session {
         for (id, rt) in self.runtimes.iter_mut() {
             if let Some(h) = rt.plugin.as_mut() {
                 for n in h.idle() {
-                    match n {
-                        HostNotification::ParamsRescanned => rt.params = h.params(),
-                        other => todo.push((*id, other)),
+                    if n == HostNotification::ParamsRescanned {
+                        rt.params = h.params();
                     }
+                    todo.push((*id, n));
                 }
             }
         }
@@ -274,20 +287,13 @@ impl Session {
             match n {
                 HostNotification::ParamChanged { id: param, value } => {
                     // Editor moved a knob on the controller side: forward to the processor.
-                    if let Some(d) = self
-                        .chain_mut(chain)
-                        .and_then(|v| v.iter_mut().find(|d| d.id == id))
-                    {
-                        d.params.insert(param, value);
+                    self.note_device_param(chain, id, param, value);
+                    if let Some(cell) = self.device_cell(chain, id, param) {
+                        self.set_cell(chain, cell, value, true);
                     }
-                    self.send(EngineCommand::Param(ParamCmd::SetParam {
-                        target: chain.into(),
-                        device: id,
-                        param,
-                        value,
-                    }));
                     self.touch();
                 }
+                HostNotification::ParamsRescanned => self.refit_device_cells(chain, id),
                 HostNotification::RestartRequested => self.reload_device(chain, id),
                 _ => {}
             }

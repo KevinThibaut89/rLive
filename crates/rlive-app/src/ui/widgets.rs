@@ -153,9 +153,16 @@ pub fn paint_knob(
     );
 }
 
-/// Device parameter knob: name above, value below (Live style).
+/// Device parameter knob: name above, value below (Live style). `effective` is the normalized
+/// value the parameter is sounding at, which modulation can move away from the knob.
 /// Drag vertically (Shift = fine), double-click resets. Returns the new plain value.
-pub fn knob(ui: &mut Ui, param: &ParamInfo, value: f64, display: &str) -> Option<f64> {
+pub fn knob(
+    ui: &mut Ui,
+    param: &ParamInfo,
+    value: f64,
+    display: &str,
+    effective: Option<f32>,
+) -> Option<f64> {
     let size = Vec2::new(58.0, 62.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let mut norm = param.to_normalized(value);
@@ -204,6 +211,11 @@ pub fn knob(ui: &mut Ui, param: &ParamInfo, value: f64, display: &str) -> Option
     } else {
         let bipolar = param.min < 0.0 && param.max > 0.0;
         paint_knob(&p, center, 11.0, norm as f32, bipolar, active);
+        if let Some(effective) = effective.filter(|e| (e - norm as f32).abs() > 0.002) {
+            // Where the value really is, when modulation has moved it off the knob.
+            let ang = std::f32::consts::PI * 0.75 + std::f32::consts::PI * 1.5 * effective;
+            p.circle_filled(center + Vec2::angled(ang) * 11.0, 2.0, ACCENT);
+        }
     }
     let val = Rect::from_center_size(
         Pos2::new(rect.center().x, rect.bottom() - 8.0),

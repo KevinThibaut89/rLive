@@ -36,4 +36,5 @@ macro_rules! id_type {
 
 id_type!(TrackId);
 id_type!(DeviceId);
+id_type!(ChainId);
 id_type!(ArrClipId);

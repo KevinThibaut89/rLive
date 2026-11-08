@@ -1,6 +1,6 @@
 use super::defaults;
 use crate::dsp::{Biquad, BiquadKind};
-use rlive_core::{db_to_gain, ParamInfo, ProcessContext, Processor};
+use rlive_core::{db_to_gain, ModMode, ParamInfo, ProcessContext, Processor};
 
 // ---------------------------------------------------------------- EQ Three
 
@@ -30,7 +30,8 @@ pub fn eq_params() -> Vec<ParamInfo> {
             "Hz",
             2.5,
         ),
-        ParamInfo::continuous(OUTPUT, "Output", -24.0, 12.0, 0.0, "dB"),
+        ParamInfo::continuous(OUTPUT, "Output", -24.0, 12.0, 0.0, "dB")
+            .with_mod_mode(ModMode::Scale),
     ]
 }
 

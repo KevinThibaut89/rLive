@@ -23,7 +23,8 @@ use clap_sys::process::clap_process;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
 use rlive_core::{
-    MidiMessage, ParamInfo, ParamKind, ParamOutQueue, PluginFormat, ProcessContext, Processor,
+    MidiMessage, ParamFlags, ParamInfo, ParamKind, ParamOutQueue, PluginFormat, ProcessContext,
+    Processor,
 };
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
@@ -551,9 +552,7 @@ impl ClapHandle {
                 if !get(self.inst.plugin, i, &mut info) {
                     continue;
                 }
-                if info.flags & CLAP_PARAM_IS_HIDDEN != 0 {
-                    continue;
-                }
+                let hidden = info.flags & CLAP_PARAM_IS_HIDDEN != 0;
                 let kind = if info.flags & CLAP_PARAM_IS_STEPPED != 0 {
                     let steps = (info.max_value - info.min_value).round() as i64;
                     if (0..=64).contains(&steps) {
@@ -578,6 +577,8 @@ impl ClapHandle {
                     default: info.default_value,
                     unit: String::new(),
                     kind,
+                    mod_mode: Default::default(),
+                    flags: ParamFlags::for_plugin(hidden),
                 });
             }
         }

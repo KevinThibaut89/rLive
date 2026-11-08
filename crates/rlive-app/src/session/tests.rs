@@ -1,5 +1,6 @@
 use super::*;
-use rlive_core::MidiMessage;
+use rlive_core::param::mixer;
+use rlive_core::{MidiMessage, ParamInfo, ParamKind};
 use rlive_engine::create_engine;
 use rlive_project::{ArrangementClip, Clip};
 
@@ -394,4 +395,224 @@ fn save_load_roundtrip_and_export() {
     assert!((b.duration_secs() - 2.4).abs() < 0.01);
     assert!(b.left.iter().any(|x| x.abs() > 0.01));
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A plugin's main-thread half that reports what it is told to.
+struct FakePlugin {
+    desc: PluginDescriptor,
+    params: Vec<ParamInfo>,
+    pending: Vec<HostNotification>,
+}
+
+impl FakePlugin {
+    fn new(params: Vec<ParamInfo>, pending: Vec<HostNotification>) -> Box<Self> {
+        Box::new(Self {
+            desc: PluginDescriptor {
+                format: PluginFormat::Clap,
+                id: "fake".into(),
+                name: "Fake".into(),
+                vendor: String::new(),
+                version: String::new(),
+                path: PathBuf::new(),
+                is_instrument: false,
+            },
+            params,
+            pending,
+        })
+    }
+}
+
+impl rlive_plugin_host::PluginHandle for FakePlugin {
+    fn descriptor(&self) -> &PluginDescriptor {
+        &self.desc
+    }
+    fn params(&self) -> Vec<ParamInfo> {
+        self.params.clone()
+    }
+    fn param_value(&self, id: u32) -> Option<f64> {
+        self.params.iter().find(|p| p.id == id).map(|p| p.default)
+    }
+    fn format_value(&self, _: u32, _: f64) -> Option<String> {
+        None
+    }
+    fn save_state(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+    fn load_state(&mut self, _: &[u8]) -> bool {
+        true
+    }
+    fn has_editor(&self) -> bool {
+        false
+    }
+    fn is_editor_open(&self) -> bool {
+        false
+    }
+    fn open_editor(&mut self) -> rlive_plugin_host::Result<()> {
+        Ok(())
+    }
+    fn close_editor(&mut self) {}
+    fn idle(&mut self) -> Vec<HostNotification> {
+        std::mem::take(&mut self.pending)
+    }
+}
+
+fn poly_info(s: &Session, dev: DeviceId) -> ParamInfo {
+    let continuous = |p: &&ParamInfo| matches!(p.kind, ParamKind::Continuous { .. });
+    s.runtimes[&dev]
+        .params
+        .iter()
+        .find(continuous)
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn every_parameter_has_a_cell_that_survives_insert_remove_and_move() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    let poly = s.devices(chain)[0].id;
+    let info = poly_info(&s, poly);
+    let cell = s.device_cell(chain, poly, info.id).unwrap();
+    let activator = s.activator_cell(chain, poly).unwrap();
+    assert_ne!(activator, cell);
+    assert_eq!(
+        s.mixer_cell(chain, mixer::SOLO),
+        Some(rlive_engine::mix_cell::SOLO)
+    );
+    assert_eq!(
+        s.mixer_cell(ChainRef::Master, mixer::VOLUME),
+        Some(rlive_engine::mix_cell::VOLUME)
+    );
+    assert_eq!(s.mixer_cell(ChainRef::Master, mixer::SOLO), None);
+
+    let knob = info.from_normalized(0.8);
+    s.set_param(chain, poly, info.id, knob);
+    render(&mut engine, &mut s, 2048);
+    let settled = s.effective_norm(chain, poly, info.id).unwrap();
+    assert!((settled - 0.8).abs() < 1e-3, "{settled}");
+
+    // A device in front, one behind, a removal and a move: the poly's cell doesn't budge.
+    s.add_builtin(chain, "rlive.reverb");
+    s.add_builtin(chain, "rlive.delay");
+    let (reverb, delay) = (s.devices(chain)[1].id, s.devices(chain)[2].id);
+    let reverb_cell = s.device_cell(chain, reverb, 0).unwrap();
+    let delay_cell = s.device_cell(chain, delay, 0).unwrap();
+    assert_eq!(s.device_cell(chain, poly, info.id), Some(cell));
+    s.remove_device(chain, reverb);
+    assert_eq!(s.device_cell(chain, reverb, 0), None);
+    assert_eq!(s.device_cell(chain, delay, 0), Some(delay_cell));
+    s.move_device(chain, delay, 0);
+    assert_eq!(s.device_cell(chain, delay, 0), Some(delay_cell));
+    assert_eq!(s.device_cell(chain, poly, info.id), Some(cell));
+    render(&mut engine, &mut s, 2048);
+
+    // Reuse the freed range: it's a new device, with a fresh value.
+    s.add_builtin(chain, "rlive.reverb");
+    let new_reverb = s.devices(chain).last().unwrap().id;
+    assert_eq!(s.device_cell(chain, new_reverb, 0), Some(reverb_cell));
+    render(&mut engine, &mut s, 2048);
+
+    // The surviving cell still has its value and the UI reads it from the running engine.
+    let after = s.effective_norm(chain, poly, info.id).unwrap();
+    assert!((after - 0.8).abs() < 1e-3, "{after}");
+    assert_eq!(s.project.tracks[0].devices[1].params[&info.id], knob);
+}
+
+#[test]
+fn a_track_rebuilt_by_undo_gets_cells_with_its_values() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[1].id;
+    let chain = ChainRef::Track(t);
+    let poly = s.devices(chain)[0].id;
+    let info = poly_info(&s, poly);
+    s.set_param(chain, poly, info.id, info.from_normalized(0.3));
+    commit(&mut s);
+    s.delete_track(t);
+    commit(&mut s);
+    assert!(s.device_cell(chain, poly, info.id).is_none());
+    assert!(s.undo());
+    let cell = s.device_cell(chain, poly, info.id).expect("cells are back");
+    assert!((s.layouts[&chain].effective(cell).unwrap() - 0.3).abs() < 1e-3);
+    render(&mut engine, &mut s, 2048);
+    assert!((s.effective_norm(chain, poly, info.id).unwrap() - 0.3).abs() < 1e-3);
+}
+
+#[test]
+fn mixer_controls_and_the_activator_are_parameters() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    let poly = s.devices(chain)[0].id;
+    let volume = mixer::infos()[0].clone();
+
+    s.project.track_mut(t).unwrap().volume_db = -12.0;
+    s.sync_mix(t);
+    s.set_master_volume(-3.0);
+    s.set_bypass(chain, poly, true);
+    render(&mut engine, &mut s, 1024);
+
+    let layout = &s.layouts[&chain];
+    assert_eq!(layout.base(rlive_engine::mix_cell::VOLUME), Some(-12.0));
+    let effective = layout.effective(rlive_engine::mix_cell::VOLUME).unwrap();
+    assert!((effective as f64 - volume.to_normalized(-12.0)).abs() < 1e-5);
+    let activator = layout.activator_cell(poly).unwrap();
+    assert_eq!(layout.effective(activator), Some(0.0));
+    assert_eq!(
+        s.layouts[&ChainRef::Master].base(rlive_engine::mix_cell::VOLUME),
+        Some(-3.0)
+    );
+    assert!(s.project.tracks[0].devices[0].bypass);
+}
+
+#[test]
+fn a_plugin_editor_change_reaches_the_project_and_the_engine() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    s.add_builtin(chain, "rlive.reverb");
+    let dev = s.devices(chain)[1].id;
+    let info = s.runtimes[&dev].params[0].clone();
+    let value = info.from_normalized(0.9);
+    s.runtimes.get_mut(&dev).unwrap().plugin = Some(FakePlugin::new(
+        s.runtimes[&dev].params.clone(),
+        vec![HostNotification::ParamChanged { id: info.id, value }],
+    ));
+    render(&mut engine, &mut s, 1024);
+
+    assert_eq!(s.project.tracks[0].devices[1].params[&info.id], value);
+    assert!(s.history.untracked_dirty, "the project is marked changed");
+    render(&mut engine, &mut s, 1024);
+    assert!((s.effective_norm(chain, dev, info.id).unwrap() - 0.9).abs() < 1e-3);
+}
+
+#[test]
+fn a_plugin_that_rescans_its_params_gets_new_cells_and_keeps_old_values() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    s.add_builtin(chain, "rlive.reverb");
+    let dev = s.devices(chain)[1].id;
+    let old = s.runtimes[&dev].params.clone();
+    let knob = old[0].from_normalized(0.4);
+    s.set_param(chain, dev, old[0].id, knob);
+
+    // The plugin grows a parameter.
+    let mut rescanned = old.clone();
+    let extra = rescanned.iter().map(|p| p.id).max().unwrap() + 1;
+    rescanned.push(ParamInfo::continuous(extra, "New", 0.0, 1.0, 0.25, ""));
+    s.runtimes.get_mut(&dev).unwrap().plugin = Some(FakePlugin::new(
+        rescanned,
+        vec![HostNotification::ParamsRescanned],
+    ));
+    render(&mut engine, &mut s, 2048);
+
+    assert_eq!(s.runtimes[&dev].params.len(), old.len() + 1);
+    let new_cell = s
+        .device_cell(chain, dev, extra)
+        .expect("the new param has a cell");
+    assert_eq!(s.layouts[&chain].base(new_cell), Some(0.25));
+    render(&mut engine, &mut s, 2048);
+    assert!((s.effective_norm(chain, dev, old[0].id).unwrap() - 0.4).abs() < 1e-3);
+    assert_eq!(s.effective_norm(chain, dev, extra), Some(0.25));
 }

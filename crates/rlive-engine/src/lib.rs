@@ -13,6 +13,7 @@
 pub mod clip;
 mod commands;
 pub mod lane;
+pub mod params;
 pub mod shared;
 pub mod track;
 
@@ -20,6 +21,10 @@ use clip::BlockTime;
 pub use clip::{AudioClip, ClipData, MidiClip, Note};
 pub use commands::{ClipCmd, GraphCmd, LaunchCmd, ParamCmd, RecordCmd, TransportCmd};
 pub use lane::{ArrangementLane, LaneClip};
+pub use params::{
+    mix_cell, BusLayout, CellIx, CellSpec, CellTarget, ControlHooks, ControlStep, ParamBus,
+    TrackRoutes, CONTROL_STEP,
+};
 use rlive_core::{
     time::ticks_per_sample, DeviceId, MidiMessage, Quantize, TimeSignature, TrackId, TransportInfo,
 };
@@ -27,6 +32,7 @@ use shared::EngineShared;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
+use track::BlockCtx;
 pub use track::{DeviceSlot, MasterNode, MixSettings, TrackNode};
 
 pub const MAX_TRACKS: usize = 256;
@@ -233,6 +239,8 @@ pub struct Engine {
     record_floor: f64,
     metronome: Metronome,
     smooth_coeff: f32,
+    /// Whether any track was soloed at the last control step.
+    any_solo: bool,
 
     commands: rtrb::Consumer<EngineCommand>,
     garbage: rtrb::Producer<Garbage>,
@@ -274,6 +282,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         },
         // ~5 ms one-pole smoothing.
         smooth_coeff: 1.0 - (-1.0 / (0.005 * sample_rate as f32)).exp(),
+        any_solo: false,
         commands: cmd_rx,
         garbage: gb_tx,
         events: ev_tx,
@@ -324,6 +333,13 @@ impl Engine {
             .iter_mut()
             .find(|t| t.id == id)
             .map(|b| &mut **b)
+    }
+
+    fn bus_mut(&mut self, target: ChainTarget) -> Option<&mut ParamBus> {
+        match target {
+            ChainTarget::Master => Some(&mut self.master.bus),
+            ChainTarget::Track(id) => self.track_mut(id).map(|t| &mut *t.bus),
+        }
     }
 
     fn chain_mut(&mut self, target: ChainTarget) -> Option<&mut Vec<Box<DeviceSlot>>> {
@@ -389,6 +405,16 @@ impl Engine {
         }
         while let Ok(cmd) = self.commands.pop() {
             self.handle_command(cmd);
+        }
+    }
+
+    /// Parameter commands waiting at the head of the queue, between control steps. Anything else
+    /// stays queued until the next block, so commands never overtake each other.
+    fn drain_param_commands(&mut self) {
+        while matches!(self.commands.peek(), Ok(EngineCommand::Param(_))) {
+            if let Ok(EngineCommand::Param(c)) = self.commands.pop() {
+                self.handle_param(c);
+            }
         }
     }
 
@@ -468,28 +494,53 @@ impl Engine {
         };
 
         let garbage = &mut self.garbage;
-        let events = &mut self.events;
         let mut retire_clip = |c: Arc<ClipData>| retire(garbage, Garbage::Shared(c));
-        let mut on_param = |t: TrackId, d: DeviceId, p: u32, v: f64| {
-            let _ = events.push(EngineEvent::ParamChanged {
-                target: ChainTarget::Track(t),
-                device: d,
-                param: p,
-                value: v,
-            });
-        };
         for t in self.tracks.iter_mut() {
-            t.render(time, &transport, &mut retire_clip, &mut on_param);
+            t.begin_block(time, &transport, &mut retire_clip);
         }
 
-        let any_solo = self.tracks.iter().any(|t| t.mix.solo);
+        let ctx = BlockCtx {
+            transport: &transport,
+            ticks_per_sample: tps,
+            frames,
+        };
+        let mut index = 0;
+        let mut offset = 0;
+        while offset < frames {
+            if offset > 0 {
+                self.drain_param_commands();
+            }
+            let events = &mut self.events;
+            let mut on_param = |t: TrackId, d: DeviceId, p: u32, v: f64| {
+                push_param_changed(events, ChainTarget::Track(t), d, p, v);
+            };
+            for t in self.tracks.iter_mut() {
+                t.control_step(index, offset, &ctx, &mut on_param);
+            }
+            let any_solo = self.tracks.iter().any(|t| t.mix.solo);
+            let solo_changed = any_solo != self.any_solo;
+            self.any_solo = any_solo;
+            for t in self.tracks.iter_mut() {
+                t.update_mix(offset, any_solo, solo_changed);
+            }
+            index += 1;
+            offset += CONTROL_STEP;
+        }
+
+        let events = &mut self.events;
+        let mut on_param = |t: TrackId, d: DeviceId, p: u32, v: f64| {
+            push_param_changed(events, ChainTarget::Track(t), d, p, v);
+        };
+        for t in self.tracks.iter_mut() {
+            t.finish_block(time, &ctx, &mut on_param);
+        }
+
         let ml = &mut self.master.left[..frames];
         let mr = &mut self.master.right[..frames];
         ml.fill(0.0);
         mr.fill(0.0);
         for t in self.tracks.iter_mut() {
-            let audible = !t.mix.mute && (!any_solo || t.mix.solo);
-            t.apply_mix(frames, audible, self.smooth_coeff);
+            t.apply_mix(frames, self.smooth_coeff);
             let (l, r) = t.output(frames);
             for i in 0..frames {
                 ml[i] += l[i];
@@ -499,17 +550,21 @@ impl Engine {
         if transport.playing {
             self.metronome.render(time, self.signature, ml, mr);
         }
+
         let mut on_master_param = |d: DeviceId, p: u32, v: f64| {
-            let _ = events.push(EngineEvent::ParamChanged {
-                target: ChainTarget::Master,
-                device: d,
-                param: p,
-                value: v,
-            });
+            push_param_changed(events, ChainTarget::Master, d, p, v);
         };
+        self.master.begin_block();
+        let mut index = 0;
+        let mut offset = 0;
+        while offset < frames {
+            self.master
+                .control_step(index, offset, &ctx, &mut on_master_param);
+            index += 1;
+            offset += CONTROL_STEP;
+        }
         self.master.finish(
-            frames,
-            &transport,
+            &ctx,
             &self.shared.master_meter,
             self.smooth_coeff,
             &mut on_master_param,
@@ -527,6 +582,21 @@ impl Engine {
         self.shared.insert_marker.store(self.insert_marker);
         self.shared.tempo.store(self.tempo);
     }
+}
+
+fn push_param_changed(
+    events: &mut rtrb::Producer<EngineEvent>,
+    target: ChainTarget,
+    device: DeviceId,
+    param: u32,
+    value: f64,
+) {
+    let _ = events.push(EngineEvent::ParamChanged {
+        target,
+        device,
+        param,
+        value,
+    });
 }
 
 #[derive(Clone, Copy)]

@@ -8,7 +8,7 @@ use super::widgets::{self, info, rgb};
 use super::{BrowserItem, UiState};
 use crate::session::{ChainRef, Session};
 use egui::{Align2, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
-use rlive_core::{DeviceId, ParamInfo};
+use rlive_core::{DeviceId, ParamFlags, ParamInfo};
 use rlive_project::DeviceKind;
 
 const TITLE_H: f32 = 20.0;
@@ -207,7 +207,14 @@ fn device(
 ) {
     let rt = session.runtimes.get(&dev.id);
     let on = !dev.bypass;
-    let params: Vec<&ParamInfo> = rt.map(|r| r.params.iter().collect()).unwrap_or_default();
+    let params: Vec<&ParamInfo> = rt
+        .map(|r| {
+            r.params
+                .iter()
+                .filter(|p| !p.flags.contains(ParamFlags::HIDDEN))
+                .collect()
+        })
+        .unwrap_or_default();
     let shown = if show_all {
         params.len()
     } else {
@@ -441,7 +448,8 @@ fn device(
         let mut ku = bu.new_child(UiBuilder::new().max_rect(r));
         let value = session.param_value(chain, dev.id, prm);
         let text = rt.format_value(prm, value);
-        if let Some(v) = widgets::knob(&mut ku, prm, value, &text) {
+        let effective = session.effective_norm(chain, dev.id, prm.id);
+        if let Some(v) = widgets::knob(&mut ku, prm, value, &text, effective) {
             actions.push(Action::Param(dev.id, prm.id, v));
         }
     }

@@ -1,12 +1,13 @@
 //! Builds engine nodes from project data.
 
+use super::ChainRef;
 use crate::peaks::Peaks;
 use rlive_core::{DeviceId, ParamInfo, Processor};
 use rlive_devices::{DeviceInit, DeviceRole, SampleBuffer};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
-    ArrangementLane, AudioClip, ClipData, DeviceSlot, LaneClip, MasterNode, MidiClip, MixSettings,
-    Note, NullProcessor, TrackNode,
+    ArrangementLane, AudioClip, BusLayout, ClipData, DeviceSlot, LaneClip, MasterNode, MidiClip,
+    MixSettings, Note, NullProcessor, TrackNode,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
@@ -218,18 +219,23 @@ impl Builder<'_> {
         track: &Track,
         shared: Arc<TrackShared>,
         runtimes: &mut HashMap<DeviceId, DeviceRuntime>,
+        layouts: &mut HashMap<ChainRef, BusLayout>,
         errors: &mut Vec<String>,
     ) -> Box<TrackNode> {
         let mut node = TrackNode::new(track.id, self.max_block).with_shared(shared);
         node.mix = mix_of(track);
+        let mut layout = BusLayout::for_track(&node.mix);
         for d in &track.devices {
             let (slot, rt) = self.device(d);
             if let Some(e) = &rt.error {
                 errors.push(format!("{}: {e}", d.name));
             }
             node.devices.push(slot);
+            place_device(&mut layout, d, &rt);
             runtimes.insert(d.id, rt);
         }
+        node.bus = layout.build();
+        layouts.insert(ChainRef::Track(track.id), layout);
         for (i, c) in track.clips.iter().enumerate() {
             if let Some(c) = c {
                 match self.clip(c) {
@@ -246,20 +252,37 @@ impl Builder<'_> {
         &mut self,
         project: &Project,
         runtimes: &mut HashMap<DeviceId, DeviceRuntime>,
+        layouts: &mut HashMap<ChainRef, BusLayout>,
         errors: &mut Vec<String>,
     ) -> Box<MasterNode> {
         let mut node = MasterNode::new(self.max_block);
         node.volume_db = project.master.volume_db;
+        let mut layout = BusLayout::for_master(node.volume_db);
         for d in &project.master.devices {
             let (slot, rt) = self.device(d);
             if let Some(e) = &rt.error {
                 errors.push(format!("{}: {e}", d.name));
             }
             node.devices.push(slot);
+            place_device(&mut layout, d, &rt);
             runtimes.insert(d.id, rt);
         }
+        node.bus = layout.build();
+        layouts.insert(ChainRef::Master, layout);
         Box::new(node)
     }
+}
+
+/// Give a device cells in its chain's layout, seeded from the project or the running plugin.
+/// Returns whether the engine needs a bus built from the layout.
+pub(super) fn place_device(layout: &mut BusLayout, dev: &Device, rt: &DeviceRuntime) -> bool {
+    layout.place_device(dev.id, !dev.bypass, &rt.params, |p| {
+        dev.params
+            .get(&p.id)
+            .copied()
+            .or_else(|| rt.plugin.as_ref().and_then(|h| h.param_value(p.id)))
+            .unwrap_or(p.default)
+    })
 }
 
 fn placeholder(error: String) -> (Box<dyn Processor>, DeviceRuntime) {

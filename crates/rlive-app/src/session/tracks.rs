@@ -1,9 +1,9 @@
 //! Adding, removing and mixing tracks, and routing live MIDI to them.
 
-use super::{mix_of, Session};
+use super::{mix_of, ChainRef, Session};
 use rlive_core::{MidiMessage, TrackId};
 use rlive_engine::shared::TrackShared;
-use rlive_engine::{EngineCommand, GraphCmd, ParamCmd, RecordCmd};
+use rlive_engine::{mix_cell, EngineCommand, GraphCmd, RecordCmd};
 use rlive_project::history::ParkedMix;
 use rlive_project::{Device, Track, TrackKind};
 use std::collections::HashMap;
@@ -42,9 +42,11 @@ impl Session {
         self.track_shared.insert(t.id, shared.clone());
         let mut errors = Vec::new();
         let mut runtimes = HashMap::new();
+        let mut layouts = HashMap::new();
         let (mut b, _) = self.builder();
-        let node = b.track(&t, shared, &mut runtimes, &mut errors);
+        let node = b.track(&t, shared, &mut runtimes, &mut layouts, &mut errors);
         self.runtimes.extend(runtimes);
+        self.layouts.extend(layouts);
         self.messages.extend(errors);
         self.project.tracks.insert(index, t);
         self.send(EngineCommand::Graph(GraphCmd::AddTrack {
@@ -62,6 +64,7 @@ impl Session {
                 self.runtimes.remove(&d.id);
             }
             self.track_shared.remove(&id);
+            self.layouts.remove(&ChainRef::Track(id));
             self.send(EngineCommand::Graph(GraphCmd::RemoveTrack(id)));
             self.update_midi_targets();
             self.mark_edit("Delete Track");
@@ -82,14 +85,28 @@ impl Session {
     pub fn sync_mix(&mut self, id: TrackId) {
         if let Some(t) = self.project.track(id) {
             let mix = mix_of(t);
-            self.send(EngineCommand::Param(ParamCmd::SetMix { track: id, mix }));
+            let chain = ChainRef::Track(id);
+            for (cell, value) in [
+                (mix_cell::VOLUME, mix.volume_db as f64),
+                (mix_cell::PAN, mix.pan as f64),
+                (mix_cell::MUTE, mix.mute as u8 as f64),
+                (mix_cell::SOLO, mix.solo as u8 as f64),
+            ] {
+                let unchanged = self
+                    .layouts
+                    .get(&chain)
+                    .is_some_and(|l| l.base(cell) == Some(value));
+                if !unchanged {
+                    self.set_cell(chain, cell, value, true);
+                }
+            }
             self.touch();
         }
     }
 
     pub fn set_master_volume(&mut self, db: f32) {
         self.project.master.volume_db = db;
-        self.send(EngineCommand::Param(ParamCmd::SetMasterVolume(db)));
+        self.set_cell(ChainRef::Master, mix_cell::VOLUME, db as f64, true);
         self.touch();
     }
 

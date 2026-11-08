@@ -54,6 +54,7 @@ impl Session {
         let max_block = 512;
         let (mut engine, mut handle) = rlive_engine::create_engine(sample_rate, max_block);
         let mut runtimes = HashMap::new();
+        let mut layouts = HashMap::new();
         let mut errors = Vec::new();
         let mut b = Builder {
             sample_rate,
@@ -68,10 +69,11 @@ impl Session {
                 t,
                 Arc::new(TrackShared::default()),
                 &mut runtimes,
+                &mut layouts,
                 &mut errors,
             ));
         }
-        let master = b.master(p, &mut runtimes, &mut errors);
+        let master = b.master(p, &mut runtimes, &mut layouts, &mut errors);
         let mut cmds = vec![
             EngineCommand::Graph(GraphCmd::ReplaceAll {
                 tracks: Box::new(tracks),

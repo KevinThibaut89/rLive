@@ -1,5 +1,6 @@
 //! Adding, removing and reordering tracks and devices.
 
+use crate::params::ParamBus;
 use crate::{retire, ChainTarget, DeviceSlot, Engine, Garbage, MasterNode, TrackNode};
 use rlive_core::{DeviceId, TrackId};
 
@@ -26,6 +27,12 @@ pub enum GraphCmd {
         target: ChainTarget,
         device: DeviceId,
         to: usize,
+    },
+    /// Give a chain a new parameter bus, after its layout changed. Cells that kept their owner
+    /// keep their live state.
+    SwapBus {
+        target: ChainTarget,
+        bus: Box<ParamBus>,
     },
     /// Replace the whole session (project load / sample-rate change).
     ReplaceAll {
@@ -95,6 +102,14 @@ impl Engine {
                     }
                 }
             }
+            C::SwapBus { target, mut bus } => match self.bus_mut(target) {
+                Some(current) => {
+                    bus.adopt(current);
+                    std::mem::swap(current, &mut *bus);
+                    retire(&mut self.garbage, Garbage::Boxed(bus));
+                }
+                None => retire(&mut self.garbage, Garbage::Boxed(bus)),
+            },
             C::ReplaceAll {
                 mut tracks,
                 mut master,

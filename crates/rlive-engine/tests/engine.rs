@@ -84,6 +84,19 @@ fn send(h: &mut EngineHandle, cmd: EngineCommand) {
     assert!(h.send(cmd).is_ok(), "command queue full");
 }
 
+/// Set a mixer control or other cell.
+fn set_cell(h: &mut EngineHandle, track: TrackId, cell: CellIx, value: f64) {
+    send(
+        h,
+        EngineCommand::Param(ParamCmd::Set {
+            track: ChainTarget::Track(track),
+            cell,
+            value,
+            gesture: true,
+        }),
+    );
+}
+
 fn tick(h: &EngineHandle) -> f64 {
     h.shared.tick.load()
 }
@@ -265,28 +278,12 @@ fn mute_and_solo() {
     let (l, _) = run(&mut engine, 4800);
     assert!((l[4799] - 0.75).abs() < 1e-3, "{}", l[4799]);
 
-    h.send(EngineCommand::Param(ParamCmd::SetMix {
-        track: b,
-        mix: MixSettings {
-            solo: true,
-            ..Default::default()
-        },
-    }))
-    .ok()
-    .unwrap();
+    set_cell(&mut h, b, mix_cell::SOLO, 1.0);
     let (l, _) = run(&mut engine, 4800);
     assert!((l[4799] - 0.5).abs() < 1e-3, "{}", l[4799]);
 
-    h.send(EngineCommand::Param(ParamCmd::SetMix {
-        track: b,
-        mix: MixSettings {
-            mute: true,
-            solo: false,
-            ..Default::default()
-        },
-    }))
-    .ok()
-    .unwrap();
+    set_cell(&mut h, b, mix_cell::MUTE, 1.0);
+    set_cell(&mut h, b, mix_cell::SOLO, 0.0);
     let (l, r) = run(&mut engine, 4800);
     assert!((l[4799] - 0.25).abs() < 1e-3);
     assert!((r[4799] - 0.25).abs() < 1e-3);
@@ -303,15 +300,7 @@ fn pan_hard_left() {
     }))
     .ok()
     .unwrap();
-    h.send(EngineCommand::Param(ParamCmd::SetMix {
-        track: a,
-        mix: MixSettings {
-            pan: -1.0,
-            ..Default::default()
-        },
-    }))
-    .ok()
-    .unwrap();
+    set_cell(&mut h, a, mix_cell::PAN, -1.0);
     let (l, r) = run(&mut engine, 4800);
     assert!((l[4799] - 0.5).abs() < 1e-3);
     assert!(r[4799].abs() < 1e-3);
@@ -322,7 +311,12 @@ fn removed_devices_come_back_as_garbage() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
     let dev = DeviceId::new();
     let tid = TrackId::new();
-    let track = Box::new(TrackNode::new(tid, BLOCK));
+    let mut track = Box::new(TrackNode::new(tid, BLOCK));
+    let mut layout = BusLayout::for_track(&MixSettings::default());
+    let level = rlive_core::ParamInfo::continuous(0, "Level", 0.0, 1.0, 0.1, "");
+    layout.place_device(dev, true, std::slice::from_ref(&level), |p| p.default);
+    let cell = layout.device_cell(dev, 0).unwrap();
+    track.bus = layout.build();
     h.send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
         .ok()
         .unwrap();
@@ -335,14 +329,7 @@ fn removed_devices_come_back_as_garbage() {
     .unwrap();
     let (l, _) = run(&mut engine, 2400);
     assert!(l[2399] > 0.09);
-    h.send(EngineCommand::Param(ParamCmd::SetParam {
-        target: ChainTarget::Track(tid),
-        device: dev,
-        param: 0,
-        value: 0.2,
-    }))
-    .ok()
-    .unwrap();
+    set_cell(&mut h, tid, cell, 0.2);
     let (l, _) = run(&mut engine, 2400);
     assert!((l[2399] - 0.2).abs() < 1e-3);
     h.send(EngineCommand::Graph(GraphCmd::RemoveDevice {

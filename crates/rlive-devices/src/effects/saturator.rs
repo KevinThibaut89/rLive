@@ -1,6 +1,6 @@
 use super::defaults;
 use crate::dsp::soft_clip;
-use rlive_core::{db_to_gain, ParamInfo, ProcessContext, Processor};
+use rlive_core::{db_to_gain, ModMode, ParamInfo, ProcessContext, Processor};
 
 // ---------------------------------------------------------------- Saturator
 
@@ -11,7 +11,8 @@ pub const MIX: u32 = 2;
 pub fn saturator_params() -> Vec<ParamInfo> {
     vec![
         ParamInfo::continuous(DRIVE, "Drive", 0.0, 36.0, 6.0, "dB"),
-        ParamInfo::continuous(OUTPUT, "Output", -36.0, 6.0, -3.0, "dB"),
+        ParamInfo::continuous(OUTPUT, "Output", -36.0, 6.0, -3.0, "dB")
+            .with_mod_mode(ModMode::Scale),
         ParamInfo::continuous(MIX, "Dry/Wet", 0.0, 1.0, 1.0, ""),
     ]
 }

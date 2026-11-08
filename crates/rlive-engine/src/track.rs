@@ -3,7 +3,11 @@
 
 use crate::clip::{BlockTime, ClipData, ClipPlayer, Pending};
 use crate::lane::{ArrangementLane, LanePlayer};
+use crate::params::{
+    BusLayout, CellTarget, ControlHooks, ControlStep, ParamBus, TrackRoutes, CONTROL_STEP,
+};
 use crate::shared::{PeakMeter, TrackShared, NO_SLOT};
+use rlive_core::param::{mixer, ParamId};
 use rlive_core::{
     db_to_gain, AudioBuffer, DeviceId, MidiEvent, ParamOutQueue, ProcessContext, Processor,
     TrackId, TransportInfo,
@@ -61,6 +65,17 @@ impl MixSettings {
         let r = (theta.sin() * std::f32::consts::SQRT_2).min(1.0);
         (g * l, g * r)
     }
+
+    /// Take a resolved mixer value.
+    fn apply(&mut self, control: ParamId, plain: f64) {
+        match control {
+            mixer::VOLUME => self.volume_db = plain as f32,
+            mixer::PAN => self.pan = plain as f32,
+            mixer::MUTE => self.mute = plain >= 0.5,
+            mixer::SOLO => self.solo = plain >= 0.5,
+            _ => {}
+        }
+    }
 }
 
 /// Smoothed stereo gain to avoid zipper noise.
@@ -81,6 +96,114 @@ impl GainSmoother {
             *l *= self.l;
             *r *= self.r;
         }
+    }
+}
+
+/// A gain whose target changes at control steps inside a block.
+struct GainStage {
+    smoother: GainSmoother,
+    /// The target in force at the start of the next block.
+    settled: (f32, f32),
+    /// The target after the steps so far.
+    target: (f32, f32),
+    points: Vec<(u32, (f32, f32))>,
+    /// The mixer values changed since the last target was set.
+    dirty: bool,
+}
+
+impl GainStage {
+    fn new(max_block: usize) -> Self {
+        Self {
+            smoother: GainSmoother::new(),
+            settled: (1.0, 1.0),
+            target: (1.0, 1.0),
+            points: Vec::with_capacity(max_block / CONTROL_STEP + 2),
+            dirty: true,
+        }
+    }
+
+    fn set_target(&mut self, offset: usize, target: (f32, f32)) {
+        self.dirty = false;
+        if target != self.target && self.points.len() < self.points.capacity() {
+            self.target = target;
+            self.points.push((offset as u32, target));
+        }
+    }
+
+    /// Smooth towards each target from the frame it took effect.
+    fn apply(&mut self, left: &mut [f32], right: &mut [f32], frames: usize, coeff: f32) {
+        let mut target = self.settled;
+        let mut from = 0;
+        for &(at, next) in &self.points {
+            let at = (at as usize).min(frames);
+            self.smoother
+                .apply(&mut left[from..at], &mut right[from..at], target, coeff);
+            target = next;
+            from = at;
+        }
+        self.smoother.apply(
+            &mut left[from..frames],
+            &mut right[from..frames],
+            target,
+            coeff,
+        );
+        self.settled = target;
+        self.points.clear();
+    }
+}
+
+/// Timing of the block being rendered, for chain segments.
+#[derive(Clone, Copy)]
+pub(crate) struct BlockCtx<'a> {
+    pub transport: &'a TransportInfo,
+    pub ticks_per_sample: f64,
+    pub frames: usize,
+}
+
+impl BlockCtx<'_> {
+    /// The transport as it stands `offset` frames into the block.
+    fn at(&self, offset: usize) -> TransportInfo {
+        let mut t = *self.transport;
+        if t.playing {
+            t.tick += offset as f64 * self.ticks_per_sample;
+            t.sample_pos += offset as u64;
+        }
+        t
+    }
+}
+
+/// How far a block has rendered through a device chain.
+#[derive(Default)]
+struct ChainCursor {
+    frames: usize,
+    next_event: usize,
+}
+
+/// Where a resolved value reaches a device. The only place that hands parameter changes to a
+/// processor, so K3 can replace it with sample-timed events.
+fn deliver_to_device(device: &mut DeviceSlot, target: CellTarget, plain: f64) {
+    match target {
+        CellTarget::Activator { .. } => {
+            let bypass = plain < 0.5;
+            if bypass != device.bypass {
+                device.bypass = bypass;
+                if bypass {
+                    device.processor.reset();
+                }
+            }
+        }
+        CellTarget::Device { param, .. } => device.processor.set_param(param.0, plain),
+        _ => {}
+    }
+}
+
+/// Finds the device a resolved value belongs to in its chain and delivers it.
+fn deliver_to_chain(devices: &mut [Box<DeviceSlot>], target: CellTarget, plain: f64) {
+    let (CellTarget::Activator { device } | CellTarget::Device { device, .. }) = target else {
+        return;
+    };
+    if let Some(d) = devices.iter_mut().find(|d| d.id == device) {
+        deliver_to_device(d, target, plain);
     }
 }
 
@@ -121,6 +244,12 @@ pub struct TrackNode {
     pub slots: Vec<Option<Arc<ClipData>>>,
     pub mix: MixSettings,
     pub shared: Arc<TrackShared>,
+    /// Every parameter of this track. Devices must be placed in the layout it was built from.
+    pub bus: Box<ParamBus>,
+    /// Set by `ParamCmd::SetRoutes`; nothing reads it yet.
+    pub routes: Arc<TrackRoutes>,
+    /// Writes the bus at each control step. Unused until automation and modulators exist.
+    pub hooks: Option<Box<dyn ControlHooks>>,
 
     pub(crate) player: ClipPlayer,
     pub(crate) lane: LanePlayer,
@@ -131,7 +260,8 @@ pub struct TrackNode {
     pub(crate) events: Vec<MidiEvent>,
     pub(crate) live: Vec<MidiEvent>,
     pub(crate) param_out: ParamOutQueue,
-    smoother: GainSmoother,
+    cursor: ChainCursor,
+    gain: GainStage,
 }
 
 impl TrackNode {
@@ -143,6 +273,9 @@ impl TrackNode {
             slots: Vec::with_capacity(MAX_SCENES),
             mix: MixSettings::default(),
             shared: Arc::new(TrackShared::default()),
+            bus: BusLayout::for_track(&MixSettings::default()).build(),
+            routes: Arc::new(TrackRoutes::default()),
+            hooks: None,
             player: ClipPlayer::new(),
             lane: LanePlayer::new(Arc::new(ArrangementLane::default())),
             follow: true,
@@ -151,7 +284,8 @@ impl TrackNode {
             events: Vec::with_capacity(MAX_EVENTS),
             live: Vec::with_capacity(256),
             param_out: ParamOutQueue::with_capacity(256),
-            smoother: GainSmoother::new(),
+            cursor: ChainCursor::default(),
+            gain: GainStage::new(max_block),
         }
     }
 
@@ -175,12 +309,12 @@ impl TrackNode {
         self.lane = LanePlayer::new(lane);
     }
 
-    pub(crate) fn render(
+    /// Prepare a block: render clips and collect its MIDI. The chain runs in [`Self::render_to`].
+    pub(crate) fn begin_block(
         &mut self,
         time: BlockTime,
         transport: &TransportInfo,
         retire: &mut dyn FnMut(Arc<ClipData>),
-        on_param: &mut dyn FnMut(TrackId, DeviceId, u32, f64),
     ) {
         let n = time.frames;
         let left = &mut self.left[..n];
@@ -214,17 +348,104 @@ impl TrackNode {
                 .render(time, &mut self.events, left, right, retire, &self.slots);
         }
         self.events.sort_unstable_by_key(|e| e.sort_key());
+        self.cursor = ChainCursor::default();
+    }
 
+    /// Run the chain up to `to` frames into the block, handing each device a segment of its own.
+    fn render_to(
+        &mut self,
+        to: usize,
+        ctx: &BlockCtx,
+        on_param: &mut dyn FnMut(TrackId, DeviceId, u32, f64),
+    ) {
+        let from = self.cursor.frames;
+        if to <= from {
+            return;
+        }
+        // Later events must not be lost if a clip placed one at or past the block end.
+        let end = if to >= ctx.frames {
+            self.events.len()
+        } else {
+            self.cursor.next_event
+                + self.events[self.cursor.next_event..]
+                    .partition_point(|e| (e.offset as usize) < to)
+        };
+        let segment = &mut self.events[self.cursor.next_event..end];
+        for e in segment.iter_mut() {
+            e.offset -= from as u32;
+        }
+        let transport = ctx.at(from);
         let id = self.id;
+        let bus = &mut self.bus;
         run_chain(
             &mut self.devices,
-            left,
-            right,
-            &self.events,
-            transport,
+            &mut self.left[from..to],
+            &mut self.right[from..to],
+            segment,
+            &transport,
             &mut self.param_out,
-            |dev, p, v| on_param(id, dev, p, v),
+            |dev, p, v| {
+                bus.report_from_device(dev, p, v);
+                on_param(id, dev, p, v);
+            },
         );
+        self.cursor.frames = to;
+        self.cursor.next_event = end;
+    }
+
+    /// Resolve this track's parameters at a step. Audio already due under the old values is
+    /// rendered first, so a change splits the chain only where one happens.
+    pub(crate) fn control_step(
+        &mut self,
+        index: u32,
+        offset: usize,
+        ctx: &BlockCtx,
+        on_param: &mut dyn FnMut(TrackId, DeviceId, u32, f64),
+    ) {
+        if let Some(hooks) = self.hooks.as_deref_mut() {
+            let step = ControlStep {
+                index,
+                offset: offset as u32,
+                tick: ctx.at(offset).tick,
+            };
+            hooks.macros(step, &mut self.bus);
+            hooks.automation(step, &mut self.bus);
+            hooks.modulation(step, &mut self.bus);
+        }
+        let resolved = self.bus.resolve();
+        if resolved.devices {
+            self.render_to(offset, ctx, on_param);
+        }
+        let (devices, mix) = (&mut self.devices, &mut self.mix);
+        self.bus.drain_resolved(|target, plain| match target {
+            CellTarget::Mixer(control) => mix.apply(control, plain),
+            target => deliver_to_chain(devices, target, plain),
+        });
+        self.gain.dirty |= resolved.mixer;
+    }
+
+    /// Set the gain target from the mixer, at this step, when something affecting it changed.
+    pub(crate) fn update_mix(&mut self, offset: usize, any_solo: bool, solo_changed: bool) {
+        if !self.gain.dirty && !solo_changed {
+            return;
+        }
+        let audible = !self.mix.mute && (!any_solo || self.mix.solo);
+        let target = if audible {
+            self.mix.gains()
+        } else {
+            (0.0, 0.0)
+        };
+        self.gain.set_target(offset, target);
+    }
+
+    /// Run what is left of the chain and publish the clip state.
+    pub(crate) fn finish_block(
+        &mut self,
+        time: BlockTime,
+        ctx: &BlockCtx,
+        on_param: &mut dyn FnMut(TrackId, DeviceId, u32, f64),
+    ) {
+        self.render_to(time.frames, ctx, on_param);
 
         // Publish clip state.
         let shared = &self.shared;
@@ -249,16 +470,11 @@ impl TrackNode {
             .store(self.follow, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Apply volume/pan (mute/solo resolved by the caller) and update meters.
-    pub(crate) fn apply_mix(&mut self, frames: usize, audible: bool, coeff: f32) {
-        let target = if audible {
-            self.mix.gains()
-        } else {
-            (0.0, 0.0)
-        };
+    /// Apply volume/pan (mute/solo resolved at the control steps) and update meters.
+    pub(crate) fn apply_mix(&mut self, frames: usize, coeff: f32) {
         let left = &mut self.left[..frames];
         let right = &mut self.right[..frames];
-        self.smoother.apply(left, right, target, coeff);
+        self.gain.apply(left, right, frames, coeff);
         self.shared.meter.update(left, right);
     }
 
@@ -278,10 +494,17 @@ impl TrackNode {
 pub struct MasterNode {
     pub devices: Vec<Box<DeviceSlot>>,
     pub volume_db: f32,
+    /// Every parameter of the Master. Devices must be placed in the layout it was built from.
+    pub bus: Box<ParamBus>,
+    /// Set by `ParamCmd::SetRoutes`; nothing reads it yet.
+    pub routes: Arc<TrackRoutes>,
+    /// Writes the bus at each control step. Unused until automation and modulators exist.
+    pub hooks: Option<Box<dyn ControlHooks>>,
     pub(crate) left: Vec<f32>,
     pub(crate) right: Vec<f32>,
     pub(crate) param_out: ParamOutQueue,
-    smoother: GainSmoother,
+    cursor: ChainCursor,
+    gain: GainStage,
 }
 
 impl MasterNode {
@@ -289,34 +512,93 @@ impl MasterNode {
         Self {
             devices: Vec::with_capacity(MAX_DEVICES),
             volume_db: 0.0,
+            bus: BusLayout::for_master(0.0).build(),
+            routes: Arc::new(TrackRoutes::default()),
+            hooks: None,
             left: vec![0.0; max_block],
             right: vec![0.0; max_block],
             param_out: ParamOutQueue::with_capacity(256),
-            smoother: GainSmoother::new(),
+            cursor: ChainCursor::default(),
+            gain: GainStage::new(max_block),
         }
+    }
+
+    fn render_to(
+        &mut self,
+        to: usize,
+        ctx: &BlockCtx,
+        on_param: &mut dyn FnMut(DeviceId, u32, f64),
+    ) {
+        let from = self.cursor.frames;
+        if to <= from {
+            return;
+        }
+        let transport = ctx.at(from);
+        let bus = &mut self.bus;
+        run_chain(
+            &mut self.devices,
+            &mut self.left[from..to],
+            &mut self.right[from..to],
+            &[],
+            &transport,
+            &mut self.param_out,
+            |dev, p, v| {
+                bus.report_from_device(dev, p, v);
+                on_param(dev, p, v);
+            },
+        );
+        self.cursor.frames = to;
+    }
+
+    /// Resolve the Master's parameters at a step, once its input is ready.
+    pub(crate) fn control_step(
+        &mut self,
+        index: u32,
+        offset: usize,
+        ctx: &BlockCtx,
+        on_param: &mut dyn FnMut(DeviceId, u32, f64),
+    ) {
+        if let Some(hooks) = self.hooks.as_deref_mut() {
+            let step = ControlStep {
+                index,
+                offset: offset as u32,
+                tick: ctx.at(offset).tick,
+            };
+            hooks.macros(step, &mut self.bus);
+            hooks.automation(step, &mut self.bus);
+            hooks.modulation(step, &mut self.bus);
+        }
+        let resolved = self.bus.resolve();
+        if resolved.devices {
+            self.render_to(offset, ctx, on_param);
+        }
+        let (devices, volume) = (&mut self.devices, &mut self.volume_db);
+        self.bus.drain_resolved(|target, plain| match target {
+            CellTarget::Mixer(mixer::VOLUME) => *volume = plain as f32,
+            target => deliver_to_chain(devices, target, plain),
+        });
+        if resolved.mixer || self.gain.dirty {
+            let g = db_to_gain(self.volume_db);
+            self.gain.set_target(offset, (g, g));
+        }
+    }
+
+    pub(crate) fn begin_block(&mut self) {
+        self.cursor = ChainCursor::default();
     }
 
     pub(crate) fn finish(
         &mut self,
-        frames: usize,
-        transport: &TransportInfo,
+        ctx: &BlockCtx,
         meter: &PeakMeter,
         coeff: f32,
         on_param: &mut dyn FnMut(DeviceId, u32, f64),
     ) {
+        let frames = ctx.frames;
+        self.render_to(frames, ctx, on_param);
         let left = &mut self.left[..frames];
         let right = &mut self.right[..frames];
-        run_chain(
-            &mut self.devices,
-            left,
-            right,
-            &[],
-            transport,
-            &mut self.param_out,
-            on_param,
-        );
-        let g = db_to_gain(self.volume_db);
-        self.smoother.apply(left, right, (g, g), coeff);
+        self.gain.apply(left, right, frames, coeff);
         meter.update(left, right);
     }
 }

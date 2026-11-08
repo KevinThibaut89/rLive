@@ -1,5 +1,5 @@
 use super::defaults;
-use rlive_core::{db_to_gain, gain_to_db, ParamInfo, ProcessContext, Processor};
+use rlive_core::{db_to_gain, gain_to_db, ModMode, ParamInfo, ProcessContext, Processor};
 
 // ---------------------------------------------------------------- Compressor
 
@@ -18,7 +18,7 @@ pub fn compressor_params() -> Vec<ParamInfo> {
         ParamInfo::skewed(ATTACK, "Attack", 0.1, 200.0, 10.0, "ms", 3.0),
         ParamInfo::skewed(RELEASE, "Release", 5.0, 2_000.0, 120.0, "ms", 3.0),
         ParamInfo::continuous(KNEE, "Knee", 0.0, 18.0, 6.0, "dB"),
-        ParamInfo::continuous(MAKEUP, "Makeup", 0.0, 24.0, 0.0, "dB"),
+        ParamInfo::continuous(MAKEUP, "Makeup", 0.0, 24.0, 0.0, "dB").with_mod_mode(ModMode::Scale),
         ParamInfo::continuous(MIX, "Dry/Wet", 0.0, 1.0, 1.0, ""),
     ]
 }

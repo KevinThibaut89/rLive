@@ -1,7 +1,9 @@
 //! "Poly" — a subtractive polyphonic synthesizer.
 
 use crate::dsp::{Adsr, FilterMode, Oscillator, Svf, Waveform};
-use rlive_core::{db_to_gain, note_to_hz, MidiMessage, ParamInfo, ProcessContext, Processor};
+use rlive_core::{
+    db_to_gain, note_to_hz, MidiMessage, ModMode, ParamInfo, ProcessContext, Processor,
+};
 
 const VOICES: usize = 16;
 const CONTROL_RATE: usize = 16;
@@ -54,7 +56,8 @@ pub fn params() -> Vec<ParamInfo> {
         ParamInfo::skewed(p::FLT_R, "F Release", 1.0, 10_000.0, 300.0, "ms", 3.0),
         ParamInfo::continuous(p::VELOCITY, "Velocity", 0.0, 1.0, 0.6, ""),
         ParamInfo::skewed(p::GLIDE, "Glide", 0.0, 2_000.0, 0.0, "ms", 3.0),
-        ParamInfo::continuous(p::VOLUME, "Volume", -48.0, 6.0, -9.0, "dB"),
+        ParamInfo::continuous(p::VOLUME, "Volume", -48.0, 6.0, -9.0, "dB")
+            .with_mod_mode(ModMode::Scale),
     ]
 }
 

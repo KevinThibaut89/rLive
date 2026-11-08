@@ -10,9 +10,12 @@ pub mod processor;
 pub mod sample;
 pub mod time;
 
-pub use ids::{ArrClipId, DeviceId, TrackId};
+pub use ids::{ArrClipId, ChainId, DeviceId, TrackId};
 pub use midi::{MidiEvent, MidiMessage};
-pub use param::{ParamInfo, ParamKind};
+pub use param::{
+    ClipParam, EnvTarget, ModMode, ParamEvent, ParamFlags, ParamId, ParamInfo, ParamKind,
+    ParamOwner, ParamRange, ParamRef, ACTIVATOR,
+};
 pub use processor::{AudioBuffer, ParamOutQueue, ProcessContext, Processor};
 pub use sample::SampleBuffer;
 pub use time::{Quantize, TimeSignature, TransportInfo, PPQ};

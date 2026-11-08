@@ -1,6 +1,6 @@
 use super::defaults;
 use crate::dsp::Smoother;
-use rlive_core::{db_to_gain, ParamInfo, ProcessContext, Processor};
+use rlive_core::{db_to_gain, ModMode, ParamInfo, ProcessContext, Processor};
 
 // ---------------------------------------------------------------- Utility
 
@@ -13,7 +13,7 @@ pub const INVERT_R: u32 = 5;
 
 pub fn utility_params() -> Vec<ParamInfo> {
     vec![
-        ParamInfo::continuous(GAIN, "Gain", -48.0, 24.0, 0.0, "dB"),
+        ParamInfo::continuous(GAIN, "Gain", -48.0, 24.0, 0.0, "dB").with_mod_mode(ModMode::Scale),
         ParamInfo::continuous(PAN, "Pan", -1.0, 1.0, 0.0, ""),
         ParamInfo::continuous(WIDTH, "Width", 0.0, 2.0, 1.0, ""),
         ParamInfo::toggle(MONO, "Mono", false),

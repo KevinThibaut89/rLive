@@ -4,7 +4,9 @@ use crate::{
     bundle_binary, cbuf_to_string, HostError, HostNotification, PluginDescriptor, PluginHandle,
     PluginInstance, PortBuffers, Result,
 };
-use rlive_core::{MidiMessage, ParamInfo, ParamKind, PluginFormat, ProcessContext, Processor};
+use rlive_core::{
+    MidiMessage, ParamFlags, ParamInfo, ParamKind, PluginFormat, ProcessContext, Processor,
+};
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
@@ -977,9 +979,7 @@ impl Vst3Handle {
                 if ctrl.getParameterInfo(i, &mut info) != kResultOk {
                     continue;
                 }
-                if info.flags & ParameterInfo_::ParameterFlags_::kIsHidden != 0 {
-                    continue;
-                }
+                let hidden = info.flags & ParameterInfo_::ParameterFlags_::kIsHidden != 0;
                 let kind = if info.stepCount == 1 {
                     ParamKind::Toggle
                 } else if (2..=64).contains(&info.stepCount) {
@@ -1000,6 +1000,8 @@ impl Vst3Handle {
                     default: info.defaultNormalizedValue,
                     unit: string128_to_string(&info.units),
                     kind,
+                    mod_mode: Default::default(),
+                    flags: ParamFlags::for_plugin(hidden),
                 });
             }
         }
