@@ -1,9 +1,9 @@
 //! Offline rendering to WAV files.
 
-use super::{Builder, Session};
+use super::{compile_plan, Builder, Session};
 use rlive_core::Quantize;
 use rlive_engine::shared::TrackShared;
-use rlive_engine::{EngineCommand, GraphCmd, LaunchCmd, TransportCmd, MAX_TRACKS};
+use rlive_engine::{EngineCommand, GraphOp, GraphTxn, LaunchCmd, TransportCmd, MAX_TRACKS};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -75,10 +75,13 @@ impl Session {
         }
         let master = b.master(p, &mut runtimes, &mut layouts, &mut errors);
         let mut cmds = vec![
-            EngineCommand::Graph(GraphCmd::ReplaceAll {
-                tracks: Box::new(tracks),
-                master,
-            }),
+            EngineCommand::Graph(GraphTxn::new(
+                vec![GraphOp::ReplaceAll {
+                    tracks: Box::new(tracks),
+                    master,
+                }],
+                Some(compile_plan(p)),
+            )),
             EngineCommand::Transport(TransportCmd::SetTempo(p.tempo)),
             EngineCommand::Transport(TransportCmd::SetTimeSignature(p.time_signature)),
             EngineCommand::Transport(TransportCmd::SetQuantize(Quantize::None)),
@@ -94,7 +97,7 @@ impl Session {
         let mut left = vec![0.0; frames];
         let mut right = vec![0.0; frames];
         for (l, r) in left.chunks_mut(max_block).zip(right.chunks_mut(max_block)) {
-            engine.process(l, r);
+            engine.process_stereo(l, r);
             handle.collect_garbage();
         }
         rlive_devices::write_wav(path, &left, &right, sample_rate as u32)

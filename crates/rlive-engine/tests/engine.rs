@@ -89,7 +89,7 @@ fn set_cell(h: &mut EngineHandle, track: TrackId, cell: CellIx, value: f64) {
     send(
         h,
         EngineCommand::Param(ParamCmd::Set {
-            track: ChainTarget::Track(track),
+            track: TrackRef::Track(track),
             cell,
             value,
             gesture: true,
@@ -141,7 +141,7 @@ fn sample(left: Vec<f32>) -> Arc<SampleBuffer> {
 
 fn run(engine: &mut Engine, frames: usize) -> (Vec<f32>, Vec<f32>) {
     // Use an odd host buffer size to exercise block splitting.
-    rlive_testkit::render_chunks(frames, 300, |l, r| engine.process(l, r))
+    rlive_testkit::render_chunks(frames, 300, |l, r| engine.process_stereo(l, r))
 }
 
 fn track_with(device: Box<dyn Processor>) -> (TrackId, Box<TrackNode>) {
@@ -160,7 +160,7 @@ fn quantized_launch_switches_on_next_bar() {
     // Clip 0: one long note; clip 1: note at its start.
     track.set_slot(0, Some(midi_clip(3840, &[(0, 3840, 60)])));
     track.set_slot(1, Some(midi_clip(3840, &[(0, 480, 72)])));
-    h.send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
+    h.send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))
         .ok()
         .unwrap();
     h.send(EngineCommand::Transport(TransportCmd::SetQuantize(
@@ -208,7 +208,7 @@ fn loop_wrap_sends_off_before_on() {
     let (tid, mut track) = track_with(Box::new(Recorder { log: log.clone() }));
     // One-beat clip, note fills the whole beat.
     track.set_slot(0, Some(midi_clip(960, &[(0, 960, 64)])));
-    h.send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
+    h.send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))
         .ok()
         .unwrap();
     h.send(EngineCommand::Launch(LaunchCmd::LaunchClip {
@@ -237,7 +237,7 @@ fn stop_releases_notes() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let (tid, mut track) = track_with(Box::new(Recorder { log: log.clone() }));
     track.set_slot(0, Some(midi_clip(3840, &[(0, 3840, 60)])));
-    h.send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
+    h.send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))
         .ok()
         .unwrap();
     h.send(EngineCommand::Launch(LaunchCmd::LaunchClip {
@@ -262,13 +262,13 @@ fn mute_and_solo() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
     let (a, ta) = track_with(Box::new(Dc(0.25)));
     let (b, tb) = track_with(Box::new(Dc(0.5)));
-    h.send(EngineCommand::Graph(GraphCmd::AddTrack {
+    h.send(EngineCommand::graph(GraphOp::AddTrack {
         index: 0,
         track: ta,
     }))
     .ok()
     .unwrap();
-    h.send(EngineCommand::Graph(GraphCmd::AddTrack {
+    h.send(EngineCommand::graph(GraphOp::AddTrack {
         index: 1,
         track: tb,
     }))
@@ -293,7 +293,7 @@ fn mute_and_solo() {
 fn pan_hard_left() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
     let (a, ta) = track_with(Box::new(Dc(0.5)));
-    h.send(EngineCommand::Graph(GraphCmd::AddTrack {
+    h.send(EngineCommand::graph(GraphOp::AddTrack {
         index: 0,
         track: ta,
     }))
@@ -316,11 +316,11 @@ fn removed_devices_come_back_as_garbage() {
     layout.place_device(dev, true, std::slice::from_ref(&level), |p| p.default);
     let cell = layout.device_cell(dev, 0).unwrap();
     track.bus = layout.build();
-    h.send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
+    h.send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))
         .ok()
         .unwrap();
-    h.send(EngineCommand::Graph(GraphCmd::InsertDevice {
-        target: ChainTarget::Track(tid),
+    h.send(EngineCommand::graph(GraphOp::InsertDevice {
+        target: ChainAddr::track(tid),
         index: 0,
         device: Box::new(DeviceSlot::new(dev, Box::new(Dc(0.1)))),
     }))
@@ -331,8 +331,8 @@ fn removed_devices_come_back_as_garbage() {
     set_cell(&mut h, tid, cell, 0.2);
     let (l, _) = run(&mut engine, 2400);
     assert!((l[2399] - 0.2).abs() < 1e-3);
-    h.send(EngineCommand::Graph(GraphCmd::RemoveDevice {
-        target: ChainTarget::Track(tid),
+    h.send(EngineCommand::graph(GraphOp::RemoveDevice {
+        target: ChainAddr::track(tid),
         device: dev,
     }))
     .ok()
@@ -340,7 +340,7 @@ fn removed_devices_come_back_as_garbage() {
     let (l, _) = run(&mut engine, 2400);
     assert!(l[2399].abs() < 1e-6);
     assert_eq!(h.collect_garbage(), 1);
-    h.send(EngineCommand::Graph(GraphCmd::RemoveTrack(tid)))
+    h.send(EngineCommand::graph(GraphOp::RemoveTrack(tid)))
         .ok()
         .unwrap();
     run(&mut engine, 256);
@@ -360,7 +360,7 @@ fn audio_clip_plays_and_loops() {
         gain: 1.0,
     };
     track.set_slot(0, Some(Arc::new(ClipData::Audio(clip))));
-    h.send(EngineCommand::Graph(GraphCmd::AddTrack {
+    h.send(EngineCommand::graph(GraphOp::AddTrack {
         index: 0,
         track: Box::new(track),
     }))
@@ -398,7 +398,7 @@ fn metronome_clicks_when_playing() {
 fn replace_all_swaps_session() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
     let (_, ta) = track_with(Box::new(Dc(0.25)));
-    h.send(EngineCommand::Graph(GraphCmd::AddTrack {
+    h.send(EngineCommand::graph(GraphOp::AddTrack {
         index: 0,
         track: ta,
     }))
@@ -408,7 +408,7 @@ fn replace_all_swaps_session() {
     let (_, tb) = track_with(Box::new(Dc(0.5)));
     let mut tracks = Vec::with_capacity(MAX_TRACKS);
     tracks.push(tb);
-    h.send(EngineCommand::Graph(GraphCmd::ReplaceAll {
+    h.send(EngineCommand::graph(GraphOp::ReplaceAll {
         tracks: Box::new(tracks),
         master: Box::new(MasterNode::new(BLOCK)),
     }))
@@ -434,7 +434,7 @@ fn tempo_change_during_audio_is_seamless() {
         gain: 1.0,
     };
     track.set_slot(0, Some(Arc::new(ClipData::Audio(clip))));
-    h.send(EngineCommand::Graph(GraphCmd::AddTrack {
+    h.send(EngineCommand::graph(GraphOp::AddTrack {
         index: 0,
         track: Box::new(track),
     }))
@@ -485,7 +485,7 @@ fn long_note_ends_past_later_short_notes() {
     track.set_slot(0, Some(clip_with_long_note()));
     send(
         &mut h,
-        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+        EngineCommand::graph(GraphOp::AddTrack { index: 0, track }),
     );
     send(
         &mut h,
@@ -566,7 +566,7 @@ fn loop_wraps_sample_accurately() {
     let (_, track) = track_with(Box::new(rec));
     send(
         &mut h,
-        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+        EngineCommand::graph(GraphOp::AddTrack { index: 0, track }),
     );
     send(
         &mut h,
@@ -639,7 +639,7 @@ fn session_clip_phase_survives_a_wrap() {
     track.set_slot(0, Some(midi_clip(960, &[(0, 480, 64)])));
     send(
         &mut h,
-        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+        EngineCommand::graph(GraphOp::AddTrack { index: 0, track }),
     );
     send(
         &mut h,
@@ -673,7 +673,7 @@ fn note_on_the_loop_boundary_fires_once() {
     track.set_slot(0, Some(midi_clip(1920, &[(960, 240, 70)])));
     send(
         &mut h,
-        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+        EngineCommand::graph(GraphOp::AddTrack { index: 0, track }),
     );
     send(
         &mut h,
@@ -702,7 +702,7 @@ fn wrap_keeps_a_queued_launch_the_same_distance_away() {
     track.set_slot(0, Some(midi_clip(3840, &[(0, 480, 72)])));
     send(
         &mut h,
-        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+        EngineCommand::graph(GraphOp::AddTrack { index: 0, track }),
     );
     send(
         &mut h,
@@ -730,7 +730,7 @@ fn seek_requantizes_a_queued_launch() {
     track.set_slot(0, Some(midi_clip(3840, &[(0, 480, 72)])));
     send(
         &mut h,
-        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+        EngineCommand::graph(GraphOp::AddTrack { index: 0, track }),
     );
     send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 2560);
@@ -770,7 +770,7 @@ fn engine_with_lane(
     track.set_lane(lane);
     send(
         &mut h,
-        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+        EngineCommand::graph(GraphOp::AddTrack { index: 0, track }),
     );
     (engine, h, tid, log)
 }
@@ -904,7 +904,7 @@ fn lane_release_lands_on_a_block_boundary() {
     let mut l = vec![0.0; 256];
     let mut r = vec![0.0; 256];
     for _ in 0..120 {
-        engine.process(&mut l, &mut r);
+        engine.process_stereo(&mut l, &mut r);
     }
     assert_eq!(offs(&log.lock().unwrap(), 60), [25_600]);
 }
@@ -1024,18 +1024,18 @@ fn retiring_every_kind_of_object_stays_off_the_heap_on_the_audio_thread() {
     let (other, other_track) = track_with(Box::new(Dc(0.0)));
     send(
         &mut h,
-        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+        EngineCommand::graph(GraphOp::AddTrack { index: 0, track }),
     );
     send(
         &mut h,
-        EngineCommand::Graph(GraphCmd::AddTrack {
+        EngineCommand::graph(GraphOp::AddTrack {
             index: 1,
             track: other_track,
         }),
     );
     let mut l = vec![0.0; BLOCK];
     let mut r = vec![0.0; BLOCK];
-    engine.process(&mut l, &mut r);
+    engine.process_stereo(&mut l, &mut r);
 
     send(
         &mut h,
@@ -1054,20 +1054,20 @@ fn retiring_every_kind_of_object_stays_off_the_heap_on_the_audio_thread() {
     );
     send(
         &mut h,
-        EngineCommand::Graph(GraphCmd::RemoveDevice {
-            target: ChainTarget::Track(tid),
+        EngineCommand::graph(GraphOp::RemoveDevice {
+            target: ChainAddr::track(tid),
             device,
         }),
     );
-    send(&mut h, EngineCommand::Graph(GraphCmd::RemoveTrack(other)));
+    send(&mut h, EngineCommand::graph(GraphOp::RemoveTrack(other)));
     send(
         &mut h,
-        EngineCommand::Graph(GraphCmd::ReplaceAll {
+        EngineCommand::graph(GraphOp::ReplaceAll {
             tracks: Box::new(Vec::with_capacity(MAX_TRACKS)),
             master: Box::new(MasterNode::new(BLOCK)),
         }),
     );
-    rlive_testkit::assert_no_alloc(|| engine.process(&mut l, &mut r));
+    rlive_testkit::assert_no_alloc(|| engine.process_stereo(&mut l, &mut r));
 
     // Clip, lane, device, track, then the replaced track list and master.
     assert_eq!(h.collect_garbage(), 6);
@@ -1083,7 +1083,7 @@ fn follow_flag_tracks_launch_and_back_to_arrangement() {
     track.set_slot(0, Some(midi_clip(960, &[(0, 240, 72)])));
     send(
         &mut h,
-        EngineCommand::Graph(GraphCmd::AddTrack {
+        EngineCommand::graph(GraphOp::AddTrack {
             index: 0,
             track: Box::new(track),
         }),
@@ -1486,7 +1486,7 @@ fn midi_sender_reaches_track() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
     let log = Arc::new(Mutex::new(Vec::new()));
     let (tid, track) = track_with(Box::new(Recorder { log: log.clone() }));
-    h.send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
+    h.send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))
         .ok()
         .unwrap();
     let mut midi = h.take_midi_sender().unwrap();

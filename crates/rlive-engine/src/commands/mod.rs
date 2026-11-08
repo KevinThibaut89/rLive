@@ -8,7 +8,7 @@ mod record;
 mod transport;
 
 pub use clip::ClipCmd;
-pub use graph::GraphCmd;
+pub use graph::{GraphOp, GraphTxn};
 pub use launch::LaunchCmd;
 pub use param::ParamCmd;
 pub use record::RecordCmd;

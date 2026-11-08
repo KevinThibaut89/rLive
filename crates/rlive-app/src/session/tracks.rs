@@ -3,7 +3,7 @@
 use super::{mix_of, ChainRef, Session};
 use rlive_core::{MidiMessage, TrackId};
 use rlive_engine::shared::TrackShared;
-use rlive_engine::{mix_cell, EngineCommand, GraphCmd, RecordCmd};
+use rlive_engine::{mix_cell, EngineCommand, GraphOp, RecordCmd};
 use rlive_project::history::ParkedMix;
 use rlive_project::{Device, Track, TrackKind};
 use std::collections::HashMap;
@@ -49,10 +49,7 @@ impl Session {
         self.layouts.extend(layouts);
         self.messages.extend(errors);
         self.project.tracks.insert(index, t);
-        self.send(EngineCommand::Graph(GraphCmd::AddTrack {
-            index,
-            track: node,
-        }));
+        self.send_track_edits(vec![GraphOp::AddTrack { index, track: node }]);
     }
 
     pub fn delete_track(&mut self, id: TrackId) {
@@ -65,7 +62,7 @@ impl Session {
             }
             self.track_shared.remove(&id);
             self.layouts.remove(&ChainRef::Track(id));
-            self.send(EngineCommand::Graph(GraphCmd::RemoveTrack(id)));
+            self.send_track_edits(vec![GraphOp::RemoveTrack(id)]);
             self.update_midi_targets();
             self.mark_edit("Delete Track");
         }
@@ -76,7 +73,7 @@ impl Session {
             let t = self.project.tracks.remove(i);
             let to = to.min(self.project.tracks.len());
             self.project.tracks.insert(to, t);
-            self.send(EngineCommand::Graph(GraphCmd::MoveTrack { track: id, to }));
+            self.send_track_edits(vec![GraphOp::MoveTrack { track: id, to }]);
             self.mark_edit("Move Track");
         }
     }

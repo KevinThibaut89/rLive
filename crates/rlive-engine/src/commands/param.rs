@@ -1,26 +1,27 @@
 //! Parameter changes.
 
+use crate::graph::TrackRef;
 use crate::params::{CellIx, TrackRoutes};
-use crate::{retire, ChainTarget, Engine, Garbage};
+use crate::{retire, Engine, Garbage};
 use std::sync::Arc;
 
 pub enum ParamCmd {
     /// Set a parameter's knob, in plain units. `gesture` means the user moved it, which
     /// overrides automation on that parameter.
     Set {
-        track: ChainTarget,
+        track: TrackRef,
         cell: CellIx,
         value: f64,
         gesture: bool,
     },
     /// Replace what modulates this track.
     SetRoutes {
-        track: ChainTarget,
+        track: TrackRef,
         routes: Arc<TrackRoutes>,
     },
     /// Hand one parameter, or all of a track's, back to automation.
     ReEnable {
-        track: ChainTarget,
+        track: TrackRef,
         cell: Option<CellIx>,
     },
 }
@@ -40,8 +41,8 @@ impl Engine {
             }
             ParamCmd::SetRoutes { track, routes } => {
                 let old = match track {
-                    ChainTarget::Master => Some(std::mem::replace(&mut self.master.routes, routes)),
-                    ChainTarget::Track(id) => self
+                    TrackRef::Master => Some(std::mem::replace(&mut self.master.routes, routes)),
+                    TrackRef::Track(id) => self
                         .track_mut(id)
                         .map(|t| std::mem::replace(&mut t.routes, routes)),
                 };

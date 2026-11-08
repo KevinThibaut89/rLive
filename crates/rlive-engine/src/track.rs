@@ -3,15 +3,15 @@
 
 use crate::clip::{BlockTime, ClipData, ClipPlayer, Pending};
 use crate::lane::{ArrangementLane, LanePlayer};
-use crate::params::{
-    BusLayout, CellTarget, ControlHooks, ControlStep, ParamBus, TrackRoutes, CONTROL_STEP,
-};
+use crate::params::{BusLayout, ControlHooks, ControlStep, ParamBus, TrackRoutes, CONTROL_STEP};
+use crate::rack::RackNode;
 use crate::shared::{PeakMeter, TrackShared, NO_SLOT};
 use rlive_core::param::{mixer, ParamId};
 use rlive_core::{
-    db_to_gain, AudioBuffer, DeviceId, EventQueue, MidiEvent, ParamEvent, ParamOutQueue,
-    ProcessContext, Processor, TrackId, TransportInfo, ViewChannel, ViewWriter,
+    db_to_gain, AudioBuffer, DeviceId, EventQueue, MidiEvent, ParamOutQueue, Ports, ProcessContext,
+    Processor, Resource, TrackId, TransportInfo, ViewChannel, ViewWriter,
 };
+use std::ops::Range;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -19,83 +19,20 @@ pub const MAX_DEVICES: usize = 64;
 pub const MAX_SCENES: usize = 256;
 pub const MAX_EVENTS: usize = 2048;
 
-/// Room in a device's parameter queue when nothing says how much it needs.
-const DEFAULT_PARAM_EVENTS: usize = 1024;
-/// A device's parameter queue never needs more than this; past it, changes get merged.
-const MAX_PARAM_EVENTS: usize = 8192;
-
-/// One device's parameter changes, in block order, waiting for the device to run.
-///
-/// Fixed capacity. When it fills up, only the newest change of each parameter is kept, so a burst
-/// can blur the timing of a change but can't lose its final value.
-struct ParamQueue {
-    items: Vec<ParamEvent>,
-    /// Events already handed to the device this block.
-    taken: usize,
+/// What a device in a chain actually is.
+pub enum DeviceBody {
+    Proc(Box<dyn Processor>),
+    Rack(Box<RackNode>),
 }
 
-impl ParamQueue {
-    fn with_capacity(cap: usize) -> Self {
-        Self {
-            items: Vec::with_capacity(cap),
-            taken: 0,
-        }
-    }
-
-    /// Queue a change. Offsets must not decrease within a block.
-    fn push(&mut self, event: ParamEvent) {
-        if self.items.len() == self.items.capacity() {
-            self.compact();
-        }
-        if self.items.len() < self.items.capacity() {
-            self.items.push(event);
-        }
-    }
-
-    fn compact(&mut self) {
-        self.items.drain(..self.taken);
-        self.taken = 0;
-        self.items.sort_unstable_by_key(|e| (e.id, e.offset));
-        let n = self.items.len();
-        let mut kept = 0;
-        for i in 0..n {
-            if i + 1 == n || self.items[i + 1].id != self.items[i].id {
-                self.items[kept] = self.items[i];
-                kept += 1;
-            }
-        }
-        self.items.truncate(kept);
-        self.items.sort_unstable_by_key(|e| e.offset);
-    }
-
-    /// The changes due before `to`, with offsets relative to `from`, marked as handed over.
-    /// Anything held back from an earlier stretch arrives at the start of this one.
-    fn take_segment(&mut self, from: u32, to: u32) -> &[ParamEvent] {
-        let start = self.taken;
-        let end = start + self.items[start..].partition_point(|e| e.offset < to);
-        if from > 0 {
-            for e in &mut self.items[start..end] {
-                e.offset = e.offset.saturating_sub(from);
-            }
-        }
-        self.taken = end;
-        &self.items[start..end]
-    }
-
-    /// Forget what the device heard. A bypassed device hears the rest at its next block.
-    fn end_block(&mut self) {
-        self.items.drain(..self.taken);
-        self.taken = 0;
-        for e in &mut self.items {
-            e.offset = 0;
-        }
-    }
-}
-
-/// A processor in a device chain.
+/// A node in a device chain: a processor, or a rack of further chains.
 pub struct DeviceSlot {
     pub id: DeviceId,
-    pub processor: Box<dyn Processor>,
+    pub body: DeviceBody,
+    /// The cells this device owns in its track's bus, its activator first. The engine keeps this
+    /// up to date with the bus, so it finds the device's inbox in O(1) at any depth.
+    pub cells: Range<u32>,
+    pub ports: Ports,
     pub bypass: bool,
     /// The device replaces the MIDI stream with its `events_out`, for the devices after it.
     pub midi_effect: bool,
@@ -105,28 +42,103 @@ pub struct DeviceSlot {
     pub mod_out: Box<[f32]>,
     /// Where the device's view data goes. `None` for a device with nothing to show.
     pub view: Option<Arc<ViewChannel>>,
-    params: ParamQueue,
 }
 
 impl DeviceSlot {
-    pub fn new(id: DeviceId, processor: Box<dyn Processor>) -> Self {
+    fn with_body(id: DeviceId, body: DeviceBody) -> Self {
         Self {
             id,
-            processor,
+            body,
+            cells: 0..0,
+            ports: Ports::default(),
             bypass: false,
             midi_effect: false,
             latency: Arc::new(AtomicU32::new(0)),
             mod_out: Box::default(),
             view: None,
-            params: ParamQueue::with_capacity(DEFAULT_PARAM_EVENTS),
         }
     }
 
-    /// Size the parameter queue for a device with `params` parameters.
-    pub fn with_param_capacity(mut self, params: usize, max_block: usize) -> Self {
-        let cap = params.max(8) * (max_block / CONTROL_STEP + 1);
-        self.params = ParamQueue::with_capacity(cap.clamp(DEFAULT_PARAM_EVENTS, MAX_PARAM_EVENTS));
-        self
+    pub fn new(id: DeviceId, processor: Box<dyn Processor>) -> Self {
+        Self::with_body(id, DeviceBody::Proc(processor))
+    }
+
+    /// A rack. A MIDI rack replaces the MIDI stream, as a MIDI effect does.
+    pub fn rack(id: DeviceId, rack: Box<RackNode>) -> Self {
+        let midi_effect = rack.kind == crate::rack::RackKind::Midi;
+        let mut slot = Self::with_body(id, DeviceBody::Rack(rack));
+        slot.midi_effect = midi_effect;
+        slot
+    }
+
+    /// This slot's rack, if it is one.
+    pub fn as_rack_mut(&mut self) -> Option<&mut RackNode> {
+        match &mut self.body {
+            DeviceBody::Rack(r) => Some(r),
+            DeviceBody::Proc(_) => None,
+        }
+    }
+
+    /// How many racks deep this device goes: 0 for a processor.
+    pub(crate) fn nesting(&self) -> usize {
+        match &self.body {
+            DeviceBody::Proc(_) => 0,
+            DeviceBody::Rack(r) => {
+                let inner = r.chains.iter().chain(&r.returns);
+                1 + inner
+                    .flat_map(|c| c.devices.iter())
+                    .map(|d| d.nesting())
+                    .max()
+                    .unwrap_or(0)
+            }
+        }
+    }
+
+    fn for_each_processor(&mut self, f: &mut dyn FnMut(&mut dyn Processor)) {
+        match &mut self.body {
+            DeviceBody::Proc(p) => f(&mut **p),
+            DeviceBody::Rack(r) => r
+                .chains
+                .iter_mut()
+                .chain(r.returns.iter_mut())
+                .flat_map(|c| c.devices.iter_mut())
+                .for_each(|d| d.for_each_processor(f)),
+        }
+    }
+
+    /// Tell every processor in this slot it is about to leave the engine.
+    pub(crate) fn stop_processing(&mut self) {
+        self.for_each_processor(&mut |p| p.stop_processing());
+    }
+
+    /// Silence every processor in this slot.
+    pub(crate) fn reset(&mut self) {
+        self.for_each_processor(&mut |p| p.reset());
+    }
+
+    /// Hand a processor a shared resource. A rack takes none and gives it straight back.
+    pub(crate) fn set_resource(&mut self, slot: u32, resource: Resource) -> Option<Resource> {
+        match &mut self.body {
+            DeviceBody::Proc(p) => p.set_resource(slot, resource),
+            DeviceBody::Rack(_) => Some(resource),
+        }
+    }
+
+    /// Find this device's cells again after the bus or the tree changed, all the way down.
+    pub(crate) fn bind_cells(&mut self, bus: &ParamBus) {
+        self.cells = bus.cells_of(self.id).unwrap_or(0..0);
+        if let DeviceBody::Rack(r) = &mut self.body {
+            for chain in r.chains.iter_mut().chain(r.returns.iter_mut()) {
+                bind_chain(&mut chain.devices, bus);
+            }
+        }
+    }
+}
+
+/// Find the cells of every device in a chain, all the way down.
+pub(crate) fn bind_chain(devices: &mut [Box<DeviceSlot>], bus: &ParamBus) {
+    for d in devices.iter_mut() {
+        d.bind_cells(bus);
     }
 }
 
@@ -275,112 +287,96 @@ struct ChainCursor {
     next_event: usize,
 }
 
-/// Where a resolved value reaches a device. The only place that hands parameter changes to a
-/// processor: a sample-timed event for the device to hear at `offset`, or the engine's own switch.
-fn deliver_to_device(device: &mut DeviceSlot, target: CellTarget, plain: f64, offset: u32) {
-    match target {
-        CellTarget::Activator { .. } => {
-            let bypass = plain < 0.5;
-            if bypass != device.bypass {
-                device.bypass = bypass;
-                if bypass {
-                    device.processor.reset();
-                }
-            }
-        }
-        CellTarget::Device { param, .. } => device.params.push(ParamEvent {
-            offset,
-            id: param,
-            value: plain,
-        }),
-        _ => {}
-    }
-}
-
-/// Finds the device a resolved value belongs to in its chain and delivers it.
-fn deliver_to_chain(devices: &mut [Box<DeviceSlot>], target: CellTarget, plain: f64, offset: u32) {
-    let (CellTarget::Activator { device } | CellTarget::Device { device, .. }) = target else {
-        return;
-    };
-    if let Some(d) = devices.iter_mut().find(|d| d.id == device) {
-        deliver_to_device(d, target, plain, offset);
-    }
-}
-
-/// One stretch of a block running through a chain.
-struct ChainRun<'a> {
-    left: &'a mut [f32],
-    right: &'a mut [f32],
-    /// The chain's MIDI for this stretch.
-    events: &'a [MidiEvent],
-    /// Holds what MIDI effects pass along.
-    midi: &'a mut [EventQueue; 2],
-    transport: &'a TransportInfo,
-    param_out: &'a mut ParamOutQueue,
+/// What every chain of a track shares while one stretch of a block runs through it.
+pub(crate) struct Stretch<'a> {
+    pub transport: &'a TransportInfo,
+    pub param_out: &'a mut ParamOutQueue,
+    pub bus: &'a mut ParamBus,
+    pub on_param: &'a mut dyn FnMut(DeviceId, u32, f64),
     /// The stretch in frames from the start of the block.
-    from: u32,
-    to: u32,
+    pub from: u32,
+    pub to: u32,
 }
 
-/// Run a device chain over a buffer.
-fn run_chain(
-    devices: &mut [Box<DeviceSlot>],
-    run: ChainRun<'_>,
-    mut on_param: impl FnMut(DeviceId, u32, f64),
-) {
+/// One stretch of a block running through a device chain.
+pub(crate) struct ChainRun<'a, 's> {
+    pub left: &'a mut [f32],
+    pub right: &'a mut [f32],
+    /// The chain's MIDI for this stretch.
+    pub events: &'a [MidiEvent],
+    /// Holds what MIDI effects pass along.
+    pub midi: &'a mut [EventQueue; 2],
+    pub at: &'a mut Stretch<'s>,
+}
+
+/// Run a device chain over a buffer. Returns which of `midi` holds the chain's final MIDI, if a
+/// MIDI effect replaced `events`.
+pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) -> Option<usize> {
     let ChainRun {
         left,
         right,
         events,
         midi,
-        transport,
-        param_out,
-        from,
-        to,
+        at,
     } = run;
     // Which queue holds the MIDI, once a MIDI effect has replaced `events`.
     let mut input = None;
     for dev in devices.iter_mut() {
         let dev = &mut **dev;
+        if let Some(bypass) = at.bus.take_switch(dev.cells.start) {
+            if bypass != dev.bypass {
+                dev.bypass = bypass;
+                if bypass {
+                    dev.reset();
+                }
+            }
+        }
         if dev.bypass {
             continue;
         }
         let [a, b] = &mut *midi;
         let (held, out) = if input == Some(0) { (a, b) } else { (b, a) };
         out.clear();
-        let view = dev
-            .view
-            .as_deref()
-            .map_or(ViewWriter::none(), ViewWriter::new);
-        let mut ctx = ProcessContext {
-            audio: AudioBuffer {
-                left: &mut *left,
-                right: &mut *right,
-            },
-            sidechain: None,
-            aux_out: &mut [],
-            events: match input {
-                Some(_) => held.as_slice(),
-                None => events,
-            },
-            events_out: &mut *out,
-            params: dev.params.take_segment(from, to),
-            transport,
-            param_out: &mut *param_out,
-            mod_out: &mut dev.mod_out,
-            view: &view,
+        let heard = match input {
+            Some(_) => held.as_slice(),
+            None => events,
         };
-        dev.processor.process(&mut ctx);
-        dev.latency
-            .store(dev.processor.latency(), Ordering::Relaxed);
+        match &mut dev.body {
+            DeviceBody::Proc(processor) => {
+                let view = dev
+                    .view
+                    .as_deref()
+                    .map_or(ViewWriter::none(), ViewWriter::new);
+                let mut ctx = ProcessContext {
+                    audio: AudioBuffer {
+                        left: &mut *left,
+                        right: &mut *right,
+                    },
+                    sidechain: None,
+                    aux_out: &mut [],
+                    events: heard,
+                    events_out: &mut *out,
+                    params: at.bus.take_segment(dev.cells.start, at.from, at.to),
+                    transport: at.transport,
+                    param_out: &mut *at.param_out,
+                    mod_out: &mut dev.mod_out,
+                    view: &view,
+                };
+                processor.process(&mut ctx);
+                dev.latency.store(processor.latency(), Ordering::Relaxed);
+            }
+            DeviceBody::Rack(rack) => rack.run(left, right, heard, out, at),
+        }
         if dev.midi_effect {
             out.sort();
             input = Some(if input == Some(0) { 1 } else { 0 });
         }
-        for (id, v) in param_out.drain() {
-            on_param(dev.id, id, v);
+        for (id, v) in at.param_out.drain() {
+            at.bus.report_from_device(dev.id, id, v);
+            (at.on_param)(dev.id, id, v);
         }
     }
+    input
 }
 
 /// A track: clip slots → device chain → mixer.
@@ -527,7 +523,6 @@ impl TrackNode {
         }
         let transport = ctx.at(from);
         let id = self.id;
-        let bus = &mut self.bus;
         run_chain(
             &mut self.devices,
             ChainRun {
@@ -535,14 +530,14 @@ impl TrackNode {
                 right: &mut self.right[from..to],
                 events: segment,
                 midi: &mut self.midi,
-                transport: &transport,
-                param_out: &mut self.param_out,
-                from: from as u32,
-                to: to as u32,
-            },
-            |dev, p, v| {
-                bus.report_from_device(dev, p, v);
-                on_param(id, dev, p, v);
+                at: &mut Stretch {
+                    transport: &transport,
+                    param_out: &mut self.param_out,
+                    bus: &mut self.bus,
+                    on_param: &mut |dev, p, v| on_param(id, dev, p, v),
+                    from: from as u32,
+                    to: to as u32,
+                },
             },
         );
         self.cursor.frames = to;
@@ -572,11 +567,9 @@ impl TrackNode {
         if resolved.activators {
             self.render_to(offset, ctx, on_param);
         }
-        let (devices, mix) = (&mut self.devices, &mut self.mix);
-        self.bus.drain_resolved(|target, plain| match target {
-            CellTarget::Mixer(control) => mix.apply(control, plain),
-            target => deliver_to_chain(devices, target, plain, offset as u32),
-        });
+        let mix = &mut self.mix;
+        self.bus
+            .deliver_resolved(offset as u32, |control, plain| mix.apply(control, plain));
         self.gain.dirty |= resolved.mixer;
     }
 
@@ -602,9 +595,7 @@ impl TrackNode {
         on_param: &mut dyn FnMut(TrackId, DeviceId, u32, f64),
     ) {
         self.render_to(time.frames, ctx, on_param);
-        for d in self.devices.iter_mut() {
-            d.params.end_block();
-        }
+        self.bus.end_block();
 
         // Publish clip state.
         let shared = &self.shared;
@@ -695,7 +686,6 @@ impl MasterNode {
             return;
         }
         let transport = ctx.at(from);
-        let bus = &mut self.bus;
         run_chain(
             &mut self.devices,
             ChainRun {
@@ -703,14 +693,14 @@ impl MasterNode {
                 right: &mut self.right[from..to],
                 events: &[],
                 midi: &mut self.midi,
-                transport: &transport,
-                param_out: &mut self.param_out,
-                from: from as u32,
-                to: to as u32,
-            },
-            |dev, p, v| {
-                bus.report_from_device(dev, p, v);
-                on_param(dev, p, v);
+                at: &mut Stretch {
+                    transport: &transport,
+                    param_out: &mut self.param_out,
+                    bus: &mut self.bus,
+                    on_param,
+                    from: from as u32,
+                    to: to as u32,
+                },
             },
         );
         self.cursor.frames = to;
@@ -738,10 +728,11 @@ impl MasterNode {
         if resolved.activators {
             self.render_to(offset, ctx, on_param);
         }
-        let (devices, volume) = (&mut self.devices, &mut self.volume_db);
-        self.bus.drain_resolved(|target, plain| match target {
-            CellTarget::Mixer(mixer::VOLUME) => *volume = plain as f32,
-            target => deliver_to_chain(devices, target, plain, offset as u32),
+        let volume = &mut self.volume_db;
+        self.bus.deliver_resolved(offset as u32, |control, plain| {
+            if control == mixer::VOLUME {
+                *volume = plain as f32;
+            }
         });
         if resolved.mixer || self.gain.dirty {
             let g = db_to_gain(self.volume_db);
@@ -762,77 +753,10 @@ impl MasterNode {
     ) {
         let frames = ctx.frames;
         self.render_to(frames, ctx, on_param);
-        for d in self.devices.iter_mut() {
-            d.params.end_block();
-        }
+        self.bus.end_block();
         let left = &mut self.left[..frames];
         let right = &mut self.right[..frames];
         self.gain.apply(left, right, frames, coeff);
         meter.update(left, right);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn event(offset: u32, id: u32, value: f64) -> ParamEvent {
-        ParamEvent {
-            offset,
-            id: ParamId(id),
-            value,
-        }
-    }
-
-    #[test]
-    fn a_full_queue_keeps_the_newest_value_of_every_parameter() {
-        let mut q = ParamQueue::with_capacity(4);
-        q.push(event(0, 1, 0.1));
-        q.push(event(0, 2, 0.2));
-        q.push(event(32, 1, 0.3));
-        q.push(event(32, 2, 0.4));
-        q.push(event(64, 3, 0.5));
-        assert_eq!(
-            q.take_segment(0, 128),
-            [event(32, 1, 0.3), event(32, 2, 0.4), event(64, 3, 0.5)]
-        );
-    }
-
-    #[test]
-    fn segments_get_their_own_offsets() {
-        let mut q = ParamQueue::with_capacity(8);
-        q.push(event(32, 1, 0.1));
-        q.push(event(96, 1, 0.2));
-        assert_eq!(q.take_segment(0, 64), [event(32, 1, 0.1)]);
-        assert_eq!(q.take_segment(64, 128), [event(32, 1, 0.2)]);
-        q.end_block();
-        assert_eq!(q.take_segment(0, 128), []);
-    }
-
-    #[test]
-    fn what_a_bypassed_device_missed_waits_for_its_next_block() {
-        let mut q = ParamQueue::with_capacity(8);
-        q.push(event(32, 1, 0.1));
-        q.end_block();
-        q.push(event(64, 1, 0.2));
-        q.end_block();
-        assert_eq!(
-            q.take_segment(0, 256),
-            [event(0, 1, 0.1), event(0, 1, 0.2)],
-            "held back and delivered at the start, in order"
-        );
-    }
-
-    #[test]
-    fn compacting_and_taking_do_not_allocate() {
-        let mut q = ParamQueue::with_capacity(16);
-        rlive_testkit::assert_no_alloc(|| {
-            for i in 0..1000u32 {
-                q.push(event(i, i % 3, f64::from(i)));
-            }
-            let taken = q.take_segment(0, 1000).len();
-            std::hint::black_box(taken);
-            q.end_block();
-        });
     }
 }

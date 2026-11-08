@@ -52,6 +52,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
             .track(t)
             .map(|t| (t.name.clone(), rgb(t.color)))
             .unwrap_or_default(),
+        ChainRef::Nested(_) => ("Rack Chain".to_string(), hex(0x9a9a9a)),
     };
     // Left strip in the track colour with the track name (like Live's detail view title).
     let strip = Rect::from_min_size(full.min, Vec2::new(18.0, full.height()));

@@ -15,7 +15,7 @@ fn session() -> (rlive_engine::Engine, Session) {
 fn render(engine: &mut rlive_engine::Engine, s: &mut Session, frames: usize) -> Vec<f32> {
     let frames = frames.next_multiple_of(512);
     let (left, _) = rlive_testkit::render_chunks(frames, 512, |l, r| {
-        engine.process(l, r);
+        engine.process_stereo(l, r);
         s.idle();
     });
     left
@@ -716,7 +716,7 @@ fn swapping_a_sample_keeps_held_notes_sounding_and_recycles_the_old_one() {
     let refs_with_device = Arc::strong_count(&old);
     s.set_device_sample(chain, dev, b.clone());
     let (mut l, mut r) = (vec![0.0; 512], vec![0.0; 512]);
-    rlive_testkit::assert_no_alloc(|| engine.process(&mut l, &mut r));
+    rlive_testkit::assert_no_alloc(|| engine.process_stereo(&mut l, &mut r));
     assert!(
         (l[0] - level * 0.5).abs() < 0.01 && (l[511] - level * 0.5).abs() < 0.01,
         "the voice carries on with the new sample: {} {level}",

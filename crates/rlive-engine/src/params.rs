@@ -16,16 +16,113 @@
 //!
 //! [`BusLayout`] is the UI-side plan of who owns which cell; the engine only sees the finished
 //! [`ParamBus`].
+//!
+//! The bus also holds one inbox per device, at any depth of the device tree. A resolved value goes
+//! straight to the inbox of the cell's owner, and a device reads its inbox through its own cell
+//! range when it runs, so reaching a device in a nested rack costs no more than a flat one.
 
 use crate::shared::AtomicF32;
 use crate::track::MixSettings;
 use rlive_core::param::{mixer, ModMode, ParamId, ParamRange, ACTIVATOR};
-use rlive_core::{DeviceId, ParamInfo};
+use rlive_core::{DeviceId, ParamEvent, ParamInfo};
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// Frames between parameter resolves.
 pub const CONTROL_STEP: usize = 32;
+
+/// Room in a device's parameter queue when nothing says how much it needs.
+const DEFAULT_PARAM_EVENTS: usize = 1024;
+/// A device's parameter queue never needs more than this; past it, changes get merged.
+const MAX_PARAM_EVENTS: usize = 8192;
+/// Marks a cell that no device owns.
+const NO_OWNER: u32 = u32::MAX;
+
+/// One device's parameter changes, in block order, waiting for the device to run.
+///
+/// Fixed capacity. When it fills up, only the newest change of each parameter is kept, so a burst
+/// can blur the timing of a change but can't lose its final value.
+struct ParamQueue {
+    items: Vec<ParamEvent>,
+    /// Events already handed to the device this block.
+    taken: usize,
+}
+
+impl ParamQueue {
+    fn with_capacity(cap: usize) -> Self {
+        Self {
+            items: Vec::with_capacity(cap),
+            taken: 0,
+        }
+    }
+
+    /// Queue a change. Offsets must not decrease within a block.
+    fn push(&mut self, event: ParamEvent) {
+        if self.items.len() == self.items.capacity() {
+            self.compact();
+        }
+        if self.items.len() < self.items.capacity() {
+            self.items.push(event);
+        }
+    }
+
+    fn compact(&mut self) {
+        self.items.drain(..self.taken);
+        self.taken = 0;
+        self.items.sort_unstable_by_key(|e| (e.id, e.offset));
+        let n = self.items.len();
+        let mut kept = 0;
+        for i in 0..n {
+            if i + 1 == n || self.items[i + 1].id != self.items[i].id {
+                self.items[kept] = self.items[i];
+                kept += 1;
+            }
+        }
+        self.items.truncate(kept);
+        self.items.sort_unstable_by_key(|e| e.offset);
+    }
+
+    /// The changes due before `to`, with offsets relative to `from`, marked as handed over.
+    /// Anything held back from an earlier stretch arrives at the start of this one.
+    fn take_segment(&mut self, from: u32, to: u32) -> &[ParamEvent] {
+        let start = self.taken;
+        let end = start + self.items[start..].partition_point(|e| e.offset < to);
+        if from > 0 {
+            for e in &mut self.items[start..end] {
+                e.offset = e.offset.saturating_sub(from);
+            }
+        }
+        self.taken = end;
+        &self.items[start..end]
+    }
+
+    /// Forget what the device heard. A bypassed device hears the rest at its next block.
+    fn end_block(&mut self) {
+        self.items.drain(..self.taken);
+        self.taken = 0;
+        for e in &mut self.items {
+            e.offset = 0;
+        }
+    }
+}
+
+/// What is waiting for one device: parameter changes and a new on/off state.
+struct Inbox {
+    params: ParamQueue,
+    /// The bypass state to take before the device next runs.
+    switch: Option<bool>,
+}
+
+impl Inbox {
+    /// Pick up what a previous bus still held for this device.
+    fn take_over(&mut self, old: &Inbox) {
+        for e in &old.params.items[old.params.taken..] {
+            self.params.push(*e);
+        }
+        self.switch = old.switch;
+    }
+}
 
 /// A cell's position in its track's bus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -128,6 +225,11 @@ pub struct ParamBus {
     queued: usize,
     /// Sorted index for parameter changes that come from the device itself.
     by_param: Box<[(DeviceId, u32, CellIx)]>,
+    /// Who owns cells, sorted by device. Each entry's position is its inbox.
+    owners: Box<[(DeviceId, Range<u32>)]>,
+    /// For each cell, the inbox of its owner, or [`NO_OWNER`].
+    owner_of_cell: Box<[u32]>,
+    inboxes: Box<[Inbox]>,
 }
 
 impl ParamBus {
@@ -315,6 +417,7 @@ impl ParamBus {
     }
 
     /// Hand every resolved change to `deliver`, after [`resolve`](Self::resolve) queued them.
+    #[cfg(test)]
     pub(crate) fn drain_resolved(&mut self, mut deliver: impl FnMut(CellTarget, f64)) {
         for q in 0..std::mem::take(&mut self.queued) {
             let ix = self.queue[q] as usize;
@@ -322,8 +425,72 @@ impl ParamBus {
         }
     }
 
-    /// Take over the live state of a previous bus for cells that kept their owner.
+    /// Post every resolved change, after [`resolve`](Self::resolve) queued them: device values to
+    /// their owner's inbox, to be heard at `offset`, and mixer values to `mixer`.
+    pub(crate) fn deliver_resolved(&mut self, offset: u32, mut mixer: impl FnMut(ParamId, f64)) {
+        for q in 0..std::mem::take(&mut self.queued) {
+            let ix = self.queue[q] as usize;
+            let plain = self.cells[ix].sent;
+            let inbox = self.inboxes.get_mut(self.owner_of_cell[ix] as usize);
+            match (self.specs[ix].target, inbox) {
+                (CellTarget::Mixer(control), _) => mixer(control, plain),
+                (CellTarget::Activator { .. }, Some(inbox)) => inbox.switch = Some(plain < 0.5),
+                (CellTarget::Device { param, .. }, Some(inbox)) => inbox.params.push(ParamEvent {
+                    offset,
+                    id: param,
+                    value: plain,
+                }),
+                _ => {}
+            }
+        }
+    }
+
+    /// The cells `device` owns in this bus.
+    pub(crate) fn cells_of(&self, device: DeviceId) -> Option<Range<u32>> {
+        let found = self
+            .owners
+            .binary_search_by_key(&device, |(d, _)| *d)
+            .ok()?;
+        Some(self.owners[found].1.clone())
+    }
+
+    fn inbox(&mut self, cell: u32) -> Option<&mut Inbox> {
+        let owner = *self.owner_of_cell.get(cell as usize)?;
+        self.inboxes.get_mut(owner as usize)
+    }
+
+    /// The bypass state waiting for the device whose cells start at `cell`, if there is one.
+    pub(crate) fn take_switch(&mut self, cell: u32) -> Option<bool> {
+        self.inbox(cell).and_then(|i| i.switch.take())
+    }
+
+    /// The changes for the device whose cells start at `cell`, due in this stretch of the block.
+    pub(crate) fn take_segment(&mut self, cell: u32, from: u32, to: u32) -> &[ParamEvent] {
+        match self.inbox(cell) {
+            Some(i) => i.params.take_segment(from, to),
+            None => &[],
+        }
+    }
+
+    /// Forget what every device heard this block.
+    pub(crate) fn end_block(&mut self) {
+        for inbox in self.inboxes.iter_mut() {
+            inbox.params.end_block();
+        }
+    }
+
+    /// Take over the live state of a previous bus for cells that kept their owner, and the
+    /// inbox of every device still here.
     pub(crate) fn adopt(&mut self, old: &ParamBus) {
+        let mut before = 0;
+        for (at, (device, _)) in self.owners.iter().enumerate() {
+            while before < old.owners.len() && old.owners[before].0 < *device {
+                before += 1;
+            }
+            if old.owners.get(before).is_some_and(|(d, _)| d == device) {
+                self.inboxes[at].take_over(&old.inboxes[before]);
+            }
+        }
         for (ix, spec) in self.specs.iter().enumerate() {
             if spec.target == CellTarget::Free {
                 continue;
@@ -386,6 +553,8 @@ pub struct BusLayout {
     free: Vec<(u32, u32)>,
     devices: HashMap<DeviceId, DeviceCells>,
     effective: Arc<[AtomicF32]>,
+    /// Largest block the bus will run in, which sizes its parameter queues.
+    max_block: usize,
 }
 
 impl BusLayout {
@@ -401,7 +570,14 @@ impl BusLayout {
             free: Vec::new(),
             devices: HashMap::new(),
             effective: Arc::from([]),
+            max_block: 0,
         }
+    }
+
+    /// Size the parameter queues for blocks of up to `max_block` frames.
+    pub fn with_max_block(mut self, max_block: usize) -> Self {
+        self.max_block = max_block;
+        self
     }
 
     /// A track's layout: the mixer controls and no devices yet.
@@ -570,11 +746,35 @@ impl BusLayout {
             })
             .collect();
         by_param.sort_unstable();
+        let mut owners: Vec<(DeviceId, Range<u32>)> = self
+            .devices
+            .iter()
+            .map(|(id, d)| (*id, d.activator.0..d.activator.0 + d.len))
+            .collect();
+        owners.sort_unstable_by_key(|(id, _)| *id);
+        let mut owner_of_cell = vec![NO_OWNER; cells.len()].into_boxed_slice();
+        let inboxes = owners
+            .iter()
+            .enumerate()
+            .map(|(owner, (_, range))| {
+                owner_of_cell[range.start as usize..range.end as usize].fill(owner as u32);
+                let params = (range.len() - 1).max(8) * (self.max_block / CONTROL_STEP + 1);
+                Inbox {
+                    params: ParamQueue::with_capacity(
+                        params.clamp(DEFAULT_PARAM_EVENTS, MAX_PARAM_EVENTS),
+                    ),
+                    switch: None,
+                }
+            })
+            .collect();
         Box::new(ParamBus {
             queue: vec![0; cells.len()].into_boxed_slice(),
             queued: 0,
             specs: self.specs.clone().into_boxed_slice(),
             by_param: by_param.into_boxed_slice(),
+            owners: owners.into_boxed_slice(),
+            owner_of_cell,
+            inboxes,
             effective,
             cells,
         })
@@ -776,6 +976,97 @@ mod tests {
         let params = [ParamInfo::continuous(0, "Mix", 0.0, 10.0, 5.0, "")];
         assert!(!l.place_device(dev, true, &params, |p| p.default));
         assert_eq!(l.device_cell(dev, 0), Some(cell));
+    }
+
+    fn event(offset: u32, id: u32, value: f64) -> ParamEvent {
+        ParamEvent {
+            offset,
+            id: ParamId(id),
+            value,
+        }
+    }
+
+    #[test]
+    fn a_full_queue_keeps_the_newest_value_of_every_parameter() {
+        let mut q = ParamQueue::with_capacity(4);
+        q.push(event(0, 1, 0.1));
+        q.push(event(0, 2, 0.2));
+        q.push(event(32, 1, 0.3));
+        q.push(event(32, 2, 0.4));
+        q.push(event(64, 3, 0.5));
+        assert_eq!(
+            q.take_segment(0, 128),
+            [event(32, 1, 0.3), event(32, 2, 0.4), event(64, 3, 0.5)]
+        );
+    }
+
+    #[test]
+    fn segments_get_their_own_offsets() {
+        let mut q = ParamQueue::with_capacity(8);
+        q.push(event(32, 1, 0.1));
+        q.push(event(96, 1, 0.2));
+        assert_eq!(q.take_segment(0, 64), [event(32, 1, 0.1)]);
+        assert_eq!(q.take_segment(64, 128), [event(32, 1, 0.2)]);
+        q.end_block();
+        assert_eq!(q.take_segment(0, 128), []);
+    }
+
+    #[test]
+    fn what_a_bypassed_device_missed_waits_for_its_next_block() {
+        let mut q = ParamQueue::with_capacity(8);
+        q.push(event(32, 1, 0.1));
+        q.end_block();
+        q.push(event(64, 1, 0.2));
+        q.end_block();
+        assert_eq!(
+            q.take_segment(0, 256),
+            [event(0, 1, 0.1), event(0, 1, 0.2)],
+            "held back and delivered at the start, in order"
+        );
+    }
+
+    #[test]
+    fn compacting_and_taking_do_not_allocate() {
+        let mut q = ParamQueue::with_capacity(16);
+        rlive_testkit::assert_no_alloc(|| {
+            for i in 0..1000u32 {
+                q.push(event(i, i % 3, f64::from(i)));
+            }
+            let taken = q.take_segment(0, 1000).len();
+            std::hint::black_box(taken);
+            q.end_block();
+        });
+    }
+
+    #[test]
+    fn a_device_keeps_its_held_back_changes_across_a_bus_swap() {
+        let (mut l, dev, cell) = layout();
+        let mut old = l.build();
+        old.set_base(cell, 1.0, false);
+        old.resolve();
+        old.deliver_resolved(64, |_, _| {});
+        old.end_block();
+
+        let mut new = l.build();
+        new.adopt(&old);
+        let start = new.cells_of(dev).unwrap().start;
+        assert_eq!(new.take_segment(start, 0, 256), [event(0, 0, 1.0)]);
+    }
+
+    #[test]
+    fn a_devices_inbox_is_found_from_any_of_its_cells_and_no_other() {
+        let (mut l, dev, cell) = layout();
+        let mut bus = l.build();
+        let cells = bus.cells_of(dev).unwrap();
+        assert_eq!(cells.start + 1, cell.0, "the activator comes first");
+        bus.set_base(cell, 2.0, false);
+        bus.resolve();
+        bus.deliver_resolved(0, |_, _| {});
+        assert!(
+            bus.take_segment(0, 0, 256).is_empty(),
+            "cell 0 is the mixer"
+        );
+        assert_eq!(bus.take_segment(cells.start, 0, 256).len(), 1);
     }
 
     #[test]

@@ -130,7 +130,7 @@ fn build_stream(
                 let mut done = 0;
                 while done < frames_total {
                     let n = (frames_total - done).min(left.len());
-                    engine.process(&mut left[..n], &mut right[..n]);
+                    engine.process_stereo(&mut left[..n], &mut right[..n]);
                     let out = &mut data[done * channels..(done + n) * channels];
                     for (i, frame) in out.chunks_mut(channels).enumerate() {
                         match frame.len() {
@@ -165,7 +165,7 @@ fn spawn_fallback(mut engine: Engine, stop: Arc<AtomicBool>) -> std::thread::Joi
             let period = std::time::Duration::from_secs_f64(block as f64 / engine.sample_rate());
             let mut next = std::time::Instant::now();
             while !stop.load(Ordering::Relaxed) {
-                engine.process(&mut l, &mut r);
+                engine.process_stereo(&mut l, &mut r);
                 next += period;
                 let now = std::time::Instant::now();
                 if next > now {

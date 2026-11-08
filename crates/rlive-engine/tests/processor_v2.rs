@@ -101,7 +101,7 @@ fn chain(first: Vec<Box<DeviceSlot>>) -> Chain {
         false,
     ));
     assert!(h
-        .send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
+        .send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))
         .is_ok());
     let sender = h.take_midi_sender().unwrap();
     let mut c = Chain {
@@ -113,7 +113,7 @@ fn chain(first: Vec<Box<DeviceSlot>>) -> Chain {
     };
     // The engine reads MIDI before commands, so the track has to exist before the first note.
     let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    c.engine.process(&mut l, &mut r);
+    c.engine.process_stereo(&mut l, &mut r);
     c
 }
 
@@ -121,7 +121,7 @@ impl Chain {
     fn play(&mut self, key: u8) -> Vec<u8> {
         assert!(self.sender.send(self.id, note_on(key)));
         let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-        self.engine.process(&mut l, &mut r);
+        self.engine.process_stereo(&mut l, &mut r);
         std::mem::take(&mut self.keys.lock().unwrap())
     }
 }
@@ -226,7 +226,7 @@ fn params_rig(steps: Vec<(u32, f64)>) -> Rig {
     track.bus = layout.build();
     track.hooks = Some(Box::new(Script { steps, cell }));
     assert!(h
-        .send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
+        .send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))
         .is_ok());
     Rig {
         log,
@@ -240,7 +240,7 @@ fn params_rig(steps: Vec<(u32, f64)>) -> Rig {
 impl Rig {
     fn block(&mut self) {
         let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-        self.engine.process(&mut l, &mut r);
+        self.engine.process_stereo(&mut l, &mut r);
     }
 }
 
@@ -273,7 +273,7 @@ fn a_device_hears_a_change_made_while_it_is_off_when_it_comes_back() {
     assert!(r
         .h
         .send(EngineCommand::Param(ParamCmd::Set {
-            track: ChainTarget::Track(r.id),
+            track: TrackRef::Track(r.id),
             cell: r.activator,
             value: 0.0,
             gesture: true,
@@ -287,7 +287,7 @@ fn a_device_hears_a_change_made_while_it_is_off_when_it_comes_back() {
     assert!(r
         .h
         .send(EngineCommand::Param(ParamCmd::Set {
-            track: ChainTarget::Track(r.id),
+            track: TrackRef::Track(r.id),
             cell: r.activator,
             value: 1.0,
             gesture: true,
@@ -339,10 +339,10 @@ fn switching_a_device_off_mid_block_stops_it_at_that_step() {
     track.bus = layout.build();
     track.hooks = Some(Box::new(OffAt { step: 3, cell }));
     assert!(h
-        .send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
+        .send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))
         .is_ok());
     let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    engine.process(&mut l, &mut r);
+    engine.process_stereo(&mut l, &mut r);
     assert_eq!(*frames.lock().unwrap(), 3 * CONTROL_STEP);
 }
 
@@ -386,7 +386,7 @@ fn the_transport_carries_the_bar_start_and_loop() {
         assert!(c.h.send(EngineCommand::Transport(cmd)).is_ok());
     }
     let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    c.engine.process(&mut l, &mut r);
+    c.engine.process_stereo(&mut l, &mut r);
     let t = *seen.lock().unwrap().last().unwrap();
     assert_eq!(t.bar_start, bar);
     assert_eq!(t.loop_range, Some((bar, 2.0 * bar)));
@@ -424,15 +424,15 @@ fn a_replaced_resource_is_retired_and_never_freed_on_the_audio_thread() {
         }),
     )));
     assert!(h
-        .send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
+        .send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))
         .is_ok());
     let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    engine.process(&mut l, &mut r);
+    engine.process_stereo(&mut l, &mut r);
 
     let send_res = |h: &mut EngineHandle, v: u64| {
         assert!(h
-            .send(EngineCommand::Graph(GraphCmd::SetResource {
-                target: ChainTarget::Track(id),
+            .send(EngineCommand::graph(GraphOp::SetResource {
+                target: ChainAddr::track(id),
                 device,
                 slot: 0,
                 resource: Arc::new(v),
@@ -440,12 +440,12 @@ fn a_replaced_resource_is_retired_and_never_freed_on_the_audio_thread() {
             .is_ok());
     };
     send_res(&mut h, 1);
-    assert_no_alloc(|| engine.process(&mut l, &mut r));
+    assert_no_alloc(|| engine.process_stereo(&mut l, &mut r));
     assert_eq!(value.load(Ordering::Relaxed), 1);
     assert_eq!(h.collect_garbage(), 0, "nothing replaced the first time");
 
     send_res(&mut h, 2);
-    assert_no_alloc(|| engine.process(&mut l, &mut r));
+    assert_no_alloc(|| engine.process_stereo(&mut l, &mut r));
     assert_eq!(value.load(Ordering::Relaxed), 2);
     assert_eq!(h.collect_garbage(), 1, "the first resource comes back here");
 }
@@ -455,14 +455,14 @@ fn a_resource_for_a_missing_device_comes_back_too() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
     let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
     assert!(h
-        .send(EngineCommand::Graph(GraphCmd::SetResource {
-            target: ChainTarget::Master,
+        .send(EngineCommand::graph(GraphOp::SetResource {
+            target: ChainAddr::MASTER,
             device: DeviceId::new(),
             slot: 0,
             resource: Arc::new(5u32),
         }))
         .is_ok());
-    assert_no_alloc(|| engine.process(&mut l, &mut r));
+    assert_no_alloc(|| engine.process_stereo(&mut l, &mut r));
     assert_eq!(h.collect_garbage(), 1);
 }
 
@@ -478,5 +478,5 @@ fn a_chain_of_midi_effects_does_not_allocate() {
     assert!(c.sender.send(c.id, note_on(60)));
     let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
     let engine = &mut c.engine;
-    assert_no_alloc(|| engine.process(&mut l, &mut r));
+    assert_no_alloc(|| engine.process_stereo(&mut l, &mut r));
 }

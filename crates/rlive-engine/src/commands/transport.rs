@@ -67,11 +67,11 @@ impl Engine {
                 retire(&mut self.garbage, Garbage::Shared(p.clip));
             }
             for d in t.devices.iter_mut() {
-                d.processor.reset();
+                d.reset();
             }
         }
         for d in self.master.devices.iter_mut() {
-            d.processor.reset();
+            d.reset();
         }
     }
 }

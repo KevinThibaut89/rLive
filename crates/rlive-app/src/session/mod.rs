@@ -8,11 +8,14 @@ mod build;
 mod clips;
 mod devices;
 mod export;
+mod graph;
 mod recording;
 mod tracks;
 mod transport;
 mod undo;
 
+#[cfg(test)]
+mod golden;
 #[cfg(test)]
 mod tests;
 
@@ -20,12 +23,13 @@ pub use arrangement::{ArrMove, TrimEdge};
 pub use build::{descriptor_for, mix_of, Builder, DeviceRuntime, SampleCache};
 pub use clips::ClipRef;
 pub use devices::ChainRef;
+pub use graph::compile_plan;
 
 use crate::recording::Recording;
 use rlive_core::{DeviceId, PluginFormat, TrackId};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
-    BusLayout, CellIx, ChainTarget, EngineCommand, EngineEvent, EngineHandle, GraphCmd, ParamCmd,
+    BusLayout, CellIx, EngineCommand, EngineEvent, EngineHandle, GraphOp, ParamCmd, TrackRef,
     TransportCmd, MAX_TRACKS,
 };
 use rlive_plugin_host::scanner::PluginCache;
@@ -42,7 +46,7 @@ pub struct Session {
     pub engine: EngineHandle,
     pub runtimes: HashMap<DeviceId, DeviceRuntime>,
     pub track_shared: HashMap<TrackId, Arc<TrackShared>>,
-    /// Which cell each parameter lives in, per chain.
+    /// Which cell each parameter lives in, per track and the Master.
     pub layouts: HashMap<ChainRef, BusLayout>,
     pub plugins: PluginCache,
     pub samples: SampleCache,
@@ -78,7 +82,7 @@ impl Session {
 
     /// Send a parameter's new value to the engine, keeping the layout's copy up to date.
     pub(super) fn set_cell(&mut self, chain: ChainRef, cell: CellIx, value: f64, gesture: bool) {
-        if let Some(l) = self.layouts.get_mut(&chain) {
+        if let Some(l) = self.layouts.get_mut(&chain.owner()) {
             l.note_value(cell, value);
         }
         self.send(EngineCommand::Param(ParamCmd::Set {
@@ -138,10 +142,10 @@ impl Session {
         self.layouts = layouts;
         self.track_shared = shared_map;
         self.messages.extend(errors);
-        self.send(EngineCommand::Graph(GraphCmd::ReplaceAll {
+        self.send_track_edits(vec![GraphOp::ReplaceAll {
             tracks: Box::new(tracks),
             master,
-        }));
+        }]);
         let p = &self.project;
         let cmds = [
             EngineCommand::Transport(TransportCmd::SetTempo(p.tempo)),
@@ -236,8 +240,8 @@ impl Session {
                     value,
                 } => {
                     let chain = match target {
-                        ChainTarget::Track(t) => ChainRef::Track(t),
-                        ChainTarget::Master => ChainRef::Master,
+                        TrackRef::Track(t) => ChainRef::Track(t),
+                        TrackRef::Master => ChainRef::Master,
                     };
                     self.note_device_param(chain, device, param, value);
                 }

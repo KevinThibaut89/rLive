@@ -114,14 +114,14 @@ fn rig(hooks: Option<Box<dyn ControlHooks>>, level: f32) -> (Rig, Box<TrackNode>
 
 fn add_track(h: &mut EngineHandle, track: Box<TrackNode>) {
     assert!(h
-        .send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
+        .send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))
         .is_ok());
 }
 
 fn set_cell(h: &mut EngineHandle, track: TrackId, cell: CellIx, value: f64) {
     assert!(h
         .send(EngineCommand::Param(ParamCmd::Set {
-            track: ChainTarget::Track(track),
+            track: TrackRef::Track(track),
             cell,
             value,
             gesture: true,
@@ -190,7 +190,7 @@ fn a_mid_block_change_reaches_the_device_at_its_control_step() {
     }));
     add_track(&mut h, track);
     let (mut l, mut r_buf) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    engine.process(&mut l, &mut r_buf);
+    engine.process_stereo(&mut l, &mut r_buf);
 
     let offset = 5 * CONTROL_STEP;
     assert_eq!(
@@ -223,7 +223,7 @@ fn a_chain_is_not_split_while_nothing_changes() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
     let (r, track) = rig(None, 0.5);
     add_track(&mut h, track);
-    rlive_testkit::render_chunks(BLOCK * 4, BLOCK, |l, rb| engine.process(l, rb));
+    rlive_testkit::render_chunks(BLOCK * 4, BLOCK, |l, rb| engine.process_stereo(l, rb));
     assert_eq!(r.log.lock().unwrap().len(), 4, "one whole-block call each");
 }
 
@@ -291,7 +291,7 @@ fn segments_carry_the_transport_and_midi_of_their_own_offsets() {
         }))
         .is_ok());
     let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    engine.process(&mut l, &mut r);
+    engine.process_stereo(&mut l, &mut r);
 
     assert_eq!(*log.lock().unwrap(), [(25, 60), (150, 61), (250, 62)]);
 }
@@ -310,10 +310,10 @@ fn a_mid_block_gain_change_is_sample_accurate() {
         kind: Kind::Automation,
     }));
     add_track(&mut h, track);
-    rlive_testkit::render_chunks(settle * BLOCK, BLOCK, |l, rb| engine.process(l, rb));
+    rlive_testkit::render_chunks(settle * BLOCK, BLOCK, |l, rb| engine.process_stereo(l, rb));
 
     let (mut l, mut rb) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    engine.process(&mut l, &mut rb);
+    engine.process_stereo(&mut l, &mut rb);
     let at = 4 * CONTROL_STEP;
     assert!((l[at - 1] - 1.0).abs() < 1e-6, "{}", l[at - 1]);
     assert!(l[at] < 1.0 - 1e-4, "{}", l[at]);
@@ -326,7 +326,7 @@ fn a_mid_block_gain_change_is_sample_accurate() {
 struct SendAt {
     h: Arc<Mutex<EngineHandle>>,
     index: u32,
-    send: Option<(ChainTarget, CellIx, f64)>,
+    send: Option<(TrackRef, CellIx, f64)>,
 }
 
 impl ControlHooks for SendAt {
@@ -353,11 +353,11 @@ fn a_set_arriving_mid_block_lands_on_the_next_control_step() {
     track.hooks = Some(Box::new(SendAt {
         h: h.clone(),
         index: 3,
-        send: Some((ChainTarget::Track(r.id), r.cell, 0.25)),
+        send: Some((TrackRef::Track(r.id), r.cell, 0.25)),
     }));
     add_track(&mut h.lock().unwrap(), track);
     let (mut l, mut rb) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    engine.process(&mut l, &mut rb);
+    engine.process_stereo(&mut l, &mut rb);
     // Queued during step 3, picked up and delivered at step 4.
     let at = 4 * CONTROL_STEP;
     assert_eq!(l[at - 1], 0.5);
@@ -378,13 +378,13 @@ fn a_set_behind_a_graph_command_waits_for_the_next_block() {
             }
             if let Some((track, device, cell)) = self.send.take() {
                 let mut h = self.h.lock().unwrap();
-                let graph = EngineCommand::Graph(GraphCmd::MoveDevice {
-                    target: ChainTarget::Track(track),
+                let graph = EngineCommand::graph(GraphOp::MoveDevice {
+                    target: ChainAddr::track(track),
                     device,
                     to: 0,
                 });
                 let set = EngineCommand::Param(ParamCmd::Set {
-                    track: ChainTarget::Track(track),
+                    track: TrackRef::Track(track),
                     cell,
                     value: 0.25,
                     gesture: true,
@@ -404,12 +404,12 @@ fn a_set_behind_a_graph_command_waits_for_the_next_block() {
     }));
     add_track(&mut h.lock().unwrap(), track);
     let (mut l, mut rb) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    engine.process(&mut l, &mut rb);
+    engine.process_stereo(&mut l, &mut rb);
     assert!(
         l.iter().all(|s| *s == 0.5),
         "the graph command holds the Set back for this block"
     );
-    engine.process(&mut l, &mut rb);
+    engine.process_stereo(&mut l, &mut rb);
     assert_eq!(l[0], 0.25, "both ran at the top of the next block");
 }
 
@@ -420,10 +420,11 @@ fn a_volume_change_is_click_free() {
     let id = r.id;
     add_track(&mut h, track);
     let settle = settle_frames();
-    rlive_testkit::render_chunks(settle, BLOCK, |l, rb| engine.process(l, rb));
+    rlive_testkit::render_chunks(settle, BLOCK, |l, rb| engine.process_stereo(l, rb));
     // Slam the fader down between two host buffers.
     set_cell(&mut h, id, mix_cell::VOLUME, -60.0);
-    let (l, _) = rlive_testkit::render_chunks(BLOCK * 8, BLOCK, |l, rb| engine.process(l, rb));
+    let (l, _) =
+        rlive_testkit::render_chunks(BLOCK * 8, BLOCK, |l, rb| engine.process_stereo(l, rb));
     let biggest_jump = l.windows(2).fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()));
     assert!(biggest_jump < 0.01, "{biggest_jump}");
     assert!((l[0] - 1.0).abs() < 0.01, "starts from where it was");
@@ -449,7 +450,7 @@ fn scale_and_additive_modulation_reach_the_output() {
     track.hooks = Some(Box::new(Mod { cell }));
     add_track(&mut h, track);
     let frames = settle_frames();
-    let (l, _) = rlive_testkit::render_chunks(frames, BLOCK, |l, rb| engine.process(l, rb));
+    let (l, _) = rlive_testkit::render_chunks(frames, BLOCK, |l, rb| engine.process_stereo(l, rb));
     let norm = volume.to_normalized(0.0);
     let db = volume.from_normalized(norm + 0.25);
     let expect = 0.25 * rlive_core::db_to_gain(db as f32);
@@ -467,18 +468,18 @@ fn turning_a_device_off_goes_through_its_activator() {
     let (id, activator) = (r.id, r.activator);
     add_track(&mut h, track);
     let (mut l, mut rb) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    engine.process(&mut l, &mut rb);
+    engine.process_stereo(&mut l, &mut rb);
     assert!(l[BLOCK - 1] > 0.0);
 
     r.log.lock().unwrap().clear();
     set_cell(&mut h, id, activator, 0.0);
-    rlive_testkit::render_chunks(2400, BLOCK, |l, rb| engine.process(l, rb));
+    rlive_testkit::render_chunks(2400, BLOCK, |l, rb| engine.process_stereo(l, rb));
     let log = r.log.lock().unwrap();
     assert_eq!(*log, [Seen::Reset], "reset once and then skipped");
     drop(log);
 
     set_cell(&mut h, id, activator, 1.0);
-    let (l, _) = rlive_testkit::render_chunks(BLOCK, BLOCK, |l, rb| engine.process(l, rb));
+    let (l, _) = rlive_testkit::render_chunks(BLOCK, BLOCK, |l, rb| engine.process_stereo(l, rb));
     assert!(l[BLOCK - 1] > 0.0, "back on");
 }
 
@@ -500,12 +501,13 @@ fn soloing_a_track_silences_the_others_at_a_control_step() {
     add_track(&mut h, ta);
     add_track(&mut h, tb);
     let _ = (&a, &b);
-    rlive_testkit::render_chunks(settle * BLOCK, BLOCK, |l, rb| engine.process(l, rb));
+    rlive_testkit::render_chunks(settle * BLOCK, BLOCK, |l, rb| engine.process_stereo(l, rb));
     let (mut l, mut rb) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    engine.process(&mut l, &mut rb);
+    engine.process_stereo(&mut l, &mut rb);
     let at = 2 * CONTROL_STEP;
     assert!((l[at - 1] - 0.75).abs() < 1e-3, "{}", l[at - 1]);
-    let (l, _) = rlive_testkit::render_chunks(BLOCK * 8, BLOCK, |l, rb| engine.process(l, rb));
+    let (l, _) =
+        rlive_testkit::render_chunks(BLOCK * 8, BLOCK, |l, rb| engine.process_stereo(l, rb));
     assert!(
         (l[BLOCK * 8 - 1] - 0.25).abs() < 1e-3,
         "{}",
@@ -544,13 +546,13 @@ fn the_master_has_a_bus_too() {
         kind: Kind::Automation,
     }));
     assert!(h
-        .send(EngineCommand::Graph(GraphCmd::ReplaceAll {
+        .send(EngineCommand::graph(GraphOp::ReplaceAll {
             tracks: Box::new(Vec::with_capacity(MAX_TRACKS)),
             master,
         }))
         .is_ok());
     let (mut l, mut rb) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    engine.process(&mut l, &mut rb);
+    engine.process_stereo(&mut l, &mut rb);
     let offset = 3 * CONTROL_STEP;
     assert_eq!(
         *log.lock().unwrap(),
@@ -576,13 +578,14 @@ fn the_master_has_a_bus_too() {
     // Master volume is a cell as well.
     assert!(h
         .send(EngineCommand::Param(ParamCmd::Set {
-            track: ChainTarget::Master,
+            track: TrackRef::Master,
             cell: mix_cell::VOLUME,
             value: -96.0,
             gesture: true,
         }))
         .is_ok());
-    let (l, _) = rlive_testkit::render_chunks(SR as usize, BLOCK, |l, rb| engine.process(l, rb));
+    let (l, _) =
+        rlive_testkit::render_chunks(SR as usize, BLOCK, |l, rb| engine.process_stereo(l, rb));
     assert!(l[l.len() - 1].abs() < 1e-3);
 }
 
@@ -623,13 +626,13 @@ fn a_plugin_changing_a_param_is_reported_and_not_echoed_back() {
     let shared_cell = layout.effective(cell);
     assert_eq!(shared_cell, Some(0.5));
     add_track(&mut h, Box::new(track));
-    rlive_testkit::render_chunks(BLOCK * 4, BLOCK, |l, r| engine.process(l, r));
+    rlive_testkit::render_chunks(BLOCK * 4, BLOCK, |l, r| engine.process_stereo(l, r));
 
     let event = h.poll_event().expect("a change event");
     assert_eq!(
         event,
         EngineEvent::ParamChanged {
-            target: ChainTarget::Track(id),
+            target: TrackRef::Track(id),
             device,
             param: 0,
             value: 0.75,
@@ -640,10 +643,10 @@ fn a_plugin_changing_a_param_is_reported_and_not_echoed_back() {
 
     // Moving the knob to where the plugin is sends nothing; elsewhere does.
     set_cell(&mut h, id, cell, 0.75);
-    rlive_testkit::render_chunks(BLOCK, BLOCK, |l, r| engine.process(l, r));
+    rlive_testkit::render_chunks(BLOCK, BLOCK, |l, r| engine.process_stereo(l, r));
     assert!(delivered.lock().unwrap().is_empty());
     set_cell(&mut h, id, cell, 0.2);
-    rlive_testkit::render_chunks(BLOCK, BLOCK, |l, r| engine.process(l, r));
+    rlive_testkit::render_chunks(BLOCK, BLOCK, |l, r| engine.process_stereo(l, r));
     assert_eq!(*delivered.lock().unwrap(), [0.2]);
 }
 
@@ -656,7 +659,7 @@ fn a_bus_swap_keeps_live_values_and_retires_the_old_bus() {
     add_track(&mut h, track);
     set_cell(&mut h, id, cell, 0.8);
     set_cell(&mut h, id, mix_cell::VOLUME, -12.0);
-    rlive_testkit::render_chunks(BLOCK, BLOCK, |l, rb| engine.process(l, rb));
+    rlive_testkit::render_chunks(BLOCK, BLOCK, |l, rb| engine.process_stereo(l, rb));
 
     // Add a device to the layout, which replaces the bus.
     let mut layout = BusLayout::for_track(&MixSettings::default());
@@ -666,12 +669,13 @@ fn a_bus_swap_keeps_live_values_and_retires_the_old_bus() {
     let other = DeviceId::new();
     layout.place_device(other, true, &params, |p| p.default);
     assert!(h
-        .send(EngineCommand::Graph(GraphCmd::SwapBus {
-            target: ChainTarget::Track(id),
+        .send(EngineCommand::graph(GraphOp::SwapBus {
+            target: TrackRef::Track(id),
             bus: layout.build(),
         }))
         .is_ok());
-    let (l, _) = rlive_testkit::render_chunks(SR as usize, BLOCK, |l, rb| engine.process(l, rb));
+    let (l, _) =
+        rlive_testkit::render_chunks(SR as usize, BLOCK, |l, rb| engine.process_stereo(l, rb));
     assert_eq!(h.collect_garbage(), 1, "the old bus comes back to be freed");
     let gain = rlive_core::db_to_gain(-12.0);
     let (last, expect) = (l[l.len() - 1], 0.8 * gain);
@@ -686,20 +690,20 @@ fn set_routes_and_re_enable_are_real_time_safe() {
     let id = r.id;
     add_track(&mut h, track);
     let (mut l, mut rb) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    engine.process(&mut l, &mut rb);
+    engine.process_stereo(&mut l, &mut rb);
     assert!(h
         .send(EngineCommand::Param(ParamCmd::SetRoutes {
-            track: ChainTarget::Track(id),
+            track: TrackRef::Track(id),
             routes: Arc::new(TrackRoutes::default()),
         }))
         .is_ok());
     assert!(h
         .send(EngineCommand::Param(ParamCmd::ReEnable {
-            track: ChainTarget::Track(id),
+            track: TrackRef::Track(id),
             cell: None,
         }))
         .is_ok());
-    assert_no_alloc(|| engine.process(&mut l, &mut rb));
+    assert_no_alloc(|| engine.process_stereo(&mut l, &mut rb));
     assert_eq!(h.collect_garbage(), 1, "the previous routes");
 }
 
@@ -729,14 +733,14 @@ fn no_allocation_while_parameters_change() {
     r.log.lock().unwrap().reserve(1 << 20);
     add_track(&mut h, track);
     let (mut l, mut rb) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
-    engine.process(&mut l, &mut rb);
+    engine.process_stereo(&mut l, &mut rb);
 
     for i in 0..64u32 {
         let v = i as f64 / 64.0;
         set_cell(&mut h, id, mix_cell::VOLUME, -12.0 * v);
         set_cell(&mut h, id, cell, v);
         set_cell(&mut h, id, activator, f64::from(i % 2));
-        assert_no_alloc(|| engine.process(&mut l, &mut rb));
+        assert_no_alloc(|| engine.process_stereo(&mut l, &mut rb));
     }
 }
 

@@ -2,7 +2,7 @@
 
 use super::ChainRef;
 use crate::peaks::Peaks;
-use rlive_core::{DeviceId, ParamInfo, Processor};
+use rlive_core::{DeviceId, ParamInfo, Ports, Processor};
 use rlive_devices::{DeviceInit, DeviceRole, SampleBuffer};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
@@ -109,8 +109,7 @@ pub fn descriptor_for(
 impl Builder<'_> {
     /// Instantiate a device. Never fails: broken devices become silent placeholders with an error.
     pub fn device(&mut self, dev: &Device) -> (Box<DeviceSlot>, DeviceRuntime) {
-        let mut midi_effect = false;
-        let mut mod_outs = 0;
+        let mut ports = Ports::default();
         let (processor, runtime) = match &dev.kind {
             DeviceKind::Builtin { type_id, sample } => match rlive_devices::find(type_id) {
                 Some(info) => {
@@ -139,8 +138,7 @@ impl Builder<'_> {
                         p.set_param(param.id, v);
                     }
                     let latency = Arc::new(AtomicU32::new(p.latency()));
-                    midi_effect = desc.ports.midi_out;
-                    mod_outs = desc.ports.mod_out.len();
+                    ports = desc.ports;
                     (
                         p,
                         DeviceRuntime {
@@ -186,12 +184,12 @@ impl Builder<'_> {
                 }
             }
         };
-        let mut slot = DeviceSlot::new(dev.id, processor)
-            .with_param_capacity(runtime.params.len(), self.max_block);
+        let mut slot = DeviceSlot::new(dev.id, processor);
         slot.bypass = dev.bypass;
-        slot.midi_effect = midi_effect;
+        slot.midi_effect = ports.midi_out;
         slot.latency = runtime.latency.clone();
-        slot.mod_out = vec![0.0; mod_outs].into_boxed_slice();
+        slot.mod_out = vec![0.0; ports.mod_out.len()].into_boxed_slice();
+        slot.ports = ports;
         (Box::new(slot), runtime)
     }
 
@@ -252,7 +250,7 @@ impl Builder<'_> {
     ) -> Box<TrackNode> {
         let mut node = TrackNode::new(track.id, self.max_block).with_shared(shared);
         node.mix = mix_of(track);
-        let mut layout = BusLayout::for_track(&node.mix);
+        let mut layout = BusLayout::for_track(&node.mix).with_max_block(self.max_block);
         for d in &track.devices {
             let (slot, rt) = self.device(d);
             if let Some(e) = &rt.error {
@@ -285,7 +283,7 @@ impl Builder<'_> {
     ) -> Box<MasterNode> {
         let mut node = MasterNode::new(self.max_block);
         node.volume_db = project.master.volume_db;
-        let mut layout = BusLayout::for_master(node.volume_db);
+        let mut layout = BusLayout::for_master(node.volume_db).with_max_block(self.max_block);
         for d in &project.master.devices {
             let (slot, rt) = self.device(d);
             if let Some(e) = &rt.error {

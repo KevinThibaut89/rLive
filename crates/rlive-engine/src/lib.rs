@@ -12,19 +12,26 @@
 
 pub mod clip;
 mod commands;
+pub mod graph;
 pub mod lane;
 pub mod params;
+pub mod rack;
 pub mod shared;
 pub mod track;
 
 use clip::BlockTime;
 pub use clip::{AudioClip, ClipData, MidiClip, Note};
-pub use commands::{ClipCmd, GraphCmd, LaunchCmd, ParamCmd, RecordCmd, TransportCmd};
+pub use commands::{ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, RecordCmd, TransportCmd};
+pub use graph::{
+    AudioIo, BusIn, ChainAddr, ChainPath, ChainStep, RenderPlan, SidechainIn, Step, Tap, TrackRef,
+    MASTER_STEP, MAX_RACK_DEPTH,
+};
 pub use lane::{ArrangementLane, LaneClip};
 pub use params::{
     mix_cell, BusLayout, CellIx, CellSpec, CellTarget, ControlHooks, ControlStep, ParamBus,
     TrackRoutes, CONTROL_STEP,
 };
+pub use rack::{ChainNode, RackKind, RackNode, Zones, MAX_CHAINS};
 use rlive_core::{
     time::ticks_per_sample, DeviceId, MidiMessage, Quantize, TimeSignature, TrackId, TransportInfo,
 };
@@ -33,7 +40,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 use track::BlockCtx;
-pub use track::{DeviceSlot, MasterNode, MixSettings, TrackNode};
+pub use track::{DeviceBody, DeviceSlot, MasterNode, MixSettings, TrackNode};
 
 pub const MAX_TRACKS: usize = 256;
 const COMMAND_CAPACITY: usize = 4096;
@@ -54,13 +61,6 @@ impl MidiSender {
     }
 }
 
-/// Which device chain a command targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ChainTarget {
-    Track(TrackId),
-    Master,
-}
-
 /// Messages from the UI to the audio thread.
 pub enum EngineCommand {
     Transport(TransportCmd),
@@ -68,7 +68,15 @@ pub enum EngineCommand {
     Clip(ClipCmd),
     Param(ParamCmd),
     Record(RecordCmd),
-    Graph(GraphCmd),
+    /// Structural edits, applied together between two blocks.
+    Graph(Box<GraphTxn>),
+}
+
+impl EngineCommand {
+    /// A transaction of one edit.
+    pub fn graph(op: GraphOp) -> Self {
+        Self::Graph(GraphTxn::new(vec![op], None))
+    }
 }
 
 /// Things the engine is done with. They are dropped on the UI thread.
@@ -82,6 +90,8 @@ pub enum Garbage {
     Shared(Arc<dyn Send + Sync>),
     /// A resource a device replaced or refused.
     Resource(rlive_core::Resource),
+    /// A transaction that has been applied, holding only the plan it replaced.
+    Spent(Box<GraphTxn>),
 }
 
 /// Notifications from the audio thread.
@@ -89,7 +99,7 @@ pub enum Garbage {
 pub enum EngineEvent {
     /// A processor changed one of its own parameters (e.g. from a plugin editor).
     ParamChanged {
-        target: ChainTarget,
+        target: TrackRef,
         device: DeviceId,
         param: u32,
         value: f64,
@@ -130,18 +140,35 @@ impl EngineHandle {
             .map_err(|rtrb::PushError::Full(c)| c)
     }
 
-    /// Free everything the audio thread has released. Call regularly from the UI thread.
+    /// Free everything the audio thread has released, and say how many objects that was. A spent
+    /// transaction is only the wrapper its edits came in, so it doesn't count. Call regularly from
+    /// the UI thread.
     pub fn collect_garbage(&mut self) -> usize {
         let mut n = 0;
         while let Ok(g) = self.garbage.pop() {
+            n += usize::from(!matches!(g, Garbage::Spent(_)));
             drop(g);
-            n += 1;
         }
         n
     }
 
     pub fn poll_event(&mut self) -> Option<EngineEvent> {
         self.events.pop().ok()
+    }
+}
+
+/// The plans the engine can run.
+#[derive(Default)]
+struct Plans {
+    /// The plan the UI compiled, when it has sent one that still applies.
+    compiled: Option<RenderPlan>,
+    /// Today's topology over the current tracks, for when it hasn't.
+    flat: RenderPlan,
+}
+
+impl Plans {
+    fn active(&self) -> &RenderPlan {
+        self.compiled.as_ref().unwrap_or(&self.flat)
     }
 }
 
@@ -224,6 +251,7 @@ pub struct Engine {
     max_block: usize,
     tracks: Vec<Box<TrackNode>>,
     master: Box<MasterNode>,
+    plans: Plans,
 
     playing: bool,
     tempo: f64,
@@ -264,6 +292,14 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         max_block,
         tracks: Vec::with_capacity(MAX_TRACKS),
         master: Box::new(MasterNode::new(max_block)),
+        plans: Plans {
+            compiled: None,
+            flat: {
+                let mut plan = RenderPlan::with_capacity(MAX_TRACKS);
+                plan.make_flat(0);
+                plan
+            },
+        },
         playing: false,
         tempo: 120.0,
         signature: TimeSignature::default(),
@@ -319,6 +355,11 @@ impl Engine {
         self.max_block
     }
 
+    /// Whether the engine is running a plan the UI compiled, rather than its own fallback.
+    pub fn has_compiled_plan(&self) -> bool {
+        self.plans.compiled.is_some()
+    }
+
     fn transport(&self) -> TransportInfo {
         TransportInfo {
             playing: self.playing,
@@ -339,18 +380,36 @@ impl Engine {
             .map(|b| &mut **b)
     }
 
-    fn bus_mut(&mut self, target: ChainTarget) -> Option<&mut ParamBus> {
+    fn bus_mut(&mut self, target: TrackRef) -> Option<&mut ParamBus> {
         match target {
-            ChainTarget::Master => Some(&mut self.master.bus),
-            ChainTarget::Track(id) => self.track_mut(id).map(|t| &mut *t.bus),
+            TrackRef::Master => Some(&mut self.master.bus),
+            TrackRef::Track(id) => self.track_mut(id).map(|t| &mut *t.bus),
         }
     }
 
-    fn chain_mut(&mut self, target: ChainTarget) -> Option<&mut Vec<Box<DeviceSlot>>> {
-        match target {
-            ChainTarget::Master => Some(&mut self.master.devices),
-            ChainTarget::Track(id) => self.track_mut(id).map(|t| &mut t.devices),
+    /// The devices of a chain, however deep. Walks the path, so it is for structural edits only.
+    fn chain_mut(&mut self, target: ChainAddr) -> Option<&mut Vec<Box<DeviceSlot>>> {
+        let mut devices = match target.owner {
+            TrackRef::Master => &mut self.master.devices,
+            TrackRef::Track(id) => &mut self.track_mut(id)?.devices,
+        };
+        for step in target.path.steps() {
+            let rack = devices
+                .iter_mut()
+                .find(|d| d.id == step.rack)?
+                .as_rack_mut()?;
+            let chain = rack.chains.iter_mut().find(|c| c.id == step.chain)?;
+            devices = &mut chain.devices;
         }
+        Some(devices)
+    }
+
+    /// The rack `device` in the chain at `target`.
+    fn rack_mut(&mut self, target: ChainAddr, device: DeviceId) -> Option<&mut RackNode> {
+        self.chain_mut(target)?
+            .iter_mut()
+            .find(|d| d.id == device)?
+            .as_rack_mut()
     }
 
     fn launch_point(&self) -> f64 {
@@ -448,11 +507,12 @@ impl Engine {
         (self.frames_until(end, tps) <= n).then_some(end)
     }
 
-    /// Render `left.len()` frames of output. Handles any buffer size by splitting into
-    /// `max_block` chunks, and at the loop end.
-    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+    /// Render as many frames as the shortest output has. Handles any buffer size by splitting
+    /// into `max_block` chunks, and at the loop end. Inputs are accepted but nothing reads them
+    /// yet.
+    pub fn process(&mut self, io: AudioIo<'_>) {
         let started = std::time::Instant::now();
-        let total = left.len().min(right.len());
+        let total = io.outputs.iter().map(|o| o.len()).min().unwrap_or(0);
         let mut done = 0;
         while done < total {
             self.drain_input();
@@ -462,12 +522,7 @@ impl Engine {
             if let Some(end) = loop_end {
                 n = self.frames_until(end, tps).max(1);
             }
-            self.process_block(
-                &mut left[done..done + n],
-                &mut right[done..done + n],
-                tps,
-                loop_end,
-            );
+            self.process_block(io.outputs, done, n, tps, loop_end);
             done += n;
         }
         if total > 0 {
@@ -478,14 +533,22 @@ impl Engine {
         }
     }
 
+    /// [`process`](Self::process) with stereo output and no inputs.
+    pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32]) {
+        self.process(AudioIo {
+            inputs: &[],
+            outputs: &mut [left, right],
+        });
+    }
+
     fn process_block(
         &mut self,
-        out_l: &mut [f32],
-        out_r: &mut [f32],
+        outputs: &mut [&mut [f32]],
+        start: usize,
+        frames: usize,
         tps: f64,
         loop_end: Option<f64>,
     ) {
-        let frames = out_l.len();
         let transport = self.transport();
         let t1 = self.tick + frames as f64 * tps;
         let time = BlockTime {
@@ -502,79 +565,35 @@ impl Engine {
         for t in self.tracks.iter_mut() {
             t.begin_block(time, &transport, &mut retire_clip);
         }
+        self.master.begin_block();
 
         let ctx = BlockCtx {
             transport: &transport,
             ticks_per_sample: tps,
             frames,
         };
-        let mut index = 0;
-        let mut offset = 0;
-        while offset < frames {
-            if offset > 0 {
-                self.drain_param_commands();
+        // Taken out for the block so the plan can be read while everything else changes. Holds
+        // no allocation either way.
+        let plans = std::mem::take(&mut self.plans);
+        let plan = plans.active();
+        for (level, steps) in plan.levels.iter().enumerate() {
+            let steps = &plan.steps[steps.start as usize..steps.end as usize];
+            for step in steps {
+                self.gather_inputs(step, time, &transport);
             }
-            let events = &mut self.events;
-            let mut on_param = |t: TrackId, d: DeviceId, p: u32, v: f64| {
-                push_param_changed(events, ChainTarget::Track(t), d, p, v);
-            };
-            for t in self.tracks.iter_mut() {
-                t.control_step(index, offset, &ctx, &mut on_param);
-            }
-            let any_solo = self.tracks.iter().any(|t| t.mix.solo);
-            let solo_changed = any_solo != self.any_solo;
-            self.any_solo = any_solo;
-            for t in self.tracks.iter_mut() {
-                t.update_mix(offset, any_solo, solo_changed);
-            }
-            index += 1;
-            offset += CONTROL_STEP;
+            self.run_control_steps(steps, level == 0, &ctx);
+            self.finish_steps(steps, time, &ctx);
         }
+        self.plans = plans;
 
-        let events = &mut self.events;
-        let mut on_param = |t: TrackId, d: DeviceId, p: u32, v: f64| {
-            push_param_changed(events, ChainTarget::Track(t), d, p, v);
-        };
-        for t in self.tracks.iter_mut() {
-            t.finish_block(time, &ctx, &mut on_param);
-        }
-
-        let ml = &mut self.master.left[..frames];
-        let mr = &mut self.master.right[..frames];
-        ml.fill(0.0);
-        mr.fill(0.0);
-        for t in self.tracks.iter_mut() {
-            t.apply_mix(frames, self.smooth_coeff);
-            let (l, r) = t.output(frames);
-            for i in 0..frames {
-                ml[i] += l[i];
-                mr[i] += r[i];
+        for (channel, out) in outputs.iter_mut().enumerate() {
+            let out = &mut out[start..start + frames];
+            match channel {
+                0 => out.copy_from_slice(&self.master.left[..frames]),
+                1 => out.copy_from_slice(&self.master.right[..frames]),
+                _ => out.fill(0.0),
             }
         }
-        if transport.playing {
-            self.metronome.render(time, self.signature, ml, mr);
-        }
-
-        let mut on_master_param = |d: DeviceId, p: u32, v: f64| {
-            push_param_changed(events, ChainTarget::Master, d, p, v);
-        };
-        self.master.begin_block();
-        let mut index = 0;
-        let mut offset = 0;
-        while offset < frames {
-            self.master
-                .control_step(index, offset, &ctx, &mut on_master_param);
-            index += 1;
-            offset += CONTROL_STEP;
-        }
-        self.master.finish(
-            &ctx,
-            &self.shared.master_meter,
-            self.smooth_coeff,
-            &mut on_master_param,
-        );
-        out_l.copy_from_slice(&self.master.left[..frames]);
-        out_r.copy_from_slice(&self.master.right[..frames]);
 
         if self.playing {
             self.tick = time.t1();
@@ -586,11 +605,94 @@ impl Engine {
         self.shared.insert_marker.store(self.insert_marker);
         self.shared.tempo.store(self.tempo);
     }
+
+    /// Sum what a step takes as input into its track, before its devices run. Only the Master
+    /// has inputs for now, and the metronome joins it there.
+    fn gather_inputs(&mut self, step: &Step, time: BlockTime, transport: &TransportInfo) {
+        if step.track != MASTER_STEP {
+            return;
+        }
+        let frames = time.frames;
+        let ml = &mut self.master.left[..frames];
+        let mr = &mut self.master.right[..frames];
+        ml.fill(0.0);
+        mr.fill(0.0);
+        for input in &step.inputs {
+            let Some(t) = self.tracks.get(input.from as usize) else {
+                continue;
+            };
+            let (l, r) = t.output(frames);
+            for i in 0..frames {
+                ml[i] += l[i];
+                mr[i] += r[i];
+            }
+        }
+        if transport.playing {
+            self.metronome.render(time, self.signature, ml, mr);
+        }
+    }
+
+    /// Resolve the parameters of some steps at each control step of the block.
+    fn run_control_steps(&mut self, steps: &[Step], take_commands: bool, ctx: &BlockCtx) {
+        let has_tracks = steps.iter().any(|s| s.track != MASTER_STEP);
+        let mut index = 0;
+        let mut offset = 0;
+        while offset < ctx.frames {
+            if take_commands && offset > 0 {
+                self.drain_param_commands();
+            }
+            let events = &mut self.events;
+            for step in steps {
+                if step.track == MASTER_STEP {
+                    self.master
+                        .control_step(index, offset, ctx, &mut |d, p, v| {
+                            push_param_changed(events, TrackRef::Master, d, p, v)
+                        });
+                } else if let Some(t) = self.tracks.get_mut(step.track as usize) {
+                    t.control_step(index, offset, ctx, &mut |t, d, p, v| {
+                        push_param_changed(events, TrackRef::Track(t), d, p, v)
+                    });
+                }
+            }
+            if has_tracks {
+                let any_solo = self.tracks.iter().any(|t| t.mix.solo);
+                let solo_changed = any_solo != self.any_solo;
+                self.any_solo = any_solo;
+                for step in steps {
+                    if let Some(t) = self.tracks.get_mut(step.track as usize) {
+                        t.update_mix(offset, any_solo, solo_changed);
+                    }
+                }
+            }
+            index += 1;
+            offset += CONTROL_STEP;
+        }
+    }
+
+    /// Run what is left of some steps' chains and take them through the mixer stage.
+    fn finish_steps(&mut self, steps: &[Step], time: BlockTime, ctx: &BlockCtx) {
+        let events = &mut self.events;
+        for step in steps {
+            if step.track == MASTER_STEP {
+                self.master.finish(
+                    ctx,
+                    &self.shared.master_meter,
+                    self.smooth_coeff,
+                    &mut |d, p, v| push_param_changed(events, TrackRef::Master, d, p, v),
+                );
+            } else if let Some(t) = self.tracks.get_mut(step.track as usize) {
+                t.finish_block(time, ctx, &mut |t, d, p, v| {
+                    push_param_changed(events, TrackRef::Track(t), d, p, v)
+                });
+                t.apply_mix(time.frames, self.smooth_coeff);
+            }
+        }
+    }
 }
 
 fn push_param_changed(
     events: &mut rtrb::Producer<EngineEvent>,
-    target: ChainTarget,
+    target: TrackRef,
     device: DeviceId,
     param: u32,
     value: f64,
