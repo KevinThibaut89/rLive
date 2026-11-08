@@ -187,6 +187,7 @@ impl RliveApp {
     pub(super) fn edit_dispatch(&mut self, ctx: &egui::Context, c: Edit) {
         match c {
             Edit::Undo | Edit::Redo => self.undo_redo(ctx, c),
+            Edit::Rename if self.rename_in_rack() => {}
             Edit::ReturnToDefault => {
                 let ids = self.selected_track_ids();
                 self.session.reset_monitor(&ids);

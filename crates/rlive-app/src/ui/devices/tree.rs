@@ -2,18 +2,20 @@
 //! runtimes; changes nothing and clones no device.
 
 use super::layout::{self, SectionPlan};
+use super::rack::{RackView, RackWidths};
 use crate::session::{ChainRef, DeviceRuntime};
 use rlive_core::{ChainId, DeviceId, ParamId, ParamOwner, ParamRef, Section};
 use rlive_project::{Chain, Device, DeviceKind};
 use std::collections::{HashMap, HashSet};
 
-/// The width of a rack's chain list and of the drop zone at the end of one of its chains.
-pub const CHAIN_LIST_W: f32 = 112.0;
+/// The width of the drop zone at the end of one of a rack's chains.
 pub const INNER_DROP_W: f32 = 90.0;
 /// The gap between devices in a chain.
 pub const DEVICE_GAP: f32 = 4.0;
-/// Width of a rack's body, beyond the chain list and the devices in it.
-const RACK_MARGIN: f32 = 12.0;
+/// Width of a rack's body, beyond its views and the devices in it.
+const RACK_MARGIN: f32 = 20.0;
+/// Room for a rack folded down to its view column and vertical name.
+const COLUMN_ONLY_MARGIN: f32 = 24.0;
 /// How much shorter a rack's body is than its card.
 const RACK_INSET_H: f32 = 30.0;
 
@@ -26,6 +28,8 @@ pub struct PlanInput<'a> {
     pub show_all: &'a HashSet<DeviceId>,
     /// The chain each rack has open.
     pub open_chains: &'a HashMap<DeviceId, ChainId>,
+    /// What each rack shows.
+    pub racks: &'a HashMap<DeviceId, RackView>,
 }
 
 /// A device and how it's laid out.
@@ -192,23 +196,47 @@ fn plan_rack<'a>(
     height: f32,
     owned: &mut Vec<ParamRef>,
 ) -> DeviceNode<'a> {
+    let DeviceKind::Rack {
+        kind,
+        returns,
+        visible_macros,
+        ..
+    } = &dev.kind
+    else {
+        unreachable!("plan_rack is only called for racks");
+    };
+    let view = input
+        .racks
+        .get(&dev.id)
+        .cloned()
+        .unwrap_or_else(|| RackView::for_kind(*kind));
     let inner_h = height - RACK_INSET_H;
     let mark = owned.len();
     owned.extend(macro_targets(dev));
-    let open = open_chain(dev, input.open_chains).and_then(|chain| {
-        let child = at.child(dev.id, chain.id)?;
-        let devices = plan_devices(child, &chain.devices, input, inner_h, owned);
-        Some(OpenChain {
-            at: child,
-            chain,
-            devices,
-        })
-    });
+    let showing = view.devices && view.selection.len() <= 1;
+    let open = open_chain(dev, input.open_chains)
+        .filter(|_| showing)
+        .and_then(|chain| {
+            let child = at.child(dev.id, chain.id)?;
+            let devices = plan_devices(child, &chain.devices, input, inner_h, owned);
+            Some(OpenChain {
+                at: child,
+                chain,
+                devices,
+            })
+        });
     owned.truncate(mark);
-    let inner_w: f32 = open.as_ref().map_or(0.0, |c| {
-        c.devices.iter().map(|d| d.width + DEVICE_GAP).sum()
-    });
-    let width = CHAIN_LIST_W + DEVICE_GAP + inner_w + INNER_DROP_W + RACK_MARGIN;
+    let chrome = RackWidths::of(*kind, &view, *visible_macros, returns.len()).chrome();
+    let width = if view.all_hidden(*kind) {
+        chrome + COLUMN_ONLY_MARGIN
+    } else if view.devices {
+        let inner_w: f32 = open.as_ref().map_or(0.0, |c| {
+            c.devices.iter().map(|d| d.width + DEVICE_GAP).sum()
+        });
+        chrome + inner_w + INNER_DROP_W + RACK_MARGIN
+    } else {
+        chrome + RACK_MARGIN
+    };
     DeviceNode {
         dev,
         rt,
@@ -291,12 +319,13 @@ mod tests {
     /// Runs `f` on the plan of the first track's chain.
     fn with_plan<R>(s: &Session, f: impl FnOnce(&[DeviceNode]) -> R) -> R {
         let at = root(s);
-        let (show_all, open_chains) = (HashSet::new(), HashMap::new());
+        let (show_all, open_chains, racks) = (HashSet::new(), HashMap::new(), HashMap::new());
         let input = PlanInput {
             root: s.devices(at),
             runtimes: &s.runtimes,
             show_all: &show_all,
             open_chains: &open_chains,
+            racks: &racks,
         };
         f(&plan_chain(at, s.devices(at), &input, 200.0))
     }
@@ -366,9 +395,11 @@ mod tests {
         let (_e, s) = session(vec![nested()]);
         with_plan(&s, |nodes| {
             let inner = opened(&nodes[0]).devices[0].width;
+            let view = RackView::for_kind(RackKind::Audio);
+            let chrome = RackWidths::of(RackKind::Audio, &view, 8, 0).chrome();
             assert_eq!(
                 nodes[0].width,
-                CHAIN_LIST_W + DEVICE_GAP + inner + DEVICE_GAP + INNER_DROP_W + RACK_MARGIN
+                chrome + inner + DEVICE_GAP + INNER_DROP_W + RACK_MARGIN
             );
         });
     }
@@ -413,8 +444,7 @@ mod tests {
                     min: 0.0,
                     max: 1.0,
                 }],
-                exclude_random: false,
-                exclude_variations: false,
+                ..Macro::default()
             });
         }
         let (_e, s) = session(vec![d]);
@@ -456,18 +486,18 @@ mod tests {
                     min: 0.0,
                     max: 1.0,
                 }],
-                exclude_random: false,
-                exclude_variations: false,
+                ..Macro::default()
             });
         }
         let (_e, s) = session(vec![d]);
         let at = root(&s).child(rack_id, a).unwrap().child(inner, b).unwrap();
-        let (show_all, open_chains) = (HashSet::new(), HashMap::new());
+        let (show_all, open_chains, racks) = (HashSet::new(), HashMap::new(), HashMap::new());
         let input = PlanInput {
             root: s.devices(at.owner()),
             runtimes: &s.runtimes,
             show_all: &show_all,
             open_chains: &open_chains,
+            racks: &racks,
         };
         let nodes = plan_chain(at, s.devices(at), &input, 200.0);
         assert!(controls(&nodes[0]).macro_owned.contains(&ParamId(3)));

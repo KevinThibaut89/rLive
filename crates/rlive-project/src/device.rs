@@ -204,6 +204,12 @@ pub struct Macro {
     pub exclude_random: bool,
     #[serde(default, skip_serializing_if = "is_default")]
     pub exclude_variations: bool,
+    /// The user's colour for the knob, if any (manual p. 505).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub color: Option<[u8; 3]>,
+    /// The user's info text.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub info: String,
 }
 
 /// A parameter a macro controls, and the range it sweeps. `max` below `min` inverts it.
@@ -222,6 +228,8 @@ impl Default for Macro {
             mappings: Vec::new(),
             exclude_random: false,
             exclude_variations: false,
+            color: None,
+            info: String::new(),
         }
     }
 }

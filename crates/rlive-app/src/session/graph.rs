@@ -695,6 +695,11 @@ impl Session {
         }
     }
 
+    /// Apply edits that change nothing the plan or the compensation depend on.
+    pub(super) fn send_ops(&mut self, ops: Vec<GraphOp>) {
+        self.send(EngineCommand::Graph(GraphTxn::new(ops, None)));
+    }
+
     /// Apply edits that change the list of tracks, along with the plan for the result. Call after
     /// the project reflects them.
     pub(super) fn send_track_edits(&mut self, ops: Vec<GraphOp>) {

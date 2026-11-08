@@ -13,6 +13,7 @@ mod export;
 mod graph;
 mod info;
 mod io;
+mod rack_edit;
 mod racks;
 mod recording;
 mod routing;
@@ -52,14 +53,15 @@ pub use devices::ChainRef;
 pub use graph::compile_plan;
 pub use info::InfoTarget;
 pub use io::{can_arm, AudioHardware, CrossfaderField, CrossfaderKeys, RouteChoice};
+pub use rack_edit::PadDrop;
 pub use racks::{ExtractNotes, MacroDisplay, ZoneKind};
 pub use rlive_audio_io::SampleCache;
 pub use warping::{ShortSampleMode, WarpDefaults, WarpView, LONG_SAMPLE_SECONDS};
 
 use crate::recording::Recording;
 use crate::settings::ColorSettings;
-use rlive_core::{DeviceId, PluginFormat, TrackId};
-use rlive_engine::shared::TrackShared;
+use rlive_core::{ChainId, DeviceId, PluginFormat, TrackId};
+use rlive_engine::shared::{ChainShared, TrackShared};
 use rlive_engine::{
     BusLayout, CellIx, EngineCommand, EngineEvent, EngineHandle, GraphOp, ParamCmd, TrackRef,
     TransportCmd, MAX_TRACKS,
@@ -78,6 +80,8 @@ pub struct Session {
     pub engine: EngineHandle,
     pub runtimes: HashMap<DeviceId, DeviceRuntime>,
     pub track_shared: HashMap<TrackId, Arc<TrackShared>>,
+    /// What each rack chain publishes for the UI, by chain.
+    pub chain_shared: HashMap<ChainId, Arc<ChainShared>>,
     /// Which cell each parameter lives in, per track and the Master.
     pub layouts: HashMap<ChainRef, BusLayout>,
     pub plugins: PluginCache,
@@ -117,6 +121,7 @@ impl Session {
             engine,
             runtimes: HashMap::new(),
             track_shared: HashMap::new(),
+            chain_shared: HashMap::new(),
             layouts: HashMap::new(),
             plugins,
             samples: SampleCache::default(),
@@ -180,6 +185,7 @@ impl Session {
                 plugins: &self.plugins,
                 samples: &mut self.samples,
                 wiring: &self.wiring,
+                chain_shared: Some(&mut self.chain_shared),
             },
             &self.project,
         )

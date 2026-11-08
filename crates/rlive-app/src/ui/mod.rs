@@ -4,7 +4,7 @@ mod arrangement;
 mod automation;
 mod browser;
 pub mod commands;
-mod devices;
+pub(crate) mod devices;
 mod icons;
 mod in_out;
 mod info_view;
@@ -13,6 +13,7 @@ pub mod keymap;
 mod mac_menu;
 pub(crate) mod panels;
 mod piano_roll;
+mod rack_mixer;
 mod sample_editor;
 mod session_view;
 mod settings_window;
@@ -501,6 +502,7 @@ impl RliveApp {
                 .iter()
                 .any(|t| self.session.project.track(*t).is_some_and(|t| t.is_group())),
             warp_selected: self.ui.sample.has_selection(),
+            chain_selected: !self.ui.devices.mixer_selection.is_empty(),
         }
     }
 
@@ -1222,7 +1224,8 @@ impl eframe::App for RliveApp {
             .exact_size(STATUS_H)
             .frame(egui::Frame::new())
             .show(ui, |ui| self.status_bar(ui));
-        if self.ui.show_browser || self.ui.show_info {
+        let mapping = self.ui.devices.ui.map.is_some();
+        if self.ui.show_browser || self.ui.show_info || mapping {
             let panel = egui::Panel::left("browser")
                 .resizable(true)
                 .default_size(250.0)
@@ -1241,8 +1244,16 @@ impl eframe::App for RliveApp {
                         0.0
                     };
                     let split = full.bottom() - info_h;
-                    if self.ui.show_browser {
-                        let top = Rect::from_min_max(full.min, Pos2::new(full.right(), split));
+                    let top = Rect::from_min_max(full.min, Pos2::new(full.right(), split));
+                    if mapping {
+                        let inner = top.shrink(6.0);
+                        let mut mu = ui.new_child(UiBuilder::new().max_rect(inner));
+                        devices::rack::mapping_browser::show(
+                            &mut mu,
+                            &mut self.session,
+                            &mut self.ui,
+                        );
+                    } else if self.ui.show_browser {
                         let mut bu = ui.new_child(UiBuilder::new().max_rect(top));
                         browser::show(&mut bu, &mut self.session, &mut self.ui, &mut self.settings);
                     }

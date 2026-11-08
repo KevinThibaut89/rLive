@@ -558,6 +558,7 @@ fn the_v2_schema_round_trips_when_it_is_used() {
             }],
             exclude_random: true,
             exclude_variations: false,
+            ..Macro::default()
         });
         variations.push(Variation {
             name: "Bright".into(),

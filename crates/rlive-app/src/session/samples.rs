@@ -179,6 +179,12 @@ impl Session {
     }
 
     /// Changes a device's sample once its file has finished loading.
+    /// The newest request for a slot wins, whichever file finishes loading first.
+    pub(super) fn supersede_pending_sample(&mut self, device: DeviceId, slot: usize) {
+        self.pending_samples
+            .retain(|p| !(p.device == device && p.slot == slot));
+    }
+
     pub(super) fn queue_device_sample(
         &mut self,
         chain: ChainRef,

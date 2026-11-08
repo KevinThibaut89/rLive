@@ -6,12 +6,15 @@
 
 mod layout;
 mod queue;
+pub(crate) mod rack;
 mod tree;
 mod views;
 
-pub(crate) use queue::{Action, ActionQueue};
+pub(crate) use queue::{group_selected, ungroup_selected, Action, ActionQueue};
+use rack::{RackUi, RackView};
 
 use super::icons;
+use super::keymap::FocusArea;
 use super::panels::{self, PanelCtx};
 use super::theme::{self, *};
 use super::widgets::{self, info, rgb, ControlState, Led};
@@ -19,15 +22,16 @@ use super::{BrowserItem, UiState};
 use crate::session::{ChainRef, DeviceRuntime, InfoTarget, Session};
 use egui::{Align2, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
 use layout::{Placed, TITLE_H};
-use rlive_core::{ChainId, DeviceId, Item, ParamFlags, ParamId, ParamInfo};
+use rlive_core::{ChainId, DeviceId, Item, ParamFlags, ParamId, ParamInfo, ParamOwner, ParamRef};
 use rlive_project::{Device, DeviceKind};
 use std::collections::{HashMap, HashSet};
-use tree::{ControlPlan, DeviceNode, NodeBody, OpenChain, PlanInput, CHAIN_LIST_W, DEVICE_GAP};
+use tree::{ControlPlan, DeviceNode, NodeBody, PlanInput, DEVICE_GAP};
 use views::ViewStore;
 
 const FOLDED_NAME_Y: f32 = 46.0;
 const DROP_ZONE_W: f32 = 170.0;
-const CHAIN_ROW_H: f32 = 18.0;
+/// How rounded a rack's corners are, which sets it apart from a device (manual p. 494).
+const RACK_ROUNDING: f32 = 6.0;
 
 /// The device view's own state, none of it saved.
 #[derive(Default)]
@@ -35,8 +39,21 @@ pub struct DeviceViewState {
     show_all: HashSet<DeviceId>,
     open_chains: HashMap<DeviceId, ChainId>,
     views: ViewStore,
-    /// A device whose info text was just asked to be edited.
-    edit_info: Option<(ChainRef, DeviceId)>,
+    /// Something whose info text was just asked to be edited.
+    edit_info: Option<InfoTarget>,
+    /// What each rack shows.
+    pub(crate) rack_views: HashMap<DeviceId, RackView>,
+    /// What's going on in the racks on screen.
+    pub(crate) ui: RackUi,
+    /// The devices selected in the Device View, for grouping.
+    pub(crate) selected_devices: Vec<(ChainRef, DeviceId)>,
+    /// A device to bring into view.
+    scroll_to: Option<DeviceId>,
+    /// Which rack mixers are unfolded in the Session View.
+    pub(crate) mixer_open: HashSet<crate::ui::rack_mixer::MixFold>,
+    /// The chains selected in the Session View's mixer.
+    pub(crate) mixer_selection: Vec<crate::ui::rack_mixer::MixChain>,
+    pub(crate) chain_meters: HashMap<ChainId, super::widgets::MeterState>,
 }
 
 impl DeviceViewState {
@@ -53,11 +70,19 @@ impl DeviceViewState {
 }
 
 /// What every device draws with.
-struct DrawCx<'a> {
+pub(crate) struct DrawCx<'a> {
     session: &'a Session,
     views: &'a mut ViewStore,
     queue: &'a mut ActionQueue,
     dt: f32,
+    rack_views: &'a HashMap<DeviceId, RackView>,
+    ui: &'a mut RackUi,
+    selected_devices: &'a [(ChainRef, DeviceId)],
+    /// Everything Map Mode's rack can map.
+    mappable: HashSet<ParamOwner>,
+    /// The arrow keys are the Device View's to use this frame.
+    keyboard_free: bool,
+    scroll_to: Option<DeviceId>,
 }
 
 pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
@@ -79,6 +104,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     // Left strip in the track colour with the track name (like Live's detail view title).
     let strip = Rect::from_min_size(full.min, Vec2::new(18.0, full.height()));
     ui.painter().rect_filled(strip, 0.0, color);
+    let strip_resp = ui.interact(strip, ui.scope_id().with("device_selector"), Sense::click());
     let galley = ui
         .painter()
         .layout_no_wrap(title, theme::font_bold(11.0), theme::text_on(color));
@@ -101,18 +127,51 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let mut queue = ActionQueue::default();
     {
         let session: &Session = session;
+        let root = chain.owner();
+        strip_resp.context_menu(|ui| {
+            rack::device_navigator(ui, &mut queue, root, session.devices(root), &mut Vec::new());
+        });
         let input = PlanInput {
-            root: session.devices(chain.owner()),
+            root: session.devices(root),
             runtimes: &session.runtimes,
             show_all: &state.devices.show_all,
             open_chains: &state.devices.open_chains,
+            racks: &state.devices.rack_views,
         };
         let nodes = tree::plan_chain(chain, session.devices(chain), &input, height);
+        let keyboard_free =
+            state.focus == FocusArea::Device && !ui.ctx().egui_wants_keyboard_input();
+        let mappable = state
+            .devices
+            .ui
+            .map
+            .and_then(|m| {
+                session
+                    .devices(m.chain)
+                    .iter()
+                    .find(|d| d.id == m.rack)
+                    .map(rack::mappable_owners)
+            })
+            .unwrap_or_default();
+        let released = !ui.input(|i| i.pointer.primary_down());
+        if let Some(p) = state.devices.ui.preview.filter(|_| released) {
+            state.devices.ui.preview = None;
+            queue.push(
+                p.chain,
+                Action::Rack(p.rack, rack::RackAction::Preview(p, false)),
+            );
+        }
         let mut cx = DrawCx {
             session,
             views: &mut state.devices.views,
             queue: &mut queue,
             dt,
+            rack_views: &state.devices.rack_views,
+            ui: &mut state.devices.ui,
+            selected_devices: &state.devices.selected_devices,
+            mappable,
+            keyboard_free,
+            scroll_to: state.devices.scroll_to,
         };
         egui::ScrollArea::horizontal()
             .id_salt("device_chain")
@@ -124,9 +183,10 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
                 });
             });
     }
+    state.devices.scroll_to = None;
     queue.apply(session, &mut state.devices, &mut state.status);
-    if let Some((chain, id)) = state.devices.edit_info.take() {
-        state.edit_info_text(session, InfoTarget::Device(chain, id));
+    if let Some(target) = state.devices.edit_info.take() {
+        state.edit_info_text(session, target);
     }
 }
 
@@ -139,7 +199,31 @@ fn chain_header(session: &Session, chain: ChainRef) -> (String, egui::Color32) {
             .track(t)
             .map(|t| (t.name.clone(), rgb(t.color)))
             .unwrap_or_default(),
-        ChainRef::Nested(_) => ("Rack Chain".to_string(), shade(0x9a9a9a)),
+        ChainRef::Nested(addr) => {
+            let step = addr.path.steps().last();
+            let chain = step.and_then(|step| {
+                let parent = addr.path.steps()[..addr.path.len() - 1].iter().try_fold(
+                    session.devices(chain.owner()),
+                    |devices, s| {
+                        devices
+                            .iter()
+                            .find(|d| d.id == s.rack)?
+                            .chains()
+                            .find(|c| c.id == s.chain)
+                            .map(|c| c.devices.as_slice())
+                    },
+                )?;
+                parent
+                    .iter()
+                    .find(|d| d.id == step.rack)?
+                    .chains()
+                    .find(|c| c.id == step.chain)
+            });
+            match chain {
+                Some(c) => (c.name.clone(), c.color.map_or(shade(0x9a9a9a), rgb)),
+                None => ("Rack Chain".to_string(), shade(0x9a9a9a)),
+            }
+        }
     }
 }
 
@@ -211,18 +295,31 @@ fn device(
     let height = node.height;
     let on = !dev.bypass;
     let is_plugin = matches!(dev.kind, DeviceKind::Plugin { .. });
+    let is_rack = matches!(dev.kind, DeviceKind::Rack { .. });
+    let rounding = if is_rack { RACK_ROUNDING } else { 1.0 };
+    let selected = cx.selected_devices.contains(&(chain, dev.id));
 
     let (rect, bg) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    if cx.scroll_to == Some(dev.id) {
+        ui.scroll_to_rect(rect, Some(egui::Align::Center));
+    }
     let p = ui.painter().clone();
     p.rect_filled(
         rect,
-        1.0,
+        rounding,
         if on { shade(0x3a3a3a) } else { shade(0x2f2f2f) },
     );
     p.rect_stroke(
         rect,
-        1.0,
-        Stroke::new(1.0, pal().separator),
+        rounding,
+        Stroke::new(
+            1.0,
+            if selected {
+                shade(0xdddddd)
+            } else {
+                pal().separator
+            },
+        ),
         StrokeKind::Inside,
     );
 
@@ -244,18 +341,33 @@ fn device(
     let r = widgets::bare_icon(&mut tu, Vec2::new(18.0, 18.0), |p, r, c| {
         icons::power(p, r, if on { pal().accent } else { c })
     });
+    let power_rect = r.rect;
     if info(
         r,
         if on {
-            "Device on — click to bypass"
+            "Device on — click to bypass; Alt-click for its whole group"
         } else {
-            "Device bypassed — click to activate"
+            "Device bypassed — click to activate; Alt-click for its whole group"
         },
     )
     .clicked()
     {
-        cx.queue.push(chain, Action::Bypass(dev.id, on));
+        if ui.input(|i| i.modifiers.alt) {
+            cx.queue.push(chain, Action::BypassGroup(dev.id, on));
+        } else {
+            cx.queue.push(chain, Action::Bypass(dev.id, on));
+        }
     }
+    rack::map_overlay(
+        ui,
+        cx,
+        chain,
+        power_rect,
+        ParamRef {
+            owner: ParamOwner::Device(dev.id),
+            id: rlive_core::ACTIVATOR,
+        },
+    );
     if dev.expanded {
         expanded_title(&mut tu, cx, chain, node, title, is_plugin, on);
     } else {
@@ -264,12 +376,22 @@ fn device(
 
     let resp = info(bg, format!("{} — right-click for options", dev.name));
     widgets::info_note(&resp, &dev.info);
+    let on_title = |resp: &egui::Response| {
+        resp.interact_pointer_pos()
+            .is_some_and(|pos| title.contains(pos) || !dev.expanded)
+    };
+    if resp.double_clicked() && on_title(&resp) {
+        cx.queue.push(chain, Action::Fold(dev.id, !dev.expanded));
+    } else if resp.clicked() && on_title(&resp) {
+        let additive = ui.input(|i| i.modifiers.shift);
+        cx.queue.push(chain, Action::SelectDevice(dev.id, additive));
+    }
     resp.context_menu(|ui| device_menu(ui, cx, chain, dev, index, count, is_plugin));
 
     match &node.body {
         NodeBody::Folded => {}
         NodeBody::Controls(plan) => controls(ui, cx, chain, node, rect, title, plan, on),
-        NodeBody::Rack(open) => rack(ui, cx, node, rect, title, open.as_ref(), on),
+        NodeBody::Rack(open) => rack::draw(ui, cx, chain, node, rect, title, open.as_ref(), on),
     }
 }
 
@@ -290,9 +412,41 @@ fn expanded_title(
     if info(r, "Fold Device — collapse this device").clicked() {
         cx.queue.push(chain, Action::Fold(dev.id, false));
     }
-    let name_w =
-        (title.right() - tu.cursor().left() - if is_plugin { 46.0 } else { 6.0 }).max(10.0);
+    let is_rack = matches!(dev.kind, DeviceKind::Rack { .. });
+    // With every view hidden the name moves into the view column, and nothing else fits.
+    if rack::RackRef::of(chain, dev, cx.rack_views).is_some_and(|r| r.view.all_hidden(r.kind)) {
+        return;
+    }
+    let reserved = match (is_plugin, is_rack) {
+        (true, _) => 46.0,
+        (_, true) => 44.0,
+        _ => 6.0,
+    };
+    let name_w = (title.right() - tu.cursor().left() - reserved).max(10.0);
+    // A rack is wider than the window, so what's in its title stays where it can be seen.
+    let name_w = if is_rack { name_w.min(150.0) } else { name_w };
     let (nr, _) = tu.allocate_exact_size(Vec2::new(name_w, 18.0), Sense::hover());
+    let renaming = matches!(
+        &cx.ui.rename,
+        Some(rack::Rename { target: rack::RenameTarget::Device(d), .. }) if *d == dev.id
+    );
+    if renaming {
+        let mut done = None;
+        if let Some(rename) = &mut cx.ui.rename {
+            let edit = tu.put(
+                nr,
+                egui::TextEdit::singleline(&mut rename.text).font(theme::font(11.0)),
+            );
+            edit.request_focus();
+            if edit.lost_focus() {
+                done = Some(rename.text.clone());
+            }
+        }
+        if let Some(name) = done {
+            cx.ui.rename = None;
+            cx.queue.push(chain, Action::Rename(dev.id, name));
+        }
+    }
     let galley = tu.painter().layout_no_wrap(
         dev.name.clone(),
         theme::font_bold(11.0),
@@ -303,6 +457,18 @@ fn expanded_title(
         galley,
         pal().text,
     );
+    if is_rack {
+        let r = widgets::state_button(tu, Vec2::new(36.0, 15.0), false, pal().accent, "Rand");
+        if info(
+            r,
+            "Rand — randomize this Rack's mapped Macro Controls, except those excluded",
+        )
+        .clicked()
+        {
+            cx.queue
+                .push(chain, Action::Rack(dev.id, rack::RackAction::Randomize));
+        }
+    }
     if let Some(h) = node.rt.and_then(|r| r.plugin.as_ref()) {
         if h.has_editor() {
             let open = h.is_editor_open();
@@ -379,8 +545,27 @@ fn device_menu(
     count: usize,
     is_plugin: bool,
 ) {
+    if ui.button("Rename").clicked() {
+        cx.ui.rename = Some(rack::Rename {
+            target: rack::RenameTarget::Device(dev.id),
+            text: dev.name.clone(),
+        });
+        ui.close();
+    }
     if ui.button("Edit Info Text").clicked() {
         cx.queue.push(chain, Action::EditInfo(dev.id));
+        ui.close();
+    }
+    if ui.button("Group").clicked() {
+        cx.queue.push(chain, Action::Group(dev.id, false));
+        ui.close();
+    }
+    if ui.button("Group to Drum Rack").clicked() {
+        cx.queue.push(chain, Action::Group(dev.id, true));
+        ui.close();
+    }
+    if matches!(dev.kind, DeviceKind::Rack { .. }) && ui.button("Ungroup").clicked() {
+        cx.queue.push(chain, Action::Ungroup(dev.id));
         ui.close();
     }
     if index > 0 && ui.button("Move Left").clicked() {
@@ -653,6 +838,17 @@ fn param_control(
     if re_enable.get() {
         cx.queue.push(chain, Action::ReEnable(dev.id, prm.id));
     }
+    let rect = ui.max_rect();
+    rack::map_overlay(
+        ui,
+        cx,
+        chain,
+        rect,
+        ParamRef {
+            owner: ParamOwner::Device(dev.id),
+            id: ParamId(prm.id),
+        },
+    );
 }
 
 /// The knob position of a parameter: its project value, the plugin's own, or its default.
@@ -662,115 +858,4 @@ fn param_value(dev: &Device, rt: &DeviceRuntime, param: &ParamInfo) -> f64 {
         .copied()
         .or_else(|| rt.plugin.as_ref().and_then(|h| h.param_value(param.id)))
         .unwrap_or(param.default)
-}
-
-fn rack(
-    ui: &mut egui::Ui,
-    cx: &mut DrawCx,
-    node: &DeviceNode,
-    rect: Rect,
-    title: Rect,
-    open: Option<&OpenChain>,
-    on: bool,
-) {
-    let body = Rect::from_min_max(
-        Pos2::new(rect.left() + 6.0, title.bottom() + 6.0),
-        rect.max - Vec2::new(6.0, 4.0),
-    );
-    let mut bu = body_ui(ui, body);
-    if !on {
-        bu.multiply_opacity(0.55);
-    }
-    let dev = node.dev;
-    if let Some(err) = node.rt.and_then(|r| r.error.as_ref()) {
-        bu.label(RichText::new(err).color(pal().arm_red).size(10.5));
-    }
-
-    let list = Rect::from_min_size(body.min, Vec2::new(CHAIN_LIST_W, body.height()));
-    bu.painter().rect_filled(list, 1.0, pal().field_bg);
-    let mut lu = bu.new_child(UiBuilder::new().max_rect(list.shrink(2.0)));
-    lu.spacing_mut().item_spacing = Vec2::new(0.0, 1.0);
-    egui::ScrollArea::vertical()
-        .id_salt(("rack_chains", dev.id))
-        .auto_shrink([false, false])
-        .show(&mut lu, |ui| {
-            for chain in dev.chains() {
-                let selected = open.is_some_and(|o| o.chain.id == chain.id);
-                chain_row(ui, cx, dev, chain, selected);
-            }
-        });
-
-    let inner = Rect::from_min_max(Pos2::new(list.right() + DEVICE_GAP, body.top()), body.max);
-    let mut iu = bu.new_child(UiBuilder::new().max_rect(inner));
-    match open {
-        Some(open) => {
-            iu.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = DEVICE_GAP;
-                draw_chain(
-                    ui,
-                    cx,
-                    open.at,
-                    &open.devices,
-                    inner.height(),
-                    tree::INNER_DROP_W,
-                );
-            });
-        }
-        None => {
-            iu.painter().text(
-                inner.center(),
-                Align2::CENTER_CENTER,
-                "No chains",
-                theme::font(11.0),
-                pal().text_faint,
-            );
-        }
-    }
-}
-
-fn chain_row(
-    ui: &mut egui::Ui,
-    cx: &mut DrawCx,
-    rack: &Device,
-    chain: &rlive_project::Chain,
-    selected: bool,
-) {
-    let (rect, resp) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), CHAIN_ROW_H), Sense::click());
-    let fill = if selected {
-        pal().raised_hover
-    } else if resp.hovered() {
-        pal().raised
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    let p = ui.painter();
-    p.rect_filled(rect, 1.0, fill);
-    if let Some(color) = chain.color {
-        let swatch = Rect::from_min_size(rect.min, Vec2::new(3.0, rect.height()));
-        p.rect_filled(swatch, 0.0, rgb(color));
-    }
-    let g = p.layout_no_wrap(
-        chain.name.clone(),
-        theme::font(10.5),
-        if chain.mix.active {
-            pal().text
-        } else {
-            pal().text_faint
-        },
-    );
-    p.with_clip_rect(rect).galley(
-        Pos2::new(rect.left() + 6.0, rect.center().y - g.size().y / 2.0),
-        g,
-        pal().text,
-    );
-    let resp = info(
-        resp,
-        format!("Chain “{}” — click to show its devices", chain.name),
-    );
-    if resp.clicked() {
-        // Which chain it's found in doesn't matter: the choice is the view's, keyed by rack.
-        cx.queue
-            .push(ChainRef::Master, Action::OpenChain(rack.id, chain.id));
-    }
 }

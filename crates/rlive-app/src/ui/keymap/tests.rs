@@ -1,6 +1,7 @@
 use super::super::commands::create::Create;
 use super::super::commands::edit::Edit;
 use super::super::commands::options::Options;
+use super::super::commands::rack::Rack;
 use super::super::commands::track::Track;
 use super::super::commands::transport::Transport;
 use super::super::commands::view::View;
@@ -23,6 +24,7 @@ fn cx(focus: FocusArea) -> KeyContext {
         dialog_open: false,
         group_selected: false,
         warp_selected: false,
+        chain_selected: false,
     }
 }
 
@@ -285,7 +287,38 @@ fn cmd_g_groups_tracks_and_groups_notes_by_focus() {
     );
     assert_eq!(
         resolve(cmd(Key::G), &cx(FocusArea::Device)),
-        Resolution::Pending
+        Resolution::Run(MenuCommand::Rack(Rack::Group))
+    );
+}
+
+#[test]
+fn cmd_shift_g_ungroups_a_rack_with_the_device_view_focused() {
+    let shift_cmd = Chord {
+        mods: Mods {
+            cmd: true,
+            shift: true,
+            ..Default::default()
+        },
+        key: Key::G,
+    };
+    assert_eq!(
+        resolve(shift_cmd, &cx(FocusArea::Device)),
+        Resolution::Run(MenuCommand::Rack(Rack::Ungroup))
+    );
+}
+
+#[test]
+fn s_solos_a_chain_selected_in_the_mixer() {
+    let mut c = cx(FocusArea::Session);
+    assert_eq!(
+        resolve(bare(Key::S), &c),
+        Resolution::Run(MenuCommand::Track(Track::Solo)),
+        "with no chain selected it is the track's"
+    );
+    c.chain_selected = true;
+    assert_eq!(
+        resolve(bare(Key::S), &c),
+        Resolution::Run(MenuCommand::Rack(Rack::SoloChain))
     );
 }
 

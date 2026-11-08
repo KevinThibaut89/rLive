@@ -762,26 +762,26 @@ Overview chapter; only behaviours stated here or foundational are listed.
 **Milestones:** A8, C15
 
 - `[x]` Four types: Instrument, Drum, Audio Effect, MIDI Effect, with type rules. XL as a system.
-- `[ ]` Parallel chains, summed; unlimited nesting; Group, Group to Drum Rack, Ungroup; bracket UI. L
-- `[ ]` View column; fold; hierarchical device navigator on selector context menu. M
-- `[ ]` Chain List: Activator, Solo, Hot-Swap, volume, pan; multi-select; drop area; arrow-key flip; rename, colour, info text; chain presets; drag across tracks. L
-- `[ ]` Auto Select. S
-- `[ ]` Zones: main range plus fade range, drag-edited. L
+- `[~]` Parallel chains, summed; unlimited nesting; Group, Group to Drum Rack, Ungroup; bracket UI. L
+- `[~]` View column; fold; hierarchical device navigator on selector context menu. M
+- `[~]` Chain List: Activator, Solo, Hot-Swap, volume, pan; multi-select; drop area; arrow-key flip; rename, colour, info text; chain presets; drag across tracks. L (Hot-Swap button and chain presets are placeholders until the browser's Hot-Swap and preset system; drag-to-track-focus is Session View only until C3's Arrangement work settles)
+- `[~]` Auto Select. S
+- `[~]` Zones: main range plus fade range, drag-edited. L
 - `[x]` Key zones. M. Velocity zones (1-127). M. Fades attenuate note velocity.
 - `[x]` Chain Select zones 0-127, default length 1 at value 0; Filters MIDI Ctrl option. M
 - `[x]` Chain Select fades attenuate output in audio Racks; without fades tails ring out. M
-- `[ ]` Drum Rack chain controls: Receive note, Play note, Choke (16 groups), Preview; All Notes disables Play and Choke. L
+- `[~]` Drum Rack chain controls: Receive note, Play note, Choke (16 groups), Preview; All Notes disables Play and Choke. L
 - `[x]` Up to 6 return chains; post-fader sends; return output to Rack or Set returns. M
-- `[ ]` Pad View: 128 notes, scroll by 16 or row; drag anything to a pad. L
-- `[ ]` Sample drop creates Simpler, replaces only source; multi-drop maps chromatically; modifier layers to nested Rack. M. Depends on Simpler.
-- `[ ]` Pad swap and layer; shared Receive notes create Multi pad with reduced controls. M
+- `[~]` Pad View: 128 notes, scroll by 16 or row; drag anything to a pad. L
+- `[ ]` Sample drop creates Simpler, replaces only source; multi-drop maps chromatically; modifier layers to nested Rack. M. Depends on Simpler. (Built with the Sampler, `rlive.sampler`, until B10's Simpler; multi-drop needs a browser multi-selection)
+- `[~]` Pad swap and layer; shared Receive notes create Multi pad with reduced controls. M
 - `[ ]` D toggles Hot-Swap target to last pad. S
 - `[ ]` Control surface pads follow scroll. M. [H]
 - `[x]` Macros: up to 16, 8 by default, visible count saved. M
-- `[ ]` Macro Map Mode with Mapping Browser, Min/Max, inverted range; mapped parameter locked except clip envelopes; auto naming and units; rename, colour, info text. L
-- `[~]` Rand button; Exclude Macro from Randomization; Volume macros excluded by default in Instrument Rack presets. S (logic built and tested; controls arrive in C15)
-- `[~]` Macro Variations: store, launch, overwrite, rename, duplicate, delete; Exclude Macro From Variations. M (logic built and tested; controls arrive in C15)
-- `[ ]` Rack mixer inside Session View, with bidirectional sync and multi-select (mixer side only). L
+- `[~]` Macro Map Mode with Mapping Browser, Min/Max, inverted range; mapped parameter locked except clip envelopes; auto naming and units; rename, colour, info text. L
+- `[~]` Rand button; Exclude Macro from Randomization; Volume macros excluded by default in Instrument Rack presets. S
+- `[~]` Macro Variations: store, launch, overwrite, rename, duplicate, delete; Exclude Macro From Variations. M
+- `[~]` Rack mixer inside Session View, with bidirectional sync and multi-select (mixer side only). L
 - `[x]` Extract chains; Drum return creates return track; drum chain from mixer carries its MIDI notes. L
 
 
@@ -1337,9 +1337,8 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **A9:** Reverse audio selection; Stretch warped clip
 - `[ ]` **C10:** MPE tab
 - `[ ]` **C11:** Apply MIDI Tool settings
-- `[ ]` **C12:** Add device from browser; Assign colour 1; Assign colour 2; Assign colour 3; Assign colour 4; Assign colour 5; Assign colour 6; Assign colour 7; Browser history back; Browser history forward; Close folder; Drop browser clips as a scene; Hide/show Filter View; Hide/show Tag Editor; Hot-swap selected device; Jump to search results; Load selected device; Load selected item; Open folder; Preview selected file; Reset assigned colour; Scroll down; Scroll up; Search in Browser; Toggle Hot-Swap Mode
+- `[ ]` **C12:** Add device from browser; Assign colour 1; Assign colour 2; Assign colour 3; Assign colour 4; Assign colour 5; Assign colour 6; Assign colour 7; Browser history back; Browser history forward; Close folder; Compare A/B; Drop browser clips as a scene; Hide/show Filter View; Hide/show Tag Editor; Hot-swap selected device; Jump to search results; Load selected device; Load selected item; Open folder; Preview selected file; Reset assigned colour; Scroll down; Scroll up; Search in Browser; Toggle Drum Rack/last selected pad; Toggle Hot-Swap Mode
 - `[ ]` **C14:** Export MIDI File
-- `[ ]` **C15:** Add device to selection; All devices in a group on/off; Compare A/B; Group devices; List a track's devices; Solo selected chain; Toggle Drum Rack/last selected pad; Ungroup devices
 - `[ ]` **C16:** Toggle Key Map Mode; Toggle MIDI Map Mode
 - `[ ]` **C17:** Hide/show Sends; Hide/show return tracks; Toggle second window
 - `[ ]` **C18:** Hide/show video window

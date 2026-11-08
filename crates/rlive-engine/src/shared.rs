@@ -69,6 +69,17 @@ pub const NO_SLOT: i32 = -1;
 /// `queued_slot` value meaning "a stop is queued".
 pub const STOP_QUEUED: i32 = -2;
 
+/// What a rack chain tells the UI: its output level, and whether notes are going in (for Auto
+/// Select, manual p. 496).
+#[derive(Default)]
+pub struct ChainShared {
+    pub meter: PeakMeter,
+    /// The chain is holding at least one note.
+    pub held: AtomicBool,
+    /// Counts the notes let in, so a note shorter than a UI frame still shows.
+    pub pulse: AtomicU32,
+}
+
 /// Per-track state visible to the UI.
 pub struct TrackShared {
     pub meter: PeakMeter,

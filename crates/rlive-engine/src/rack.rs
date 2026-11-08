@@ -12,6 +12,7 @@
 //! chain answers its Receive note, playing its Play note (p. 501).
 
 use crate::delay::{FadingDelay, StereoLine};
+use crate::shared::ChainShared;
 use crate::taps::TapSlots;
 use crate::track::{run_chain, ChainRun, DeviceSlot, GainStage, Stretch, MAX_DEVICES, MAX_EVENTS};
 use rlive_core::param::{chain as controls, rack as rack_params};
@@ -19,6 +20,8 @@ use rlive_core::{
     db_to_gain, ChainId, EventQueue, MidiEvent, MidiMessage, NoteId, ParamId, TrackId,
 };
 use std::ops::Range;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 /// How many chains a rack can hold.
 pub const MAX_CHAINS: usize = 128;
@@ -26,6 +29,10 @@ pub const MAX_CHAINS: usize = 128;
 const MAX_SELECT_POINTS: usize = 256;
 /// How many times one chain can be choked inside one stretch of a block.
 const MAX_CHOKES: usize = 32;
+/// How many Preview notes can wait for one block.
+const MAX_PREVIEWS: usize = 32;
+/// Preview notes arrive on a channel of their own, so they can't collide with what's playing.
+const PREVIEW_CHANNEL: u8 = 15;
 
 /// Which of Live's rack types this is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,6 +213,8 @@ pub struct ChainNode {
     chokes: Vec<u32>,
     /// Which tap buses this chain writes.
     pub(crate) taps: TapSlots,
+    /// What the UI reads about this chain.
+    shared: Arc<ChainShared>,
 }
 
 impl ChainNode {
@@ -246,7 +255,22 @@ impl ChainNode {
             sounding: false,
             chokes: Vec::with_capacity(MAX_CHOKES),
             taps: TapSlots::default(),
+            shared: Arc::default(),
         }
+    }
+
+    /// Publish to this, which outlives the chain's nodes, instead of a private one.
+    pub fn set_shared(&mut self, shared: Arc<ChainShared>) {
+        self.shared = shared;
+    }
+
+    /// What this block means to the UI. The output has its gates and fader applied by now.
+    fn publish_shared(&self, frames: usize) {
+        self.shared
+            .meter
+            .update(&self.left[..frames], &self.right[..frames]);
+        let held = self.held.iter().any(|keys| *keys != 0);
+        self.shared.held.store(held, Ordering::Relaxed);
     }
 
     /// Start with this strip, before the chain is sent to the engine.
@@ -309,6 +333,7 @@ impl ChainNode {
         self.held[channel as usize & 15] |= 1u128 << (key & 127);
         self.played[(key & 127) as usize] = (play, note_id);
         self.sounding = true;
+        self.shared.pulse.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The note `(channel, key)` is playing here, if this chain holds it, which it no longer will.
@@ -515,6 +540,18 @@ pub struct RackNode {
     /// Holds the chains back to line up with the slowest return chain.
     dry_line: Option<Box<StereoLine>>,
     dry_delay: FadingDelay,
+    /// Preview notes waiting for the next stretch.
+    previews: Vec<PreviewNote>,
+}
+
+/// A note fired into a rack from its Preview button (manual p. 501).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PreviewNote {
+    /// The chain to play, or `None` for every chain that answers the note, as a pad does.
+    pub chain: Option<ChainId>,
+    pub key: u8,
+    pub velocity: f32,
+    pub on: bool,
 }
 
 impl RackNode {
@@ -530,6 +567,14 @@ impl RackNode {
             gates_dirty: true,
             dry_line: None,
             dry_delay: FadingDelay::default(),
+            previews: Vec::with_capacity(MAX_PREVIEWS),
+        }
+    }
+
+    /// Queues a Preview note for the next stretch. Too many at once are dropped.
+    pub(crate) fn queue_preview(&mut self, note: PreviewNote) {
+        if self.previews.len() < MAX_PREVIEWS {
+            self.previews.push(note);
         }
     }
 
@@ -656,6 +701,70 @@ impl RackNode {
         }
         for c in self.chains.iter_mut() {
             c.release_all();
+        }
+    }
+
+    /// Fires the waiting Preview notes, on top of what the chains heard this stretch.
+    fn play_previews(&mut self) {
+        for i in 0..self.previews.len() {
+            let note = self.previews[i];
+            let message = if note.on {
+                MidiMessage::NoteOn {
+                    channel: PREVIEW_CHANNEL,
+                    key: note.key,
+                    velocity: note.velocity,
+                    note_id: 0,
+                    tuning: 0.0,
+                }
+            } else {
+                MidiMessage::NoteOff {
+                    channel: PREVIEW_CHANNEL,
+                    key: note.key,
+                    velocity: 0.0,
+                    note_id: 0,
+                }
+            };
+            let event = MidiEvent::new(0, message);
+            match note.chain {
+                Some(id) => self.preview_chain(id, note.on, &event),
+                None if self.kind == RackKind::Drum => self.route_to_pads(&[event]),
+                None => self.route_through_zones(&[event]),
+            }
+        }
+        self.previews.clear();
+    }
+
+    /// A note for one chain only, whatever its zones say. It chokes the rest of its group.
+    fn preview_chain(&mut self, id: ChainId, on: bool, event: &MidiEvent) {
+        let Some(at) = self.chains.iter().position(|c| c.id == id) else {
+            return;
+        };
+        let (key, channel) = match event.message {
+            MidiMessage::NoteOn { key, channel, .. }
+            | MidiMessage::NoteOff { key, channel, .. } => (key, channel),
+            _ => return,
+        };
+        if !on {
+            let c = &mut self.chains[at];
+            if let Some(play) = c.release_held(channel, key) {
+                c.events.push(with_key(*event, play));
+            }
+            return;
+        }
+        if !self.chains[at].mix.active {
+            return;
+        }
+        let c = &mut self.chains[at];
+        let play = pad_note(c.zones.drum, key);
+        c.mark_held(channel, key, play, 0);
+        c.events.push(with_key(*event, play));
+        let Some(group) = c.zones.drum.and_then(choke_group) else {
+            return;
+        };
+        for (i, other) in self.chains.iter_mut().enumerate() {
+            if i != at && other.sounding && other.zones.drum.and_then(choke_group) == Some(group) {
+                other.choke(event.offset);
+            }
         }
     }
 
@@ -823,6 +932,7 @@ impl RackNode {
             self.refresh_gates(offset as usize);
         }
         self.route_midi(events);
+        self.play_previews();
         self.commit_selector();
 
         let audio_filters = self.kind == RackKind::Audio;
@@ -881,6 +991,7 @@ impl RackNode {
                 at.coeff,
             );
             chain.publish(chain.taps.post_mix, at, frames);
+            chain.publish_shared(frames);
         }
 
         left.fill(0.0);
@@ -921,6 +1032,7 @@ impl RackNode {
                 (Some(track), Some(outs)) if outs.has(track) => outs.add(track, l, r),
                 _ => add(left, right, l, r),
             }
+            ret.publish_shared(frames);
         }
     }
 }

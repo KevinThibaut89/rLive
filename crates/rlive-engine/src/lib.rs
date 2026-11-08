@@ -40,7 +40,9 @@ pub use params::{
     mix_cell, BusLayout, CellIx, CellSpec, CellState, CellTarget, ControlHooks, ControlStep,
     ParamBus, TrackRoutes, CONTROL_STEP, MAX_SENDS, SEND_MAX_DB, SEND_MIN_DB,
 };
-pub use rack::{ChainMix, ChainNode, DrumPad, RackKind, RackNode, Zone, Zones, MAX_CHAINS};
+pub use rack::{
+    ChainMix, ChainNode, DrumPad, PreviewNote, RackKind, RackNode, Zone, Zones, MAX_CHAINS,
+};
 use rlive_core::{
     db_to_gain,
     time::{BarMap, TempoRun, TimeMaps},

@@ -487,6 +487,7 @@ impl Session {
             // Asking for a file again is a reason to look at it again.
             self.samples.forget(&path);
         }
+        self.supersede_pending_sample(id, slot);
         let file = FileRef::new(path);
         if matches!(self.samples.request(&file.path), SampleStatus::Loading) {
             // The sample it has now carries on until the new one is ready or turns out not to be.
@@ -745,7 +746,7 @@ impl Session {
         }
     }
 
-    pub(super) fn chain_of_device(&self, id: DeviceId) -> Option<ChainRef> {
+    pub(crate) fn chain_of_device(&self, id: DeviceId) -> Option<ChainRef> {
         find_device(&self.project.master.devices, ChainRef::Master, id).or_else(|| {
             self.project
                 .tracks

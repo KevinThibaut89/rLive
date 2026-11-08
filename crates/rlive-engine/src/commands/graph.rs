@@ -6,7 +6,7 @@
 use crate::delay::{offer_line, StereoLine, TapLines};
 use crate::graph::{ChainAddr, RenderPlan, TrackRef, MAX_RACK_DEPTH};
 use crate::params::{ParamBus, TrackRoutes};
-use crate::rack::{ChainNode, Zones};
+use crate::rack::{ChainNode, PreviewNote, Zones};
 use crate::track::bind_chain;
 use crate::track::RackOuts;
 use crate::{retire, DeviceSlot, Engine, Garbage, TrackNode};
@@ -82,6 +82,12 @@ pub enum GraphOp {
         device: DeviceId,
         chain: ChainId,
         zones: Zones,
+    },
+    /// Fire a Preview note into a rack.
+    PreviewNote {
+        target: ChainAddr,
+        device: DeviceId,
+        note: PreviewNote,
     },
     /// Whether the Chain Selector filters MIDI other than notes as well.
     SetRackOptions {
@@ -469,6 +475,15 @@ impl Engine {
                         c.zones = zones;
                     }
                     rack.invalidate_gates();
+                }
+            }
+            C::PreviewNote {
+                target,
+                device,
+                note,
+            } => {
+                if let Some(rack) = self.rack_mut(target, device) {
+                    rack.queue_preview(note);
                 }
             }
             C::SetRackOptions {

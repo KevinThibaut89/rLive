@@ -18,8 +18,8 @@ use rlive_project::{
 use std::collections::HashMap;
 
 /// A new Drum Rack chain's notes: C1 and up, the first pads, playing the conventional C3.
-const FIRST_PAD: u8 = 36;
-const PLAY_NOTE: u8 = 60;
+pub(super) const FIRST_PAD: u8 = 36;
+pub(super) const PLAY_NOTE: u8 = 60;
 
 /// Which zones of a chain an edit is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,16 +60,16 @@ pub(super) fn random_seed() -> u64 {
 impl Session {
     // ------------------------------------------------------------- finding racks
 
-    fn rack(&self, chain: ChainRef, rack: DeviceId) -> Option<&Device> {
+    pub(super) fn rack(&self, chain: ChainRef, rack: DeviceId) -> Option<&Device> {
         self.devices(chain).iter().find(|d| d.id == rack)
     }
 
-    fn rack_mut(&mut self, chain: ChainRef, rack: DeviceId) -> Option<&mut Device> {
+    pub(super) fn rack_mut(&mut self, chain: ChainRef, rack: DeviceId) -> Option<&mut Device> {
         self.chain_mut(chain)?.iter_mut().find(|d| d.id == rack)
     }
 
     /// The chain or return chain `id` of a rack, for editing.
-    fn chain_of_rack_mut(
+    pub(super) fn chain_of_rack_mut(
         &mut self,
         chain: ChainRef,
         rack: DeviceId,
@@ -310,11 +310,26 @@ impl Session {
         rack: DeviceId,
         ids: &[ChainId],
     ) -> Option<(ChainId, DeviceId)> {
+        let kind = match &self.rack(chain, rack)?.kind {
+            DeviceKind::Rack { kind, .. } => *kind,
+            _ => return None,
+        };
+        self.group_chains_as(chain, rack, ids, kind)
+    }
+
+    /// [`group_chains`](Self::group_chains) into a new rack of this kind.
+    pub(super) fn group_chains_as(
+        &mut self,
+        chain: ChainRef,
+        rack: DeviceId,
+        ids: &[ChainId],
+        inner_kind: RackKind,
+    ) -> Option<(ChainId, DeviceId)> {
         let parent = self.rack(chain, rack)?;
         let DeviceKind::Rack { kind, chains, .. } = &parent.kind else {
             return None;
         };
-        let kind = *kind;
+        let parent_kind = *kind;
         let picked: Vec<usize> = chains
             .iter()
             .enumerate()
@@ -332,7 +347,7 @@ impl Session {
             self.messages.push("Racks are nested too deeply".into());
             return None;
         }
-        let name = rack_name(kind);
+        let name = rack_name(inner_kind);
         let moved_ids: Vec<ChainId> = picked.iter().map(|&i| chains[i].id).collect();
         let moved: Vec<Chain> = {
             let DeviceKind::Rack { chains, .. } = &mut self.rack_mut(chain, rack)?.kind else {
@@ -346,11 +361,11 @@ impl Session {
             taken.into_iter().rev().collect()
         };
 
-        let mut inner = Device::rack(kind, name);
+        let mut inner = Device::rack(inner_kind, name);
         let inner_id = inner.id;
         let mut wrapper = Chain::new(name);
         let wrapper_id = wrapper.id;
-        if kind == RackKind::Drum {
+        if parent_kind == RackKind::Drum {
             wrapper.zones.drum = Some(DrumPad {
                 receive: None,
                 play: PLAY_NOTE,
@@ -727,7 +742,7 @@ impl Session {
         });
     }
 
-    fn edit_macro(
+    pub(super) fn edit_macro(
         &mut self,
         chain: ChainRef,
         rack: DeviceId,
@@ -746,7 +761,11 @@ impl Session {
         true
     }
 
-    fn macros_mut(&mut self, chain: ChainRef, rack: DeviceId) -> Option<&mut Vec<Macro>> {
+    pub(super) fn macros_mut(
+        &mut self,
+        chain: ChainRef,
+        rack: DeviceId,
+    ) -> Option<&mut Vec<Macro>> {
         match &mut self.rack_mut(chain, rack)?.kind {
             DeviceKind::Rack { macros, .. } => Some(macros),
             _ => None,
@@ -1335,7 +1354,7 @@ impl Session {
         found
     }
 
-    fn param_info(&self, _chain: ChainRef, target: ParamRef) -> Option<ParamInfo> {
+    pub(crate) fn param_info(&self, _chain: ChainRef, target: ParamRef) -> Option<ParamInfo> {
         match target.owner {
             ParamOwner::Device(id) => {
                 if target.id == rlive_core::ACTIVATOR {
@@ -1498,7 +1517,7 @@ fn nesting_of(d: &Device) -> usize {
     }
 }
 
-fn macro_slot(macros: &mut Vec<Macro>, n: usize) -> Option<&mut Macro> {
+pub(super) fn macro_slot(macros: &mut Vec<Macro>, n: usize) -> Option<&mut Macro> {
     grow_macros(macros, n + 1);
     macros.get_mut(n)
 }

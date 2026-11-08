@@ -1141,3 +1141,184 @@ fn a_rack_survives_a_save_and_reload() {
     assert!(l.iter().all(|s| s.is_finite()));
     s.idle();
 }
+
+#[test]
+fn a_preview_fires_only_the_chain_it_names() {
+    let mut r = rig(RackKind::Drum);
+    let root = r.root;
+    let rack = r.rack;
+    let kick = r.chain;
+    let snare = r.s.add_chain(root, rack, "Snare").unwrap();
+    r.s.set_drum_pad(
+        root,
+        rack,
+        kick,
+        DrumPad {
+            receive: Some(36),
+            play: 60,
+            choke: None,
+        },
+    );
+    commit(&mut r.s);
+    let held = |r: &Rig, id| {
+        r.s.chain_shared(id)
+            .unwrap()
+            .held
+            .load(std::sync::atomic::Ordering::Relaxed)
+    };
+    r.s.preview_note(root, rack, Some(kick), 36, 0.8, true);
+    render(&mut r.engine, &mut r.s, BLOCK);
+    assert!(held(&r, kick), "the note went into the chain");
+    assert!(!held(&r, snare), "and into no other");
+
+    r.s.preview_note(root, rack, Some(kick), 36, 0.0, false);
+    render(&mut r.engine, &mut r.s, BLOCK);
+    assert!(!held(&r, kick), "the note ended");
+}
+
+#[test]
+fn a_pad_preview_fires_every_chain_on_the_note() {
+    let mut r = rig(RackKind::Drum);
+    let (root, rack, first) = (r.root, r.rack, r.chain);
+    let second = r.s.add_chain(root, rack, "Layer").unwrap();
+    let pad = DrumPad {
+        receive: Some(40),
+        play: 60,
+        choke: None,
+    };
+    r.s.set_drum_pad(root, rack, first, pad);
+    r.s.set_drum_pad(root, rack, second, pad);
+    commit(&mut r.s);
+    r.s.preview_note(root, rack, None, 40, 0.8, true);
+    render(&mut r.engine, &mut r.s, BLOCK);
+    for id in [first, second] {
+        let shared = r.s.chain_shared(id).unwrap().clone();
+        assert!(shared.held.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(shared.pulse.load(std::sync::atomic::Ordering::Relaxed) > 0);
+    }
+}
+
+#[test]
+fn a_preview_leaves_no_undo_step() {
+    let mut r = rig(RackKind::Drum);
+    let (root, rack, chain) = (r.root, r.rack, r.chain);
+    commit(&mut r.s);
+    let label = r.s.history.undo_label();
+    r.s.preview_note(root, rack, Some(chain), 36, 0.8, true);
+    commit(&mut r.s);
+    assert_eq!(r.s.history.undo_label(), label);
+}
+
+#[test]
+fn a_chain_publishes_its_level_for_the_mixer() {
+    let mut r = rig(RackKind::Drum);
+    let (root, rack, chain, utility) = (r.root, r.rack, r.chain, r.device);
+    let at = root.child(rack, chain).unwrap();
+    r.s.remove_device(at, utility);
+    let path = std::env::temp_dir().join(format!("rlive-c15-meter-{}.wav", std::process::id()));
+    rlive_devices::write_wav(&path, &[0.5; 4800], &[0.5; 4800], 48_000).unwrap();
+    r.s.add_builtin(at, "rlive.sampler");
+    let sampler = r.s.devices(at)[0].id;
+    r.s.set_device_sample(at, sampler, path.clone());
+    r.s.samples.wait_idle();
+    r.s.idle();
+    commit(&mut r.s);
+    r.s.set_drum_pad(
+        root,
+        rack,
+        chain,
+        DrumPad {
+            receive: Some(36),
+            play: 60,
+            choke: None,
+        },
+    );
+    r.s.preview_note(root, rack, Some(chain), 36, 0.8, true);
+    render(&mut r.engine, &mut r.s, BLOCK * 4);
+    let (left, _) = r.s.chain_shared(chain).unwrap().meter.take();
+    std::fs::remove_file(&path).ok();
+    assert!(left > 0.0, "the chain's meter moved: {left}");
+}
+
+#[test]
+fn renaming_a_chain_or_device_undoes() {
+    let mut r = rig(RackKind::Audio);
+    let (root, rack, chain, device) = (r.root, r.rack, r.chain, r.device);
+    commit(&mut r.s);
+    r.s.rename_chain(root, rack, chain, "Renamed");
+    commit(&mut r.s);
+    let name = |r: &Rig| {
+        r.s.devices(root)
+            .iter()
+            .find(|d| d.id == rack)
+            .unwrap()
+            .chains()
+            .find(|c| c.id == chain)
+            .unwrap()
+            .name
+            .clone()
+    };
+    assert_eq!(name(&r), "Renamed");
+    assert!(r.s.undo());
+    assert_eq!(name(&r), "A");
+
+    let at = root.child(rack, chain).unwrap();
+    r.s.rename_device(at, device, "Gainer");
+    assert_eq!(r.s.devices(at)[0].name, "Gainer");
+}
+
+#[test]
+fn a_chain_copy_owns_its_devices_and_keeps_its_macros_pointing_inside() {
+    let mut r = rig(RackKind::Instrument);
+    let (root, rack, chain, device) = (r.root, r.rack, r.chain, r.device);
+    let at = root.child(rack, chain).unwrap();
+    let inner = r.s.group_devices(at, &[device], false).unwrap();
+    let target = ParamRef {
+        owner: ParamOwner::Device(device),
+        id: ParamId(0),
+    };
+    assert!(r.s.map_macro(at, inner, 0, target));
+    let copy = r.s.duplicate_chain(root, rack, chain).unwrap();
+
+    let copied =
+        r.s.devices(root)
+            .iter()
+            .find(|d| d.id == rack)
+            .unwrap()
+            .chains()
+            .find(|c| c.id == copy)
+            .unwrap()
+            .clone();
+    let inner_copy = &copied.devices[0];
+    assert_ne!(inner_copy.id, inner);
+    let DeviceKind::Rack { macros, chains, .. } = &inner_copy.kind else {
+        panic!("not a rack");
+    };
+    let new_device = chains[0].devices[0].id;
+    assert_ne!(new_device, device);
+    assert_eq!(
+        macros[0].mappings[0].target.owner,
+        ParamOwner::Device(new_device)
+    );
+}
+
+#[test]
+fn macro_colours_and_info_text_save_with_the_set() {
+    let mut r = rig(RackKind::Audio);
+    let (root, rack) = (r.root, r.rack);
+    r.s.set_macro_color(root, rack, 2, Some([1, 2, 3]));
+    r.s.set_info_text(InfoTarget::Macro(root, rack, 2), "Warmth".into());
+    let saved = r.s.project.to_ron().unwrap();
+    let loaded = Project::from_ron(&saved).unwrap();
+    let found = loaded
+        .track(r.track)
+        .unwrap()
+        .devices
+        .iter()
+        .find(|d| d.id == rack);
+    let DeviceKind::Rack { macros, .. } = &found.unwrap().kind else {
+        panic!("not a rack");
+    };
+    assert_eq!(macros[2].color, Some([1, 2, 3]));
+    assert_eq!(macros[2].info, "Warmth");
+}

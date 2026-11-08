@@ -11,10 +11,12 @@
 //! the Master/scene column stay put while the grid scrolls.
 
 use super::automation;
+use super::devices::rack::ChainDrag;
 use super::icons;
 use super::in_out;
 use super::info_view::edit_info_item;
 use super::keymap::{self, Platform};
+use super::rack_mixer::{self, ChainColumn, ColumnRects, MixFold};
 use super::theme::{self, *};
 use super::widgets::{self, info, info_note, rgb, Led};
 use super::{BrowserItem, Detail, UiState};
@@ -44,6 +46,7 @@ const SEND_H: f32 = 26.0;
 
 /// Updates the multi-selection for a click on a track.
 fn click_track(state: &mut UiState, ui: &egui::Ui, id: TrackId) {
+    state.devices.mixer_selection.clear();
     let m = ui.input(|i| i.modifiers);
     if m.shift || m.command {
         match state.selected_tracks.iter().position(|t| *t == id) {
@@ -102,6 +105,12 @@ pub fn duplicate_clip(session: &mut Session, track: TrackId, slot: usize) {
     session.set_clip(track, target, Some(clip));
 }
 
+/// A column of the session grid: a track, or a chain of its rack mixer.
+enum Column {
+    Track(TrackId, usize),
+    Chain(Box<ChainColumn>),
+}
+
 /// Geometry of the view for this frame.
 struct Geo {
     track_w: f32,
@@ -149,7 +158,16 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
 
     // Only what isn't folded away inside a group gets a column.
     let visible = session.project.visible_tracks();
-    let n_tracks = visible.len();
+    let mut grid_columns = Vec::with_capacity(visible.len());
+    for &i in &visible {
+        let track = &session.project.tracks[i];
+        grid_columns.push(Column::Track(track.id, i));
+        for chain in rack_mixer::chain_columns(track.id, &track.devices, &state.devices.mixer_open)
+        {
+            grid_columns.push(Column::Chain(Box::new(chain)));
+        }
+    }
+    let n_tracks = grid_columns.len();
     let n_scenes = session.project.scenes.len();
     let n_returns = session.project.returns.len();
 
@@ -249,16 +267,17 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let blink = (ui.input(|i| i.time) * 3.0).fract() < 0.5;
 
     // ---- tracks
-    let columns: Vec<(TrackId, usize)> = visible
-        .iter()
-        .map(|&i| (session.project.tracks[i].id, i))
-        .collect();
-    for (col, (id, i)) in columns.iter().enumerate() {
+    for (col, column) in grid_columns.iter().enumerate() {
         let x = g.track_x(col, scroll.x);
         if x + track_w < full.left() || x > g.tracks_right {
             continue; // off screen
         }
-        track_column(ui, session, state, &g, *id, *i, x, scroll.y, blink);
+        match column {
+            Column::Track(id, i) => {
+                track_column(ui, session, state, &g, *id, *i, x, scroll.y, blink);
+            }
+            Column::Chain(chain) => chain_column(ui, session, state, &g, chain, x),
+        }
     }
 
     // Empty area right of the last track: click = new MIDI track, drop = new track.
@@ -304,6 +323,38 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         state.selected_clip = None;
         state.group_slot = None;
     }
+}
+
+/// A chain of a rack mixer: a header, an empty stretch where clips would go, and its strip.
+fn chain_column(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    g: &Geo,
+    chain: &ChainColumn,
+    x: f32,
+) {
+    let w = g.track_w;
+    let rects = ColumnRects {
+        header: Rect::from_min_size(
+            Pos2::new(x, g.header.top()),
+            Vec2::new(w - 1.0, HEADER_H - 1.0),
+        ),
+        grid: Rect::from_min_max(
+            Pos2::new(x, g.grid.top()),
+            Pos2::new(x + w, g.stop_row.bottom()),
+        ),
+        strip: Rect::from_min_max(
+            Pos2::new(x, g.mixer.top()),
+            Pos2::new(x + w - 1.0, g.mixer.bottom()),
+        ),
+        clip: Rect::from_min_max(
+            Pos2::new(g.tracks_left, g.header.top()),
+            Pos2::new(g.tracks_right, g.mixer.bottom()),
+        ),
+        compact: g.compact_mixer,
+    };
+    rack_mixer::chain_column(ui, session, state, chain, rects);
 }
 
 /// A return track's column: its header, an empty stretch for the grid, and its mixer strip.
@@ -475,6 +526,8 @@ fn track_column(
         .map_or(NO_SLOT, |s| s.queued_slot.load(Ordering::Relaxed));
     let position = shared.as_ref().map_or(0.0, |s| s.clip_position.load());
     let selected = state.selected == Some(ChainRef::Track(id));
+    let has_rack_mixer = rack_mixer::track_has_mixer(&t.devices);
+    let rack_mixer_open = state.devices.mixer_open.contains(&MixFold::Track(id));
     let track_color = rgb(color);
     let w = g.track_w;
     let col_clip = Rect::from_min_max(
@@ -551,14 +604,18 @@ fn track_column(
                 theme::text_on(fill),
             );
             let mut clip_r = rect.shrink2(Vec2::new(5.0, 0.0));
-            if kind == TrackKind::Group {
+            if kind == TrackKind::Group || has_rack_mixer {
                 icons::fold(
                     cu.painter(),
                     Rect::from_center_size(
                         Pos2::new(rect.left() + FOLD_W / 2.0, rect.center().y),
                         Vec2::splat(FOLD_W),
                     ),
-                    !folded,
+                    if kind == TrackKind::Group {
+                        !folded
+                    } else {
+                        rack_mixer_open
+                    },
                     theme::text_on(fill),
                 );
                 clip_r.min.x += FOLD_W;
@@ -571,13 +628,23 @@ fn track_column(
                     Color32::WHITE,
                 );
         }
-        let on_fold = kind == TrackKind::Group
+        let on_fold = (kind == TrackKind::Group || has_rack_mixer)
             && resp
                 .interact_pointer_pos()
                 .is_some_and(|pos| pos.x < rect.left() + FOLD_W);
+        // A chain dragged over a track gives it focus, ready for a drop in its Device View.
+        if resp.dnd_hover_payload::<ChainDrag>().is_some() {
+            state.selected = Some(ChainRef::Track(id));
+            state.detail = Detail::Devices;
+        }
         if resp.clicked() {
-            if on_fold {
+            if on_fold && kind == TrackKind::Group {
                 session.set_folded(id, !folded);
+            } else if on_fold {
+                let key = MixFold::Track(id);
+                if !state.devices.mixer_open.remove(&key) {
+                    state.devices.mixer_open.insert(key);
+                }
             } else {
                 click_track(state, ui, id);
             }
@@ -2084,6 +2151,7 @@ pub(super) fn new_track_zone(
     rect: Rect,
 ) {
     let zone = ui.allocate_rect(rect, Sense::hover());
+    rack_mixer::extract_zone(ui, &zone, session, state, rect);
     let hovering = zone.dnd_hover_payload::<BrowserItem>().is_some();
     if hovering {
         ui.painter().rect_stroke(

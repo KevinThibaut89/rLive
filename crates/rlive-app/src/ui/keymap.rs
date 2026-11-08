@@ -237,6 +237,8 @@ pub struct KeyContext {
     pub group_selected: bool,
     /// A Warp Marker, transient or time selection is selected in the Sample tab.
     pub warp_selected: bool,
+    /// A chain is selected in the Session View's rack mixer.
+    pub chain_selected: bool,
 }
 
 impl KeyContext {
@@ -247,6 +249,7 @@ impl KeyContext {
             When::DialogOpen => self.dialog_open,
             When::GroupTrack => self.group_selected,
             When::WarpMarker => self.warp_selected,
+            When::ChainSelected => self.chain_selected,
             // The rest are built by the milestones that need them.
             _ => false,
         }

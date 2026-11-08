@@ -8,6 +8,7 @@ use super::super::commands::create::Create;
 use super::super::commands::edit::Edit;
 use super::super::commands::file::File;
 use super::super::commands::options::Options;
+use super::super::commands::rack::Rack;
 use super::super::commands::track::Track;
 use super::super::commands::transport::Transport as Tr;
 use super::super::commands::view::View;
@@ -133,7 +134,7 @@ pub static BINDINGS: &[Binding] = &[
     a("42.1", All, "Toggle Device/Clip View", k(NO, Key::F12), L(M::View(View::SwitchDetail))),
     a("42.1", All, "Show Device and Clip View together", g1("Alt click view toggle"), p!("C2")),
     a("42.1", All, "Toggle Hot-Swap Mode", k(NO, Key::Q), p!("C12")),
-    a("42.1", Dev, "Toggle Drum Rack/last selected pad", k(NO, Key::D), p!("C15")),
+    a("42.1", Dev, "Toggle Drum Rack/last selected pad", k(NO, Key::D), p!("C12")),
     a("42.1", All, "Hide/show Info View", k(NO, Key::Questionmark), L(M::View(View::ToggleInfoView))),
     a("42.1", All, "Hide/show video window", k(CMD_ALT, Key::V), p!("C18")),
     a("42.1", All, "Hide/show Browser", k(CMD_ALT, Key::B), L(M::View(View::ToggleBrowser))),
@@ -176,17 +177,17 @@ pub static BINDINGS: &[Binding] = &[
     a("42.3", All, "Export MIDI File", k(CMD_SHIFT, Key::E), p!("C14")),
 
     // 42.4 Devices and plug-ins
-    a("42.4", Dev, "Group devices", k(CMD, Key::G), p!("C15")),
-    a("42.4", Dev, "Ungroup devices", k(CMD_SHIFT, Key::G), p!("C15")),
-    a("42.4", Dev, "All devices in a group on/off", g1("Hold Alt and click on device activator"), p!("C15")),
-    a("42.4", Dev, "Add device to selection", g1("Shift click"), p!("C15")),
-    a("42.4", Dev, "List a track's devices", g1("right-click on Device View selector"), p!("C15")),
+    a("42.4", Dev, "Group devices", k(CMD, Key::G), L(M::Rack(Rack::Group))),
+    a("42.4", Dev, "Ungroup devices", k(CMD_SHIFT, Key::G), L(M::Rack(Rack::Ungroup))),
+    a("42.4", Dev, "All devices in a group on/off", g1("Hold Alt and click on device activator"), W),
+    a("42.4", Dev, "Add device to selection", g1("Shift click"), W),
+    a("42.4", Dev, "List a track's devices", g1("right-click on Device View selector"), W),
     a("42.4", Dev, "Reset parameter", g1("Delete or double-click"), W),
     a("42.4", Brw, "Load selected device", k(NO, Key::Enter), p!("C12")),
     a("42.4", Dev, "Hot-swap selected device", k(NO, Key::Q), p!("C12")),
     a("42.4", All, "Hide/show plug-in windows", k(CMD_ALT, Key::P), p!("A17")),
     a("42.4", Dev, "Keep several plug-in windows open", g("Cmd", "Ctrl"), p!("A17")),
-    a("42.4", Dev, "Compare A/B", k(NO, Key::P), p!("C15")),
+    a("42.4", Dev, "Compare A/B", k(NO, Key::P), p!("C12")),
 
     // 42.5 Editing
     a("42.5", All, "Cut", k(CMD, Key::X), L(M::Edit(Edit::Cut))),
@@ -386,7 +387,7 @@ pub static BINDINGS: &[Binding] = &[
     b("42.15", Ses, Wh::SlotSelected, "First track of the scene", k(NO, Key::Home), p!("C19")),
     b("42.15", Ses, Wh::SlotSelected, "Last track of the scene", k(NO, Key::End), p!("C19")),
     b("42.15", Ses, Wh::TrackTitle, "Current scene from the last track", k(NO, Key::End), p!("C19")),
-    b("42.15", Ses, Wh::ChainSelected, "Solo selected chain", k(NO, Key::S), p!("C15")),
+    b("42.15", Ses, Wh::ChainSelected, "Solo selected chain", k(NO, Key::S), L(M::Rack(Rack::SoloChain))),
 
     // 42.16 Arrangement View
     a("42.16", Arr, "Split clip at selection", k(CMD, Key::E), p!("C4")),

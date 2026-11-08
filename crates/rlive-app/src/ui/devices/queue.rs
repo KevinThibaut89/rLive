@@ -2,10 +2,11 @@
 //! done, so drawing only ever reads the session.
 
 use super::super::BrowserItem;
+use super::rack::{self, KeyFocus, RackAction};
 use super::DeviceViewState;
-use crate::session::{ChainRef, Session};
+use crate::session::{ChainRef, InfoTarget, Session};
 use rlive_core::{ChainId, DeviceId};
-use rlive_project::DeviceKind;
+use rlive_project::{Device, DeviceKind};
 
 /// Something to do to a device, once the frame has been drawn.
 #[derive(Clone)]
@@ -22,14 +23,26 @@ pub(crate) enum Action {
     LoadSample(DeviceId, usize),
     Reload(DeviceId),
     ShowAll(DeviceId),
-    /// Show this chain of a rack.
-    OpenChain(DeviceId, ChainId),
     /// Open the Info View's editor on this device.
     EditInfo(DeviceId),
+    /// Open the Info View's editor on something else in a rack.
+    EditInfoTarget(InfoTarget),
     /// Something dropped from the browser into a chain.
     Add(BrowserItem),
     /// A new source in the device's own sidechain chooser.
     SetSidechain(DeviceId, Option<rlive_project::SidechainSource>),
+    /// Select a device by its title bar; `true` adds to the selection.
+    SelectDevice(DeviceId, bool),
+    Rename(DeviceId, String),
+    /// Turn off or on (`true` off) this device and the rest of its group.
+    BypassGroup(DeviceId, bool),
+    /// Group the selected devices, or this one, to a new rack; `true` for a Drum Rack.
+    Group(DeviceId, bool),
+    Ungroup(DeviceId),
+    /// Show a device, opening the chains on the way to it.
+    Reveal(DeviceId, Vec<(DeviceId, ChainId)>),
+    /// Something done to the rack `DeviceId`.
+    Rack(DeviceId, RackAction),
 }
 
 /// The actions of one frame, in the order they happened.
@@ -104,22 +117,148 @@ fn apply(
                 *status = "That source would make a feedback loop".to_string();
             }
         }
-        Action::EditInfo(id) => view.edit_info = Some((chain, id)),
+        Action::EditInfo(id) => view.edit_info = Some(InfoTarget::Device(chain, id)),
+        Action::EditInfoTarget(target) => view.edit_info = Some(target),
         Action::ShowAll(id) => {
             let all = &mut view.show_all;
             if !all.insert(id) {
                 all.remove(&id);
             }
         }
-        Action::OpenChain(rack, chain) => {
-            view.open_chains.insert(rack, chain);
-        }
         Action::Add(item) => add_item(session, chain, item),
+        Action::SelectDevice(id, additive) => {
+            select_device(&mut view.selected_devices, chain, id, additive);
+        }
+        Action::Rename(id, name) => session.rename_device(chain, id, &name),
+        Action::BypassGroup(id, off) => {
+            for (at, d) in group_members(chain, session.devices(chain), id) {
+                session.set_bypass(at, d, off);
+            }
+        }
+        Action::Group(id, to_drum) => {
+            if !view.selected_devices.contains(&(chain, id)) {
+                view.selected_devices = vec![(chain, id)];
+            }
+            group_selected(session, view, status, to_drum);
+        }
+        Action::Ungroup(id) => {
+            session.ungroup_rack(chain, id);
+            view.selected_devices.retain(|(_, d)| *d != id);
+        }
+        Action::Reveal(id, path) => {
+            for (rack, c) in path {
+                view.open_chains.insert(rack, c);
+            }
+            view.scroll_to = Some(id);
+        }
+        Action::Rack(rack_id, action) => rack::apply(session, view, status, chain, rack_id, action),
+    }
+}
+
+/// Selects a device, the way a click on its title bar does.
+fn select_device(
+    selected: &mut Vec<(ChainRef, DeviceId)>,
+    chain: ChainRef,
+    id: DeviceId,
+    additive: bool,
+) {
+    if additive {
+        if let Some(i) = selected.iter().position(|s| *s == (chain, id)) {
+            selected.remove(i);
+        } else {
+            selected.retain(|(c, _)| *c == chain);
+            selected.push((chain, id));
+        }
+    } else {
+        *selected = vec![(chain, id)];
+    }
+}
+
+/// Who an Alt-click on an activator reaches: a device's whole chain inside a rack, or a rack and
+/// all it holds at the top level.
+fn group_members(chain: ChainRef, devices: &[Device], id: DeviceId) -> Vec<(ChainRef, DeviceId)> {
+    let mut out = Vec::new();
+    if matches!(chain, ChainRef::Nested(_)) {
+        out.extend(devices.iter().map(|d| (chain, d.id)));
+        return out;
+    }
+    let Some(device) = devices.iter().find(|d| d.id == id) else {
+        return out;
+    };
+    collect_members(chain, device, &mut out);
+    out
+}
+
+fn collect_members(chain: ChainRef, device: &Device, out: &mut Vec<(ChainRef, DeviceId)>) {
+    out.push((chain, device.id));
+    for c in device.chains() {
+        if let Some(child) = chain.child(device.id, c.id) {
+            for d in &c.devices {
+                collect_members(child, d, out);
+            }
+        }
+    }
+}
+
+/// The Group command: the chains selected in the Chain List if that has focus, or else the
+/// devices selected in the Device View (manual p. 493).
+pub(crate) fn group_selected(
+    session: &mut Session,
+    view: &mut DeviceViewState,
+    status: &mut String,
+    to_drum: bool,
+) {
+    if !to_drum {
+        if let Some(KeyFocus::ChainList(rack_id)) = view.ui.key_focus {
+            let selection = view.rack_views.get(&rack_id).map(|v| v.selection.clone());
+            if let (Some(ids), Some(chain)) = (selection, session.chain_of_device(rack_id)) {
+                if ids.len() > 1 {
+                    if let Some((wrapper, _)) = session.group_chains(chain, rack_id, &ids) {
+                        apply(
+                            session,
+                            view,
+                            status,
+                            chain,
+                            Action::Rack(rack_id, RackAction::Select(vec![wrapper])),
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+    }
+    let Some(&(chain, _)) = view.selected_devices.first() else {
+        *status = "Select some devices to group first".into();
+        return;
+    };
+    let ids: Vec<DeviceId> = view
+        .selected_devices
+        .iter()
+        .filter(|(c, _)| *c == chain)
+        .map(|(_, d)| *d)
+        .collect();
+    match session.group_devices(chain, &ids, to_drum) {
+        Some(rack_id) => view.selected_devices = vec![(chain, rack_id)],
+        None => *status = "Those devices can't be grouped".into(),
+    }
+}
+
+/// The Ungroup command, for whichever racks are selected.
+pub(crate) fn ungroup_selected(session: &mut Session, view: &mut DeviceViewState) {
+    let racks = std::mem::take(&mut view.selected_devices);
+    for (chain, id) in racks {
+        let is_rack = session
+            .devices(chain)
+            .iter()
+            .any(|d| d.id == id && matches!(d.kind, DeviceKind::Rack { .. }));
+        if is_rack {
+            session.ungroup_rack(chain, id);
+        }
     }
 }
 
 /// Puts something from the browser in a chain. A sample comes in loaded in a new Sampler.
-fn add_item(session: &mut Session, chain: ChainRef, item: BrowserItem) {
+pub(super) fn add_item(session: &mut Session, chain: ChainRef, item: BrowserItem) {
     match item {
         BrowserItem::Builtin(t) => session.add_builtin(chain, t),
         BrowserItem::Plugin(p) => session.add_plugin(chain, &p),
@@ -157,6 +296,60 @@ mod tests {
         let id = d.id;
         s.add_device(chain, None, d);
         id
+    }
+
+    #[test]
+    fn a_device_selection_grows_with_shift_and_stays_in_one_chain() {
+        let t = rlive_core::TrackId(1);
+        let (a, b) = (DeviceId(1), DeviceId(2));
+        let there = ChainRef::Track(t);
+        let elsewhere = ChainRef::Master;
+        let mut list = Vec::new();
+        select_device(&mut list, there, a, false);
+        select_device(&mut list, there, b, true);
+        assert_eq!(list, [(there, a), (there, b)]);
+        select_device(&mut list, there, a, true);
+        assert_eq!(list, [(there, b)]);
+        select_device(&mut list, elsewhere, a, true);
+        assert_eq!(list, [(elsewhere, a)]);
+        select_device(&mut list, there, b, false);
+        assert_eq!(list, [(there, b)]);
+    }
+
+    #[test]
+    fn group_and_ungroup_act_on_the_selection() {
+        let (_e, mut s, chain) = session();
+        let (a, b) = (add(&mut s, chain, "A"), add(&mut s, chain, "B"));
+        let mut view = DeviceViewState::default();
+        let mut q = ActionQueue::default();
+        q.push(chain, Action::SelectDevice(a, false));
+        q.push(chain, Action::SelectDevice(b, true));
+        q.push(chain, Action::Group(a, false));
+        run(q, &mut s, &mut view);
+        assert_eq!(s.devices(chain).len(), 1);
+        let rack = s.devices(chain)[0].id;
+        assert!(matches!(s.devices(chain)[0].kind, DeviceKind::Rack { .. }));
+        assert_eq!(view.selected_devices, [(chain, rack)]);
+
+        let mut q = ActionQueue::default();
+        q.push(chain, Action::Ungroup(rack));
+        run(q, &mut s, &mut view);
+        assert_eq!(s.devices(chain).len(), 2);
+        assert!(view.selected_devices.is_empty());
+    }
+
+    #[test]
+    fn alt_click_reaches_a_rack_and_all_it_holds() {
+        let (_e, mut s, chain) = session();
+        let a = add(&mut s, chain, "A");
+        let b = add(&mut s, chain, "B");
+        let rack = s.group_devices(chain, &[a, b], false).unwrap();
+        let mut q = ActionQueue::default();
+        q.push(chain, Action::BypassGroup(rack, true));
+        run(q, &mut s, &mut DeviceViewState::default());
+        let mut bypassed = Vec::new();
+        s.devices(chain)[0].for_each(&mut |d| bypassed.push(d.bypass));
+        assert_eq!(bypassed, [true, true, true]);
     }
 
     fn run(q: ActionQueue, s: &mut Session, view: &mut DeviceViewState) {
@@ -202,7 +395,7 @@ mod tests {
         let a = add(&mut s, chain, "A");
         let mut q = ActionQueue::default();
         q.push(chain, Action::ShowAll(a));
-        q.push(chain, Action::OpenChain(a, ChainId(7)));
+        q.push(chain, Action::Rack(a, RackAction::Select(vec![ChainId(7)])));
         run(q, &mut s, &mut view);
         assert!(view.show_all.contains(&a));
         assert_eq!(view.open_chains[&a], ChainId(7));

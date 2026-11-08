@@ -10,7 +10,7 @@ use rlive_core::warp::{self, WarpMap};
 use rlive_core::{ChainId, DeviceId, ParamInfo, Ports, Processor, ScaleInfo, Section, ViewChannel};
 use rlive_devices::devices::b1::common::SCALES;
 use rlive_devices::{DeviceInit, DeviceRole};
-use rlive_engine::shared::TrackShared;
+use rlive_engine::shared::{ChainShared, TrackShared};
 use rlive_engine::{
     mix_cell, ArrangementLane, AudioClip, BusLayout, ChainNode, ClipData, DeviceSlot, ExprPoint,
     LaneClip, MidiClip, MixSettings, Note, NoteExpression, NullProcessor,
@@ -183,6 +183,8 @@ pub struct Builder<'a> {
     pub plugins: &'a PluginCache,
     pub samples: &'a mut SampleCache,
     pub wiring: &'a PluginWiring,
+    /// Where chains publish what the UI reads, if anyone is reading.
+    pub chain_shared: Option<&'a mut HashMap<ChainId, Arc<ChainShared>>>,
 }
 
 /// Which plug-ins have something routed to or tapped from their extra buses.
@@ -451,6 +453,9 @@ impl Builder<'_> {
     ) -> Box<ChainNode> {
         let mut node = Box::new(ChainNode::new(chain.id, self.max_block));
         node.zones = engine_zones(&chain.zones);
+        if let Some(shared) = self.chain_shared.as_deref_mut() {
+            node.set_shared(shared.entry(chain.id).or_default().clone());
+        }
         for d in &chain.devices {
             let slot = self.device(d, depth, runtimes);
             node.devices.push(slot);
@@ -933,6 +938,7 @@ mod tests {
             plugins: &plugins,
             samples: &mut samples,
             wiring: &PluginWiring::default(),
+            chain_shared: None,
         };
         let mut clip = Clip {
             length: 4 * PPQ,

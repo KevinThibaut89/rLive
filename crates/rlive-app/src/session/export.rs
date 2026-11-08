@@ -76,6 +76,7 @@ impl Session {
             plugins: &self.plugins,
             samples: &mut self.samples,
             wiring: &self.wiring,
+            chain_shared: None,
         };
         let p = &self.project;
         let mut tracks = Vec::with_capacity(MAX_TRACKS);

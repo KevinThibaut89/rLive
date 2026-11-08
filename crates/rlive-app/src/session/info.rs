@@ -1,7 +1,9 @@
 //! The user's info text on tracks, clips, scenes, devices and locators, shown in the Info View.
 
+use super::racks::macro_slot;
 use super::{ChainRef, ClipRef, Session};
-use rlive_core::{DeviceId, TrackId};
+use rlive_core::{ChainId, DeviceId, TrackId};
+use rlive_project::DeviceKind;
 
 /// Something that can carry the user's info text.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -10,6 +12,10 @@ pub enum InfoTarget {
     Clip(ClipRef),
     Scene(usize),
     Device(ChainRef, DeviceId),
+    /// A chain of the rack found in that device chain.
+    Chain(ChainRef, DeviceId, ChainId),
+    /// A Macro Control of the rack found in that device chain.
+    Macro(ChainRef, DeviceId, usize),
     Locator(usize),
 }
 
@@ -22,6 +28,17 @@ impl Session {
             InfoTarget::Clip(r) => &self.clip_at(r)?.info,
             InfoTarget::Scene(i) => &project.scenes.get(i)?.info,
             InfoTarget::Device(chain, id) => &self.devices(chain).iter().find(|d| d.id == id)?.info,
+            InfoTarget::Chain(chain, rack, id) => {
+                let rack = self.devices(chain).iter().find(|d| d.id == rack)?;
+                &rack.chains().find(|c| c.id == id)?.info
+            }
+            InfoTarget::Macro(chain, rack, n) => {
+                let rack = self.devices(chain).iter().find(|d| d.id == rack)?;
+                let DeviceKind::Rack { macros, .. } = &rack.kind else {
+                    return None;
+                };
+                macros.get(n).map_or("", |m| m.info.as_str())
+            }
             InfoTarget::Locator(i) => &project.arrangement.locators.get(i)?.info,
         })
     }
@@ -39,6 +56,14 @@ impl Session {
                 .chain_mut(chain)
                 .and_then(|v| v.iter_mut().find(|d| d.id == id))
                 .map(|d| &mut d.info),
+            InfoTarget::Chain(chain, rack, id) => self
+                .rack_mut(chain, rack)
+                .and_then(|d| d.chains_mut().find(|c| c.id == id))
+                .map(|c| &mut c.info),
+            InfoTarget::Macro(chain, rack, n) => self
+                .macros_mut(chain, rack)
+                .and_then(|macros| macro_slot(macros, n))
+                .map(|m| &mut m.info),
             InfoTarget::Locator(i) => self
                 .project
                 .arrangement
