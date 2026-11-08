@@ -1,0 +1,13 @@
+[package]
+name = "rlive-test-vst3"
+description = "Minimal VST3 gain plugin used to test rLive's VST3 hosting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+vst3.workspace = true

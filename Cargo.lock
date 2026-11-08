@@ -365,6 +365,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rlive-test-vst3"
+version = "0.1.0"
+dependencies = [
+ "vst3",
+]
+
+[[package]]
 name = "ron"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

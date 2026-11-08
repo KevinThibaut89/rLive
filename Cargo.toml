@@ -8,6 +8,7 @@ members = [
     "crates/rlive-plugin-host",
     "crates/rlive-app",
     "crates/rlive-test-clap",
+    "crates/rlive-test-vst3",
 ]
 default-members = [
     "crates/rlive-core",
