@@ -201,14 +201,16 @@ impl Session {
                 }
             }
         };
-        for t in self.project.tracks.iter_mut() {
-            t.devices.iter_mut().for_each(&mut capture);
+        let p = &mut self.project;
+        for t in p.tracks.iter_mut().chain(p.returns.iter_mut()) {
+            t.devices
+                .iter_mut()
+                .for_each(|d| d.for_each_mut(&mut capture));
         }
-        self.project
-            .master
+        p.master
             .devices
             .iter_mut()
-            .for_each(&mut capture);
+            .for_each(|d| d.for_each_mut(&mut capture));
     }
 
     pub fn save(&mut self, path: &Path) -> Result<(), String> {
@@ -220,7 +222,7 @@ impl Session {
         };
         self.project.save(&path).map_err(|e| e.to_string())?;
         self.path = Some(path);
-        self.commit_edits(false);
+        self.commit_now();
         self.history.mark_saved();
         self.dirty = false;
         Ok(())
@@ -243,7 +245,8 @@ impl Session {
                         TrackRef::Track(t) => ChainRef::Track(t),
                         TrackRef::Master => ChainRef::Master,
                     };
-                    self.note_device_param(chain, device, param, value);
+                    let chain = self.chain_of_device(device).unwrap_or(chain);
+                    self.report_device_param(chain, device, param, value);
                 }
                 EngineEvent::RecordedMidi {
                     track,
@@ -291,7 +294,7 @@ impl Session {
             match n {
                 HostNotification::ParamChanged { id: param, value } => {
                     // Editor moved a knob on the controller side: forward to the processor.
-                    self.note_device_param(chain, id, param, value);
+                    self.report_device_param(chain, id, param, value);
                     if let Some(cell) = self.device_cell(chain, id, param) {
                         self.set_cell(chain, cell, value, true);
                     }

@@ -6,12 +6,15 @@ use rlive_core::{DeviceId, ParamInfo, Ports, Processor};
 use rlive_devices::{DeviceInit, DeviceRole, SampleBuffer};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
-    ArrangementLane, AudioClip, BusLayout, ClipData, DeviceSlot, LaneClip, MasterNode, MidiClip,
-    MixSettings, Note, NullProcessor, TrackNode,
+    ArrangementLane, AudioClip, BusLayout, ChainNode, ClipData, DeviceSlot, LaneClip, MasterNode,
+    MidiClip, MixSettings, Note, NullProcessor, RackKind as EngineRackKind, RackNode, TrackNode,
+    MAX_RACK_DEPTH,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
-use rlive_project::{ArrangementClip, Clip, ClipContent, Device, DeviceKind, Project, Track};
+use rlive_project::{
+    ArrangementClip, Chain, Clip, ClipContent, Device, DeviceKind, Project, RackKind, Track,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU32;
@@ -27,6 +30,9 @@ pub struct DeviceRuntime {
     pub latency: Arc<AtomicU32>,
     /// How many samples it can hold; any shows the sample row in the device view.
     pub sample_slots: usize,
+    /// Where parameters that the project has no value for started out, so undo can put them
+    /// back. A plugin's values come from its own state, not its defaults.
+    pub unmoved: HashMap<u32, f64>,
 }
 
 impl DeviceRuntime {
@@ -107,30 +113,44 @@ pub fn descriptor_for(
 }
 
 impl Builder<'_> {
-    /// Instantiate a device. Never fails: broken devices become silent placeholders with an error.
-    pub fn device(&mut self, dev: &Device) -> (Box<DeviceSlot>, DeviceRuntime) {
+    /// Instantiate a device and everything nested in it, recording their runtimes. `depth` is how
+    /// many racks it is inside. Never fails: broken devices become silent placeholders with an
+    /// error.
+    pub fn device(
+        &mut self,
+        dev: &Device,
+        depth: usize,
+        runtimes: &mut HashMap<DeviceId, DeviceRuntime>,
+    ) -> Box<DeviceSlot> {
+        if let DeviceKind::Rack { .. } = &dev.kind {
+            return self.rack(dev, depth, runtimes);
+        }
         let mut ports = Ports::default();
         let (processor, runtime) = match &dev.kind {
-            DeviceKind::Builtin { type_id, sample } => match rlive_devices::find(type_id) {
+            DeviceKind::Builtin {
+                type_id,
+                samples,
+                state,
+            } => match rlive_devices::find(type_id) {
                 Some(info) => {
                     let mut error = None;
-                    let sample = sample.as_ref().and_then(|p| match self.samples.get(p) {
-                        Ok(s) => Some(s),
-                        Err(e) => {
-                            error = Some(e);
-                            None
-                        }
-                    });
                     let desc = (info.desc)();
                     let sample_slots = desc.samples.len();
+                    let loaded = (0..sample_slots)
+                        .map(|slot| {
+                            let file = samples.get(slot).and_then(Option::as_ref)?;
+                            match self.samples.get(&file.path) {
+                                Ok(s) => Some(s),
+                                Err(e) => {
+                                    error = Some(e);
+                                    None
+                                }
+                            }
+                        })
+                        .collect();
                     let mut p = (info.create)(&DeviceInit {
-                        samples: desc
-                            .samples
-                            .iter()
-                            .take(1)
-                            .map(|_| sample.clone())
-                            .collect(),
-                        state: None,
+                        samples: loaded,
+                        state: state.clone(),
                     });
                     p.activate(self.sample_rate, self.max_block);
                     for param in &desc.params {
@@ -148,11 +168,13 @@ impl Builder<'_> {
                             role: info.role,
                             latency,
                             sample_slots,
+                            unmoved: HashMap::new(),
                         },
                     )
                 }
                 None => placeholder(format!("unknown device {type_id}")),
             },
+            DeviceKind::Rack { .. } => unreachable!("handled above"),
             DeviceKind::Plugin { state, .. } => {
                 let desc = descriptor_for(&dev.kind, &dev.name, self.plugins).expect("plugin kind");
                 match rlive_plugin_host::instantiate(&desc, self.sample_rate, self.max_block) {
@@ -177,6 +199,7 @@ impl Builder<'_> {
                                 role,
                                 latency,
                                 sample_slots: 0,
+                                unmoved: HashMap::new(),
                             },
                         )
                     }
@@ -190,12 +213,86 @@ impl Builder<'_> {
         slot.latency = runtime.latency.clone();
         slot.mod_out = vec![0.0; ports.mod_out.len()].into_boxed_slice();
         slot.ports = ports;
-        (Box::new(slot), runtime)
+        runtimes.insert(dev.id, runtime);
+        Box::new(slot)
+    }
+
+    /// A rack with everything in it. Beyond the engine's nesting limit it is a silent stand-in.
+    fn rack(
+        &mut self,
+        dev: &Device,
+        depth: usize,
+        runtimes: &mut HashMap<DeviceId, DeviceRuntime>,
+    ) -> Box<DeviceSlot> {
+        if depth >= MAX_RACK_DEPTH {
+            let (processor, runtime) = placeholder("racks are nested too deeply".to_string());
+            let mut slot = DeviceSlot::new(dev.id, processor);
+            slot.bypass = dev.bypass;
+            slot.latency = runtime.latency.clone();
+            runtimes.insert(dev.id, runtime);
+            return Box::new(slot);
+        }
+        let DeviceKind::Rack {
+            kind,
+            chains,
+            returns,
+            ..
+        } = &dev.kind
+        else {
+            unreachable!("only called for racks");
+        };
+        let (kind, role) = match kind {
+            RackKind::Instrument => (EngineRackKind::Instrument, DeviceRole::Instrument),
+            RackKind::Audio => (EngineRackKind::Audio, DeviceRole::AudioEffect),
+            RackKind::Midi => (EngineRackKind::Midi, DeviceRole::MidiEffect),
+            RackKind::Drum => (EngineRackKind::Drum, DeviceRole::Instrument),
+        };
+        let mut node = Box::new(RackNode::new(kind));
+        for c in chains {
+            let chain = self.chain(c, depth + 1, runtimes);
+            node.chains.push(chain);
+        }
+        for c in returns {
+            let chain = self.chain(c, depth + 1, runtimes);
+            node.returns.push(chain);
+        }
+        let mut slot = DeviceSlot::rack(dev.id, node);
+        slot.bypass = dev.bypass;
+        let latency = Arc::new(AtomicU32::new(0));
+        slot.latency = latency.clone();
+        runtimes.insert(
+            dev.id,
+            DeviceRuntime {
+                params: Vec::new(),
+                plugin: None,
+                error: None,
+                role,
+                latency,
+                sample_slots: 0,
+                unmoved: HashMap::new(),
+            },
+        );
+        Box::new(slot)
+    }
+
+    /// One chain of a rack with everything in it.
+    pub fn chain(
+        &mut self,
+        chain: &Chain,
+        depth: usize,
+        runtimes: &mut HashMap<DeviceId, DeviceRuntime>,
+    ) -> Box<ChainNode> {
+        let mut node = Box::new(ChainNode::new(chain.id, self.max_block));
+        for d in &chain.devices {
+            let slot = self.device(d, depth, runtimes);
+            node.devices.push(slot);
+        }
+        node
     }
 
     pub fn clip(&mut self, clip: &Clip) -> Result<Arc<ClipData>, String> {
         Ok(Arc::new(match &clip.content {
-            ClipContent::Midi { notes } => {
+            ClipContent::Midi { notes, .. } => {
                 let notes: Vec<Note> = notes
                     .iter()
                     .map(|n| Note {
@@ -207,8 +304,8 @@ impl Builder<'_> {
                     .collect();
                 ClipData::Midi(MidiClip::new(clip.length, notes, clip.looped))
             }
-            ClipContent::Audio { path, gain_db } => {
-                let sample = self.samples.get(path)?;
+            ClipContent::Audio { file, gain_db, .. } => {
+                let sample = self.samples.get(&file.path)?;
                 ClipData::Audio(AudioClip {
                     sample,
                     length: clip.length,
@@ -252,13 +349,10 @@ impl Builder<'_> {
         node.mix = mix_of(track);
         let mut layout = BusLayout::for_track(&node.mix).with_max_block(self.max_block);
         for d in &track.devices {
-            let (slot, rt) = self.device(d);
-            if let Some(e) = &rt.error {
-                errors.push(format!("{}: {e}", d.name));
-            }
+            let slot = self.device(d, 0, runtimes);
+            note_errors(d, runtimes, errors);
             node.devices.push(slot);
-            place_device(&mut layout, d, &rt);
-            runtimes.insert(d.id, rt);
+            place_device_tree(&mut layout, d, runtimes);
         }
         node.bus = layout.build();
         layouts.insert(ChainRef::Track(track.id), layout);
@@ -285,13 +379,10 @@ impl Builder<'_> {
         node.volume_db = project.master.volume_db;
         let mut layout = BusLayout::for_master(node.volume_db).with_max_block(self.max_block);
         for d in &project.master.devices {
-            let (slot, rt) = self.device(d);
-            if let Some(e) = &rt.error {
-                errors.push(format!("{}: {e}", d.name));
-            }
+            let slot = self.device(d, 0, runtimes);
+            note_errors(d, runtimes, errors);
             node.devices.push(slot);
-            place_device(&mut layout, d, &rt);
-            runtimes.insert(d.id, rt);
+            place_device_tree(&mut layout, d, runtimes);
         }
         node.bus = layout.build();
         layouts.insert(ChainRef::Master, layout);
@@ -301,7 +392,7 @@ impl Builder<'_> {
 
 /// Give a device cells in its chain's layout, seeded from the project or the running plugin.
 /// Returns whether the engine needs a bus built from the layout.
-pub(super) fn place_device(layout: &mut BusLayout, dev: &Device, rt: &DeviceRuntime) -> bool {
+fn place_device(layout: &mut BusLayout, dev: &Device, rt: &DeviceRuntime) -> bool {
     layout.place_device(dev.id, !dev.bypass, &rt.params, |p| {
         dev.params
             .get(&p.id)
@@ -309,6 +400,34 @@ pub(super) fn place_device(layout: &mut BusLayout, dev: &Device, rt: &DeviceRunt
             .or_else(|| rt.plugin.as_ref().and_then(|h| h.param_value(p.id)))
             .unwrap_or(p.default)
     })
+}
+
+/// [`place_device`] for a device and everything nested in it.
+pub(super) fn place_device_tree(
+    layout: &mut BusLayout,
+    dev: &Device,
+    runtimes: &HashMap<DeviceId, DeviceRuntime>,
+) -> bool {
+    let mut needs_bus = false;
+    dev.for_each(&mut |d| {
+        if let Some(rt) = runtimes.get(&d.id) {
+            needs_bus |= place_device(layout, d, rt);
+        }
+    });
+    needs_bus
+}
+
+/// Reports what went wrong building a device and everything nested in it.
+pub(super) fn note_errors(
+    dev: &Device,
+    runtimes: &HashMap<DeviceId, DeviceRuntime>,
+    errors: &mut Vec<String>,
+) {
+    dev.for_each(&mut |d| {
+        if let Some(e) = runtimes.get(&d.id).and_then(|rt| rt.error.as_ref()) {
+            errors.push(format!("{}: {e}", d.name));
+        }
+    });
 }
 
 fn placeholder(error: String) -> (Box<dyn Processor>, DeviceRuntime) {
@@ -322,6 +441,7 @@ fn placeholder(error: String) -> (Box<dyn Processor>, DeviceRuntime) {
             role: DeviceRole::AudioEffect,
             latency: Arc::new(AtomicU32::new(0)),
             sample_slots: 0,
+            unmoved: HashMap::new(),
         },
     )
 }

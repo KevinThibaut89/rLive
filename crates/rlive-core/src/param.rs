@@ -15,7 +15,7 @@ pub enum ParamOwner {
     Device(DeviceId),
     Track(TrackId),
     Chain(ChainId),
-    /// The Master track, which has no [`TrackId`] of its own.
+    /// The Master track, addressed by role so an automation target survives re-creating it.
     Master,
     Transport,
 }

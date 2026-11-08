@@ -13,28 +13,32 @@ pub fn reserve_id(id: u64) {
     NEXT_ID.fetch_max(id + 1, Ordering::Relaxed);
 }
 
-macro_rules! id_type {
-    ($name:ident) => {
-        #[derive(
-            Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-        )]
-        pub struct $name(pub u64);
+/// Declares the id types, and [`ID_TYPES`] listing them, so the list can't go stale.
+macro_rules! id_types {
+    ($($name:ident),+ $(,)?) => {
+        $(
+            #[derive(
+                Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+            )]
+            pub struct $name(pub u64);
 
-        impl $name {
-            pub fn new() -> Self {
-                Self(next_id())
+            impl $name {
+                pub fn new() -> Self {
+                    Self(next_id())
+                }
             }
-        }
 
-        impl Default for $name {
-            fn default() -> Self {
-                Self::new()
+            impl Default for $name {
+                fn default() -> Self {
+                    Self::new()
+                }
             }
-        }
+        )+
+
+        /// The Rust name of every id type, which is how a serializer recognises one. A value of
+        /// any of these came from [`next_id`], so loading it must [`reserve_id`] it.
+        pub const ID_TYPES: &[&str] = &[$(stringify!($name)),+];
     };
 }
 
-id_type!(TrackId);
-id_type!(DeviceId);
-id_type!(ChainId);
-id_type!(ArrClipId);
+id_types!(TrackId, DeviceId, ChainId, ArrClipId, GrooveId);

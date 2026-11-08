@@ -51,12 +51,11 @@ fn fnv(hash: &mut u64, samples: &[f32]) {
 
 fn notes(clip: &mut Clip, notes: &[(u64, u64, u8)]) {
     let list = clip.notes_mut().expect("a MIDI clip");
-    list.extend(notes.iter().map(|&(start, length, key)| NoteData {
-        start,
-        length,
-        key,
-        velocity: 0.8,
-    }));
+    list.extend(
+        notes
+            .iter()
+            .map(|&(start, length, key)| NoteData::new(start, length, key, 0.8)),
+    );
 }
 
 fn midi_track(name: &str, device: &str, scenes: usize) -> Track {
@@ -86,10 +85,8 @@ fn audio_clip(path: &Path, length: u64) -> Clip {
         color: [4, 5, 6],
         length,
         looped: true,
-        content: ClipContent::Audio {
-            path: path.to_path_buf(),
-            gain_db: -3.0,
-        },
+        content: ClipContent::audio(path, -3.0),
+        ..Clip::default()
     }
 }
 
@@ -143,8 +140,8 @@ fn project(sample: &Path) -> Project {
 
     let mut sampler = Track::new("Sampler", TrackKind::Midi, [2, 2, 2], scenes);
     let mut dev = Device::builtin("rlive.sampler", "Sampler");
-    if let DeviceKind::Builtin { sample: s, .. } = &mut dev.kind {
-        *s = Some(sample.to_path_buf());
+    if let DeviceKind::Builtin { samples, .. } = &mut dev.kind {
+        *samples = vec![Some(rlive_project::FileRef::new(sample))];
     }
     sampler
         .devices

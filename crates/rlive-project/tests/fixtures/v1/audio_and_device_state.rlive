@@ -1,0 +1,197 @@
+(
+    version: 1,
+    tempo: 97.5,
+    time_signature: (
+        numerator: 4,
+        denominator: 4,
+    ),
+    quantize: Bar,
+    metronome: false,
+    scenes: [
+        (
+            name: "1",
+        ),
+        (
+            name: "2",
+        ),
+        (
+            name: "3",
+        ),
+        (
+            name: "4",
+        ),
+        (
+            name: "5",
+        ),
+        (
+            name: "6",
+        ),
+        (
+            name: "7",
+        ),
+        (
+            name: "8",
+        ),
+    ],
+    tracks: [
+        (
+            id: (18),
+            name: "Drums",
+            color: (204, 153, 39),
+            kind: Audio,
+            volume_db: -6.5,
+            pan: 0.25,
+            mute: false,
+            solo: true,
+            arm: false,
+            devices: [
+                (
+                    id: (20),
+                    name: "EQ",
+                    kind: Builtin(
+                        type_id: "rlive.eq3",
+                        sample: None,
+                    ),
+                    bypass: true,
+                    params: {
+                        0: 3.5,
+                        2: -12.0,
+                    },
+                    expanded: false,
+                ),
+                (
+                    id: (21),
+                    name: "Compressor",
+                    kind: Builtin(
+                        type_id: "rlive.compressor",
+                        sample: None,
+                    ),
+                    bypass: false,
+                    params: {
+                        1: 0.125,
+                    },
+                    expanded: true,
+                ),
+            ],
+            clips: [
+                None,
+                Some((
+                    name: "Break",
+                    color: (37, 255, 168),
+                    length: 7680,
+                    looped: true,
+                    content: Audio(
+                        path: "/samples/break 120.wav",
+                        gain_db: -3.25,
+                    ),
+                )),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            arrangement: [
+                (
+                    id: (19),
+                    start: 3840,
+                    length: 15360,
+                    offset: 0,
+                    clip: (
+                        name: "Vocal",
+                        color: (146, 167, 255),
+                        length: 15360,
+                        looped: false,
+                        content: Audio(
+                            path: "/samples/é/vocal.wav",
+                            gain_db: 1.5,
+                        ),
+                    ),
+                ),
+            ],
+        ),
+        (
+            id: (22),
+            name: "Keys",
+            color: (139, 197, 255),
+            kind: Midi,
+            volume_db: 0.0,
+            pan: 0.0,
+            mute: true,
+            solo: false,
+            arm: true,
+            devices: [
+                (
+                    id: (23),
+                    name: "Sampler",
+                    kind: Builtin(
+                        type_id: "rlive.sampler",
+                        sample: Some("/samples/piano C3.wav"),
+                    ),
+                    bypass: false,
+                    params: {
+                        4: 0.75,
+                    },
+                    expanded: true,
+                ),
+                (
+                    id: (24),
+                    name: "Empty Sampler",
+                    kind: Builtin(
+                        type_id: "rlive.sampler",
+                        sample: None,
+                    ),
+                    bypass: false,
+                    params: {},
+                    expanded: true,
+                ),
+            ],
+            clips: [
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            arrangement: [],
+        ),
+    ],
+    master: (
+        volume_db: -1.5,
+        devices: [
+            (
+                id: (25),
+                name: "Reverb",
+                kind: Builtin(
+                    type_id: "rlive.reverb",
+                    sample: None,
+                ),
+                bypass: false,
+                params: {
+                    0: 0.5,
+                },
+                expanded: true,
+            ),
+            (
+                id: (26),
+                name: "Utility",
+                kind: Builtin(
+                    type_id: "rlive.utility",
+                    sample: None,
+                ),
+                bypass: false,
+                params: {},
+                expanded: true,
+            ),
+        ],
+    ),
+    arrangement: (
+        loop_enabled: false,
+        loop_start: 0,
+        loop_end: 15360,
+    ),
+)

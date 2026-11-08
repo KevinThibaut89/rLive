@@ -27,7 +27,7 @@ impl Session {
         self.send(EngineCommand::Transport(TransportCmd::SetTempo(
             self.project.tempo,
         )));
-        self.touch();
+        self.mark_edit("Change Tempo");
     }
 
     pub fn set_time_signature(&mut self, sig: TimeSignature) {
@@ -35,18 +35,19 @@ impl Session {
         self.send(EngineCommand::Transport(TransportCmd::SetTimeSignature(
             sig,
         )));
-        self.touch();
+        self.mark_edit("Change Time Signature");
     }
 
     pub fn set_quantize(&mut self, q: Quantize) {
         self.project.quantize = q;
         self.send(EngineCommand::Transport(TransportCmd::SetQuantize(q)));
-        self.touch();
+        self.mark_edit("Change Quantization");
     }
 
     pub fn set_metronome(&mut self, on: bool) {
         self.project.metronome = on;
         self.send(EngineCommand::Transport(TransportCmd::SetMetronome(on)));
+        self.mark_edit("Metronome");
     }
 
     pub fn launch_clip(&mut self, track: TrackId, slot: usize) {

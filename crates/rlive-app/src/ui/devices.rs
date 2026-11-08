@@ -402,21 +402,16 @@ fn device(
             actions.push(Action::Reload(dev.id));
         }
     }
-    if let DeviceKind::Builtin {
-        sample: Some(_) | None,
-        ..
-    } = &dev.kind
-    {
+    if let DeviceKind::Builtin { .. } = &dev.kind {
         if uses_sample {
             bu.horizontal(|ui| {
-                let name = match &dev.kind {
-                    DeviceKind::Builtin {
-                        sample: Some(p), ..
-                    } => p
+                let name = match dev.sample(0) {
+                    Some(file) => file
+                        .path
                         .file_stem()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default(),
-                    _ => "No sample — drop one here".into(),
+                    None => "No sample — drop one here".into(),
                 };
                 let (r, resp) =
                     ui.allocate_exact_size(Vec2::new(body.width() - 50.0, 18.0), Sense::hover());

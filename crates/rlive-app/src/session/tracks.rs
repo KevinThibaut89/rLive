@@ -4,7 +4,7 @@ use super::{mix_of, ChainRef, Session};
 use rlive_core::{MidiMessage, TrackId};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{mix_cell, EngineCommand, GraphOp, RecordCmd};
-use rlive_project::history::ParkedMix;
+use rlive_project::history::ParkedTrack;
 use rlive_project::{Device, Track, TrackKind};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,6 +20,9 @@ impl Session {
                 Some(Device::builtin("rlive.poly", "Poly Synth")),
             ),
             TrackKind::Audio => (format!("{n} Audio"), None),
+            TrackKind::Group => (format!("{n} Group"), None),
+            TrackKind::Return => (format!("{n} Return"), None),
+            TrackKind::Master => ("Master".to_string(), None),
         };
         let mut t = Track::new(
             &name,
@@ -55,10 +58,14 @@ impl Session {
     pub fn delete_track(&mut self, id: TrackId) {
         if let Some(i) = self.project.track_index(id) {
             let mut t = self.project.tracks.remove(i);
-            self.history.parked_mix.insert(id, ParkedMix::of(&t));
+            self.history.parked_tracks.insert(id, ParkedTrack::of(&t));
             for d in &mut t.devices {
                 self.park_device(d);
-                self.runtimes.remove(&d.id);
+                let mut ids = Vec::new();
+                d.for_each(&mut |nested| ids.push(nested.id));
+                for nested in ids {
+                    self.runtimes.remove(&nested);
+                }
             }
             self.track_shared.remove(&id);
             self.layouts.remove(&ChainRef::Track(id));
@@ -80,31 +87,40 @@ impl Session {
 
     /// Push the track's volume/pan/mute/solo to the engine after editing the project.
     pub fn sync_mix(&mut self, id: TrackId) {
-        if let Some(t) = self.project.track(id) {
-            let mix = mix_of(t);
-            let chain = ChainRef::Track(id);
-            for (cell, value) in [
-                (mix_cell::VOLUME, mix.volume_db as f64),
-                (mix_cell::PAN, mix.pan as f64),
-                (mix_cell::MUTE, mix.mute as u8 as f64),
-                (mix_cell::SOLO, mix.solo as u8 as f64),
-            ] {
-                let unchanged = self
-                    .layouts
-                    .get(&chain)
-                    .is_some_and(|l| l.base(cell) == Some(value));
-                if !unchanged {
-                    self.set_cell(chain, cell, value, true);
-                }
-            }
-            self.touch();
+        if self.push_mix(id, true) {
+            self.mark_edit("Change Mixer");
         }
+    }
+
+    /// Sends the cells of a track's mixer that differ from the project. Returns whether the
+    /// track exists.
+    pub(super) fn push_mix(&mut self, id: TrackId, gesture: bool) -> bool {
+        let Some(t) = self.project.track(id) else {
+            return false;
+        };
+        let mix = mix_of(t);
+        let chain = ChainRef::Track(id);
+        for (cell, value) in [
+            (mix_cell::VOLUME, mix.volume_db as f64),
+            (mix_cell::PAN, mix.pan as f64),
+            (mix_cell::MUTE, mix.mute as u8 as f64),
+            (mix_cell::SOLO, mix.solo as u8 as f64),
+        ] {
+            let unchanged = self
+                .layouts
+                .get(&chain)
+                .is_some_and(|l| l.base(cell) == Some(value));
+            if !unchanged {
+                self.set_cell(chain, cell, value, gesture);
+            }
+        }
+        true
     }
 
     pub fn set_master_volume(&mut self, db: f32) {
         self.project.master.volume_db = db;
         self.set_cell(ChainRef::Master, mix_cell::VOLUME, db as f64, true);
-        self.touch();
+        self.mark_edit("Change Mixer");
     }
 
     pub fn set_arm(&mut self, id: TrackId, arm: bool, exclusive: bool) {

@@ -1,12 +1,13 @@
-//! Device chains: adding, removing and changing devices.
+//! Device chains, nested to any depth: adding, removing and changing devices.
 
 use super::{build, Session};
 use rlive_core::param::mixer;
-use rlive_core::{DeviceId, ParamId, ParamInfo, TrackId};
+use rlive_core::{ChainId, DeviceId, ParamId, ParamInfo, TrackId};
 use rlive_devices::DeviceRole;
 use rlive_engine::{mix_cell, CellIx, ChainAddr, GraphOp, TrackRef};
 use rlive_plugin_host::PluginDescriptor;
-use rlive_project::{Device, DeviceKind};
+use rlive_project::{Chain, Device, DeviceKind, FileRef};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Where a device lives.
@@ -14,8 +15,7 @@ use std::path::PathBuf;
 pub enum ChainRef {
     Track(TrackId),
     Master,
-    /// A chain inside a rack. Racks reach the project with file format 2, so for now this names
-    /// a chain the project holds no devices for.
+    /// A chain inside a rack, or a return chain of one.
     Nested(ChainAddr),
 }
 
@@ -29,6 +29,16 @@ impl ChainRef {
             },
             root => root,
         }
+    }
+
+    /// How many racks this chain is inside.
+    pub fn depth(self) -> usize {
+        ChainAddr::from(self).path.len()
+    }
+
+    /// A chain of the rack `rack`, found in this chain.
+    pub fn child(self, rack: DeviceId, chain: ChainId) -> Option<ChainRef> {
+        Some(ChainRef::Nested(ChainAddr::from(self).child(rack, chain)?))
     }
 }
 
@@ -55,7 +65,14 @@ impl Session {
         match chain {
             ChainRef::Track(t) => self.project.track(t).map(|t| &t.devices),
             ChainRef::Master => Some(&self.project.master.devices),
-            ChainRef::Nested(_) => None,
+            ChainRef::Nested(addr) => {
+                let mut devices = self.chain(chain.owner())?;
+                for step in addr.path.steps() {
+                    let rack = devices.iter().find(|d| d.id == step.rack)?;
+                    devices = &rack.chains().find(|c| c.id == step.chain)?.devices;
+                }
+                Some(devices)
+            }
         }
     }
 
@@ -63,7 +80,14 @@ impl Session {
         match chain {
             ChainRef::Track(t) => self.project.track_mut(t).map(|t| &mut t.devices),
             ChainRef::Master => Some(&mut self.project.master.devices),
-            ChainRef::Nested(_) => None,
+            ChainRef::Nested(addr) => {
+                let mut devices = self.chain_mut(chain.owner())?;
+                for step in addr.path.steps() {
+                    let rack = devices.iter_mut().find(|d| d.id == step.rack)?;
+                    devices = &mut rack.chains_mut().find(|c| c.id == step.chain)?.devices;
+                }
+                Some(devices)
+            }
         }
     }
 
@@ -72,19 +96,18 @@ impl Session {
     }
 
     pub fn add_device(&mut self, chain: ChainRef, index: Option<usize>, device: Device) {
+        let mut built = HashMap::new();
         let (mut b, _) = self.builder();
-        let (slot, rt) = b.device(&device);
-        if let Some(e) = &rt.error {
-            self.messages.push(format!("{}: {e}", device.name));
-        }
+        let slot = b.device(&device, chain.depth(), &mut built);
+        build::note_errors(&device, &built, &mut self.messages);
         let id = device.id;
         let Some(devs) = self.chain_mut(chain) else {
             return;
         };
         let index = index.unwrap_or(devs.len()).min(devs.len());
         devs.insert(index, device);
-        let swap = self.place_device_cells(chain, index, &rt);
-        self.runtimes.insert(id, rt);
+        self.runtimes.extend(built);
+        let swap = self.place_device_cells(chain, id);
         let insert = GraphOp::InsertDevice {
             target: chain.into(),
             index,
@@ -94,17 +117,12 @@ impl Session {
         self.mark_edit("Add Device");
     }
 
-    /// Give the device at `index` cells. Returns the edit that gives the engine a new bus, if
-    /// that took one.
-    fn place_device_cells(
-        &mut self,
-        chain: ChainRef,
-        index: usize,
-        rt: &build::DeviceRuntime,
-    ) -> Option<GraphOp> {
-        let dev = self.chain(chain)?.get(index)?.clone();
+    /// Give a device and everything in it cells. Returns the edit that gives the engine a new bus,
+    /// if that took one.
+    fn place_device_cells(&mut self, chain: ChainRef, id: DeviceId) -> Option<GraphOp> {
+        let dev = self.chain(chain)?.iter().find(|d| d.id == id)?.clone();
         let layout = self.layouts.get_mut(&chain.owner())?;
-        build::place_device(layout, &dev, rt).then(|| GraphOp::SwapBus {
+        build::place_device_tree(layout, &dev, &self.runtimes).then(|| GraphOp::SwapBus {
             target: chain.into(),
             bus: layout.build(),
         })
@@ -112,15 +130,7 @@ impl Session {
 
     /// Update a device's cells after its parameter list changed.
     pub(super) fn refit_device_cells(&mut self, chain: ChainRef, id: DeviceId) {
-        let Some(index) = self.devices(chain).iter().position(|d| d.id == id) else {
-            return;
-        };
-        let Some(rt) = self.runtimes.remove(&id) else {
-            return;
-        };
-        let swap = self.place_device_cells(chain, index, &rt);
-        self.runtimes.insert(id, rt);
-        if let Some(swap) = swap {
+        if let Some(swap) = self.place_device_cells(chain, id) {
             self.send_edits(vec![swap]);
         }
     }
@@ -167,23 +177,32 @@ impl Session {
         if let Some(devs) = self.chain_mut(chain) {
             if let Some(i) = devs.iter().position(|d| d.id == id) {
                 let mut d = devs.remove(i);
-                self.park_device(&mut d);
+                self.retire_device_runtimes(chain, &mut d);
             }
-        }
-        if let Some(mut rt) = self.runtimes.remove(&id) {
-            if let Some(h) = rt.plugin.as_mut() {
-                h.close_editor();
-            }
-            // The handle is dropped now; the processor half comes back as engine garbage.
-        }
-        if let Some(l) = self.layouts.get_mut(&chain.owner()) {
-            l.remove_device(id);
         }
         self.send_edits(vec![GraphOp::RemoveDevice {
             target: chain.into(),
             device: id,
         }]);
         self.mark_edit("Remove Device");
+    }
+
+    /// Forgets the runtime side of a device leaving the project, parking it for undo.
+    fn retire_device_runtimes(&mut self, chain: ChainRef, device: &mut Device) {
+        self.park_device(device);
+        let mut ids = Vec::new();
+        device.for_each(&mut |d| ids.push(d.id));
+        for id in ids {
+            if let Some(mut rt) = self.runtimes.remove(&id) {
+                if let Some(h) = rt.plugin.as_mut() {
+                    h.close_editor();
+                }
+                // The handle is dropped now; the processor half comes back as engine garbage.
+            }
+            if let Some(l) = self.layouts.get_mut(&chain.owner()) {
+                l.remove_device(id);
+            }
+        }
     }
 
     pub fn move_device(&mut self, chain: ChainRef, id: DeviceId, to: usize) {
@@ -216,6 +235,18 @@ impl Session {
     }
 
     pub fn set_bypass(&mut self, chain: ChainRef, id: DeviceId, bypass: bool) {
+        self.write_bypass(chain, id, bypass, true);
+        self.mark_edit("Device On/Off");
+    }
+
+    /// Switches a device on or off in the project and the engine.
+    pub(super) fn write_bypass(
+        &mut self,
+        chain: ChainRef,
+        id: DeviceId,
+        bypass: bool,
+        gesture: bool,
+    ) {
         if let Some(d) = self
             .chain_mut(chain)
             .and_then(|v| v.iter_mut().find(|d| d.id == id))
@@ -224,9 +255,8 @@ impl Session {
         }
         let activator = self.layouts.get(&chain.owner());
         if let Some(cell) = activator.and_then(|l| l.activator_cell(id)) {
-            self.set_cell(chain, cell, !bypass as u8 as f64, true);
+            self.set_cell(chain, cell, !bypass as u8 as f64, gesture);
         }
-        self.touch();
     }
 
     pub fn param_value(&self, chain: ChainRef, id: DeviceId, param: &ParamInfo) -> f64 {
@@ -245,39 +275,82 @@ impl Session {
     }
 
     pub fn set_param(&mut self, chain: ChainRef, id: DeviceId, param: u32, value: f64) {
+        self.write_param(chain, id, param, value, true);
+        self.mark_edit("Change Parameter");
+    }
+
+    /// Sets a parameter in the project and sends it down the parameter path to the engine.
+    pub(super) fn write_param(
+        &mut self,
+        chain: ChainRef,
+        id: DeviceId,
+        param: u32,
+        value: f64,
+        gesture: bool,
+    ) {
+        let cell = self.device_cell(chain, id, param);
+        let before = self
+            .layouts
+            .get(&chain.owner())
+            .zip(cell)
+            .and_then(|(l, c)| l.base(c));
         if let Some(d) = self
             .chain_mut(chain)
             .and_then(|v| v.iter_mut().find(|d| d.id == id))
         {
-            d.params.insert(param, value);
+            if d.params.insert(param, value).is_none() {
+                if let (Some(rt), Some(before)) = (self.runtimes.get_mut(&id), before) {
+                    rt.unmoved.entry(param).or_insert(before);
+                }
+            }
         }
         if let Some(h) = self.runtimes.get_mut(&id).and_then(|r| r.plugin.as_mut()) {
             h.on_param_set(param, value);
         }
-        if let Some(cell) = self.device_cell(chain, id, param) {
-            self.set_cell(chain, cell, value, true);
+        if let Some(cell) = cell {
+            self.set_cell(chain, cell, value, gesture);
         }
-        self.touch();
     }
 
-    /// Records a value a device reported, in the project and the layout.
-    pub(super) fn note_device_param(
+    /// Records a value a device reported, in the project and the layout. Returns whether it was
+    /// news, as opposed to the device repeating what it was told.
+    fn note_device_param(&mut self, chain: ChainRef, id: DeviceId, param: u32, value: f64) -> bool {
+        // A value it was seeded with hasn't reached `params` yet; the layout has it either way.
+        let cell = self.device_cell(chain, id, param);
+        let seeded = self
+            .layouts
+            .get(&chain.owner())
+            .zip(cell)
+            .and_then(|(l, c)| l.base(c));
+        let device = self
+            .chain_mut(chain)
+            .and_then(|v| v.iter_mut().find(|d| d.id == id));
+        let known = device
+            .as_ref()
+            .and_then(|d| d.params.get(&param).copied())
+            .or(seeded);
+        let changed = known.is_none_or(|old| !nearly_equal(old, value));
+        let first_value = device.is_some_and(|d| d.params.insert(param, value).is_none());
+        if let (true, Some(rt), Some(before)) = (first_value, self.runtimes.get_mut(&id), seeded) {
+            rt.unmoved.entry(param).or_insert(before);
+        }
+        if let (Some(l), Some(cell)) = (self.layouts.get_mut(&chain.owner()), cell) {
+            l.note_value(cell, value);
+        }
+        changed
+    }
+
+    /// Records a parameter change a device made by itself. Its edits settle into an undo step
+    /// once it goes quiet, since its gestures are invisible from here.
+    pub(super) fn report_device_param(
         &mut self,
         chain: ChainRef,
         id: DeviceId,
         param: u32,
         value: f64,
     ) {
-        if let Some(d) = self
-            .chain_mut(chain)
-            .and_then(|v| v.iter_mut().find(|d| d.id == id))
-        {
-            d.params.insert(param, value);
-        }
-        if let Some(l) = self.layouts.get_mut(&chain.owner()) {
-            if let Some(cell) = l.device_cell(id, param) {
-                l.note_value(cell, value);
-            }
+        if self.note_device_param(chain, id, param, value) {
+            self.note_reported_edit();
         }
     }
 
@@ -314,39 +387,57 @@ impl Session {
     /// Change the sample of a built-in sampler. Playing voices carry on with the new sample; a
     /// file that won't load leaves the current one in place and reports why.
     pub fn set_device_sample(&mut self, chain: ChainRef, id: DeviceId, path: PathBuf) {
-        let loaded = self.samples.get(&path);
+        if self.write_device_sample(chain, id, 0, FileRef::new(path)) {
+            self.mark_edit("Change Sample");
+        }
+    }
+
+    /// Loads a file into a device's sample slot, in the project and the engine.
+    pub(super) fn write_device_sample(
+        &mut self,
+        chain: ChainRef,
+        id: DeviceId,
+        slot: usize,
+        file: FileRef,
+    ) -> bool {
+        let loaded = self.samples.get(&file.path);
         let error = loaded.as_ref().err().cloned();
         if let Some(rt) = self.runtimes.get_mut(&id) {
             rt.error = error.clone();
         }
         let Ok(sample) = loaded else {
             self.messages.extend(error);
-            return;
+            return false;
         };
         let Some(dev) = self
             .chain_mut(chain)
             .and_then(|v| v.iter_mut().find(|d| d.id == id))
         else {
-            return;
+            return false;
         };
-        if let DeviceKind::Builtin {
-            sample: current, ..
-        } = &mut dev.kind
-        {
-            *current = Some(path);
+        if let DeviceKind::Builtin { samples, .. } = &mut dev.kind {
+            if samples.len() <= slot {
+                samples.resize(slot + 1, None);
+            }
+            samples[slot] = Some(file);
         }
         self.send_edits(vec![GraphOp::SetResource {
             target: chain.into(),
             device: id,
-            slot: 0,
+            slot: slot as u32,
             resource: sample,
         }]);
-        self.touch();
+        true
     }
 
     /// Re-instantiate a plugin (keeping its state), e.g. after it requested a restart.
     pub fn reload_device(&mut self, chain: ChainRef, id: DeviceId) {
         self.capture_plugin_states();
+        self.rebuild_device(chain, id);
+    }
+
+    /// Replaces a device's engine side with a fresh one built from the project.
+    pub(super) fn rebuild_device(&mut self, chain: ChainRef, id: DeviceId) {
         let Some(devs) = self.chain(chain) else {
             return;
         };
@@ -354,11 +445,16 @@ impl Session {
             return;
         };
         let d = devs[pos].clone();
-        self.runtimes.remove(&id);
+        let mut ids = Vec::new();
+        d.for_each(&mut |nested| ids.push(nested.id));
+        for nested in ids {
+            self.runtimes.remove(&nested);
+        }
+        let mut built = HashMap::new();
         let (mut b, _) = self.builder();
-        let (slot, rt) = b.device(&d);
-        let swap = self.place_device_cells(chain, pos, &rt);
-        self.runtimes.insert(id, rt);
+        let slot = b.device(&d, chain.depth(), &mut built);
+        self.runtimes.extend(built);
+        let swap = self.place_device_cells(chain, id);
         let mut ops = vec![GraphOp::RemoveDevice {
             target: chain.into(),
             device: id,
@@ -372,14 +468,119 @@ impl Session {
         self.send_edits(ops);
     }
 
-    pub(super) fn chain_of_device(&self, id: DeviceId) -> Option<ChainRef> {
-        if self.project.master.devices.iter().any(|d| d.id == id) {
-            return Some(ChainRef::Master);
+    // ------------------------------------------------------------- rack chains
+
+    /// Adds a chain to the rack `rack`, found in the chain at `chain`.
+    pub(super) fn insert_rack_chain(
+        &mut self,
+        chain: ChainRef,
+        rack: DeviceId,
+        index: usize,
+        new: Chain,
+    ) {
+        let depth = chain.depth() + 1;
+        let mut built = HashMap::new();
+        let (mut b, _) = self.builder();
+        let node = b.chain(&new, depth, &mut built);
+        for d in &new.devices {
+            build::note_errors(d, &built, &mut self.messages);
         }
-        self.project
-            .tracks
-            .iter()
-            .find(|t| t.devices.iter().any(|d| d.id == id))
-            .map(|t| ChainRef::Track(t.id))
+        let devices = new.devices.clone();
+        let index = {
+            let Some(chains) = self.rack_chains_mut(chain, rack) else {
+                return;
+            };
+            let index = index.min(chains.len());
+            chains.insert(index, new);
+            index
+        };
+        self.runtimes.extend(built);
+        let layout = self.layouts.get_mut(&chain.owner());
+        let swap = layout.and_then(|layout| {
+            let mut needs_bus = false;
+            for d in &devices {
+                needs_bus |= build::place_device_tree(layout, d, &self.runtimes);
+            }
+            needs_bus.then(|| GraphOp::SwapBus {
+                target: chain.into(),
+                bus: layout.build(),
+            })
+        });
+        let insert = GraphOp::InsertChain {
+            target: chain.into(),
+            device: rack,
+            index,
+            chain: node,
+        };
+        self.send_edits(swap.into_iter().chain([insert]).collect());
+        self.mark_edit("Add Chain");
     }
+
+    /// Removes a chain from the rack `rack`, parking its devices for undo.
+    pub(super) fn remove_rack_chain(&mut self, chain: ChainRef, rack: DeviceId, id: ChainId) {
+        let removed = self.rack_chains_mut(chain, rack).and_then(|chains| {
+            let i = chains.iter().position(|c| c.id == id)?;
+            Some(chains.remove(i))
+        });
+        let Some(mut removed) = removed else {
+            return;
+        };
+        for d in &mut removed.devices {
+            self.retire_device_runtimes(chain, d);
+        }
+        self.send_edits(vec![GraphOp::RemoveChain {
+            target: chain.into(),
+            device: rack,
+            chain: id,
+        }]);
+        self.mark_edit("Delete Chain");
+    }
+
+    pub(super) fn rack_chains_mut(
+        &mut self,
+        chain: ChainRef,
+        rack: DeviceId,
+    ) -> Option<&mut Vec<Chain>> {
+        match &mut self
+            .chain_mut(chain)?
+            .iter_mut()
+            .find(|d| d.id == rack)?
+            .kind
+        {
+            DeviceKind::Rack { chains, .. } => Some(chains),
+            _ => None,
+        }
+    }
+
+    pub(super) fn chain_of_device(&self, id: DeviceId) -> Option<ChainRef> {
+        find_device(&self.project.master.devices, ChainRef::Master, id).or_else(|| {
+            self.project
+                .tracks
+                .iter()
+                .find_map(|t| find_device(&t.devices, ChainRef::Track(t.id), id))
+        })
+    }
+}
+
+/// The chain holding the device `id`, searching `devices` and everything nested in them.
+fn find_device(devices: &[Device], here: ChainRef, id: DeviceId) -> Option<ChainRef> {
+    for d in devices {
+        if d.id == id {
+            return Some(here);
+        }
+        for chain in d.chains() {
+            let found = here
+                .child(d.id, chain.id)
+                .and_then(|child| find_device(&chain.devices, child, id));
+            if found.is_some() {
+                return found;
+            }
+        }
+    }
+    None
+}
+
+/// Whether a device reporting `b` is only repeating `a`, give or take a float conversion.
+fn nearly_equal(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-6 * a.abs().max(1.0)
 }

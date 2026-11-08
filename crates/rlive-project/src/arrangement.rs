@@ -1,7 +1,8 @@
 //! The Arrangement: clips placed on a linear timeline, one lane per track.
 
-use crate::{Clip, Project, Track};
-use rlive_core::{ArrClipId, PPQ};
+use crate::defaults::is_default;
+use crate::{Breakpoint, Clip, Project, Track};
+use rlive_core::{ArrClipId, TimeSignature, TrackId, PPQ};
 use serde::{Deserialize, Serialize};
 
 /// A clip placed on a track's timeline.
@@ -66,12 +67,75 @@ impl ArrangementClip {
     }
 }
 
+/// A named position on the timeline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Locator {
+    pub tick: u64,
+    pub name: String,
+    /// The user's info text.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub info: String,
+}
+
+/// A change of time signature on the timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignatureMarker {
+    pub tick: u64,
+    pub signature: TimeSignature,
+}
+
+/// The Arrangement's tempo envelope, in BPM.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TempoAutomation {
+    pub points: Vec<Breakpoint>,
+    /// The range the envelope is drawn in, which also bounds a mapped MIDI control.
+    pub min: f64,
+    pub max: f64,
+}
+
+impl Default for TempoAutomation {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            min: 60.0,
+            max: 200.0,
+        }
+    }
+}
+
+/// A lane of alternate takes under a track.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TakeLane {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub color: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub clips: Vec<ArrangementClip>,
+}
+
 /// Timeline settings shared by all tracks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Arrangement {
     pub loop_enabled: bool,
     pub loop_start: u64,
     pub loop_end: u64,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub punch_in: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub punch_out: bool,
+    /// Where playback starts when none has been set by the insert marker.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub song_start: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub locators: Vec<Locator>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub signatures: Vec<SignatureMarker>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub tempo: TempoAutomation,
+    /// Groups of tracks whose clips edit together. A track is in at most one.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub linked_tracks: Vec<Vec<TrackId>>,
 }
 
 impl Default for Arrangement {
@@ -80,6 +144,13 @@ impl Default for Arrangement {
             loop_enabled: false,
             loop_start: 0,
             loop_end: 16 * PPQ,
+            punch_in: false,
+            punch_out: false,
+            song_start: None,
+            locators: Vec::new(),
+            signatures: Vec::new(),
+            tempo: TempoAutomation::default(),
+            linked_tracks: Vec::new(),
         }
     }
 }

@@ -257,7 +257,7 @@ pub enum FocusArea {
 #[derive(Clone)]
 pub enum ClipBoard {
     Notes(Vec<NoteData>),
-    Slot(Clip),
+    Slot(Box<Clip>),
     /// Clips with their tracks, their starts relative to the earliest.
     ArrClips(Vec<(TrackId, ArrangementClip)>),
 }
@@ -545,7 +545,7 @@ impl RliveApp {
         match c {
             C::Copy | C::Cut => {
                 if let Some(clip) = self.session.clip(track, slot).cloned() {
-                    self.ui.clipboard = Some(ClipBoard::Slot(clip));
+                    self.ui.clipboard = Some(ClipBoard::Slot(Box::new(clip)));
                     if c == C::Cut {
                         self.session.set_clip(track, slot, None);
                     }
@@ -553,7 +553,7 @@ impl RliveApp {
             }
             C::Paste => {
                 if let Some(ClipBoard::Slot(clip)) = self.ui.clipboard.clone() {
-                    self.paste_slot(track, slot, clip);
+                    self.paste_slot(track, slot, *clip);
                 }
             }
             C::Duplicate => session_view::duplicate_clip(&mut self.session, track, slot),

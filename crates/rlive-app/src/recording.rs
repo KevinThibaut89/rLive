@@ -20,12 +20,7 @@ impl Take {
         if let Some((start, velocity)) = self.open.remove(&key) {
             let start = start.max(0.0).round() as u64;
             let length = (until.round() as u64).saturating_sub(start).max(MIN_NOTE);
-            self.notes.push(NoteData {
-                start,
-                length,
-                key,
-                velocity,
-            });
+            self.notes.push(NoteData::new(start, length, key, velocity));
         }
     }
 
@@ -129,7 +124,8 @@ impl Recording {
                         color: [255, 255, 255],
                         length,
                         looped: false,
-                        content: ClipContent::Midi { notes },
+                        content: ClipContent::midi(notes),
+                        ..Clip::default()
                     },
                 }
             })

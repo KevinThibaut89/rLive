@@ -1,8 +1,8 @@
 use super::*;
 use rlive_core::param::mixer;
-use rlive_core::{MidiMessage, ParamInfo, ParamKind};
+use rlive_core::{ChainId, MidiMessage, ParamInfo, ParamKind};
 use rlive_engine::create_engine;
-use rlive_project::{ArrangementClip, Clip};
+use rlive_project::{ArrangementClip, Chain, Clip, RackKind};
 
 fn session() -> (rlive_engine::Engine, Session) {
     let (engine, handle) = create_engine(48_000.0, 512);
@@ -58,19 +58,31 @@ fn undo_restores_an_edited_clip_and_leaves_others_playing() {
 }
 
 #[test]
-fn knob_moves_make_no_step_and_survive_undo() {
+fn a_knob_move_is_one_step_and_undo_restores_it() {
     let (_engine, mut s) = session();
     let t = s.project.tracks[0].id;
     let clip = Clip::new_midi("x", [1, 2, 3], 1, s.project.time_signature);
     s.set_clip(t, 2, Some(clip));
     commit(&mut s);
     let (dev, param) = poly_param(&s, t);
-    s.set_param(ChainRef::Track(t), dev, param, 0.25);
+    // A drag: many values while the pointer is down, one step when it lifts.
+    for v in [0.1, 0.2, 0.25] {
+        s.set_param(ChainRef::Track(t), dev, param, v);
+        s.commit_edits(true);
+    }
     commit(&mut s);
-    assert_eq!(s.history.undo_label(), Some("Edit Clip"));
+    assert_eq!(s.history.undo_label(), Some("Change Parameter"));
     assert!(s.undo());
+    assert!(
+        !s.project.tracks[0].devices[0].params.contains_key(&param),
+        "back to never having been moved"
+    );
+    assert_eq!(s.history.undo_label(), Some("Edit Clip"));
+    assert!(s.redo());
     assert_eq!(s.project.tracks[0].devices[0].params[&param], 0.25);
-    assert!(!s.undo(), "the knob move must not be a step");
+    assert!(s.undo());
+    assert!(s.undo(), "and then the clip edit");
+    assert!(!s.undo(), "the gesture was one step");
 }
 
 #[test]
@@ -81,6 +93,7 @@ fn deleting_a_track_is_undoable_with_its_devices() {
     let (dev, param) = poly_param(&s, t);
     s.set_param(ChainRef::Track(t), dev, param, 0.75);
     s.project.track_mut(t).unwrap().volume_db = -9.0;
+    commit(&mut s);
     let ids: Vec<DeviceId> = s.devices(ChainRef::Track(t)).iter().map(|d| d.id).collect();
     s.delete_track(t);
     commit(&mut s);
@@ -131,7 +144,7 @@ fn a_drag_of_direct_edits_is_one_step() {
 }
 
 #[test]
-fn dirty_clears_at_the_saved_state_unless_a_knob_moved() {
+fn dirty_clears_at_the_saved_state_including_after_a_knob_move() {
     let (_engine, mut s) = session();
     let t = s.project.tracks[0].id;
     let clip = Clip::new_midi("x", [1, 2, 3], 1, s.project.time_signature);
@@ -146,7 +159,12 @@ fn dirty_clears_at_the_saved_state_unless_a_knob_moved() {
     let (dev, param) = poly_param(&s, t);
     s.set_param(ChainRef::Track(t), dev, param, 0.5);
     s.undo();
-    assert!(s.dirty, "the knob move still needs saving");
+    assert!(s.dirty, "the clip edit still needs saving");
+    s.undo();
+    assert!(
+        !s.dirty,
+        "undoing the knob and the clip reaches the saved state"
+    );
 }
 
 fn on(key: u8) -> MidiMessage {
@@ -177,12 +195,9 @@ fn a_timeline_clip_is_audible_from_the_marker() {
     let (mut engine, mut s) = session();
     let t = silent_project(&mut s);
     let mut clip = Clip::new_midi("x", [1, 2, 3], 1, s.project.time_signature);
-    clip.notes_mut().unwrap().push(rlive_project::NoteData {
-        start: 0,
-        length: 3000,
-        key: 60,
-        velocity: 1.0,
-    });
+    clip.notes_mut()
+        .unwrap()
+        .push(rlive_project::NoteData::new(0, 3000, 60, 1.0));
     s.arr_place(t, ArrangementClip::new(clip, 3840));
     s.seek(3840.0);
     render(&mut engine, &mut s, 1024);
@@ -345,12 +360,9 @@ fn edits_reach_engine() {
     let t = s.add_track(TrackKind::Midi, None);
     assert_eq!(s.project.tracks.len(), 4);
     let mut clip = Clip::new_midi("x", [1, 2, 3], 1, s.project.time_signature);
-    clip.notes_mut().unwrap().push(rlive_project::NoteData {
-        start: 0,
-        length: 960,
-        key: 60,
-        velocity: 1.0,
-    });
+    clip.notes_mut()
+        .unwrap()
+        .push(rlive_project::NoteData::new(0, 960, 60, 1.0));
     s.set_clip(t, 0, Some(clip));
     s.add_builtin(ChainRef::Track(t), "rlive.reverb");
     assert_eq!(s.devices(ChainRef::Track(t)).len(), 2);
@@ -522,6 +534,495 @@ fn every_parameter_has_a_cell_that_survives_insert_remove_and_move() {
     let after = s.effective_norm(chain, poly, info.id).unwrap();
     assert!((after - 0.8).abs() < 1e-3, "{after}");
     assert_eq!(s.project.tracks[0].devices[1].params[&info.id], knob);
+}
+
+#[test]
+fn undo_of_a_parameter_goes_down_the_parameter_path_without_a_rebuild() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    let poly = s.devices(chain)[0].id;
+    let info = poly_info(&s, poly);
+    let cell = s.device_cell(chain, poly, info.id).unwrap();
+    let shared = s.track_shared[&t].clone();
+    let layout_base = s.layouts[&chain].base(cell).unwrap();
+    render(&mut engine, &mut s, 1024);
+    let knob = info.from_normalized(0.8);
+    s.set_param(chain, poly, info.id, knob);
+    commit(&mut s);
+    render(&mut engine, &mut s, 2048);
+    assert!((s.effective_norm(chain, poly, info.id).unwrap() - 0.8).abs() < 1e-3);
+
+    s.undo();
+    assert!(Arc::ptr_eq(&shared, &s.track_shared[&t]), "no rebuild");
+    assert_eq!(s.device_cell(chain, poly, info.id), Some(cell));
+    assert_eq!(s.layouts[&chain].base(cell), Some(layout_base));
+    render(&mut engine, &mut s, 2048);
+    assert!(
+        (s.effective_norm(chain, poly, info.id).unwrap() as f64 - info.to_normalized(layout_base))
+            .abs()
+            < 1e-3
+    );
+
+    s.redo();
+    render(&mut engine, &mut s, 2048);
+    assert!((s.effective_norm(chain, poly, info.id).unwrap() - 0.8).abs() < 1e-3);
+}
+
+#[test]
+fn undo_restores_the_mixer_and_transport_through_the_engine() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    let shared = s.track_shared[&t].clone();
+    render(&mut engine, &mut s, 1024);
+    {
+        let track = s.project.track_mut(t).unwrap();
+        track.volume_db = -12.0;
+        track.pan = 0.5;
+    }
+    s.sync_mix(t);
+    s.set_master_volume(-6.0);
+    s.set_tempo(90.0);
+    s.set_metronome(true);
+    s.set_quantize(rlive_core::Quantize::Beat);
+    commit(&mut s);
+
+    assert!(s.undo());
+    assert_eq!(s.project.tracks[0].volume_db, 0.0);
+    assert_eq!(s.project.tracks[0].pan, 0.0);
+    assert_eq!(s.project.master.volume_db, 0.0);
+    assert_eq!(s.project.tempo, 120.0);
+    assert!(!s.project.metronome);
+    assert_eq!(s.project.quantize, rlive_core::Quantize::Bar);
+    assert!(Arc::ptr_eq(&shared, &s.track_shared[&t]), "no rebuild");
+    assert_eq!(
+        s.layouts[&chain].base(rlive_engine::mix_cell::VOLUME),
+        Some(0.0)
+    );
+    assert_eq!(
+        s.layouts[&ChainRef::Master].base(rlive_engine::mix_cell::VOLUME),
+        Some(0.0)
+    );
+    render(&mut engine, &mut s, 512);
+
+    assert!(s.redo());
+    assert_eq!(s.project.tracks[0].volume_db, -12.0);
+    assert_eq!(s.project.tempo, 90.0);
+    assert_eq!(
+        s.layouts[&chain].base(rlive_engine::mix_cell::VOLUME),
+        Some(-12.0)
+    );
+}
+
+#[test]
+fn undo_of_a_time_signature_change_restores_it() {
+    let (_engine, mut s) = session();
+    s.set_time_signature(rlive_core::TimeSignature {
+        numerator: 3,
+        denominator: 4,
+    });
+    commit(&mut s);
+    assert_eq!(s.history.undo_label(), Some("Change Time Signature"));
+    s.undo();
+    assert_eq!(s.project.time_signature.numerator, 4);
+}
+
+#[test]
+fn arm_and_expanded_are_not_undoable() {
+    let (_engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    let dev = s.devices(chain)[0].id;
+    s.set_arm(t, true, true);
+    s.set_device_expanded(chain, dev, false);
+    commit(&mut s);
+    assert!(s.history.undo_label().is_none(), "neither made a step");
+    s.set_bypass(chain, dev, true);
+    commit(&mut s);
+    assert!(s.project.track(t).unwrap().arm);
+    s.undo();
+    assert!(s.project.track(t).unwrap().arm, "undo leaves arm alone");
+    assert!(!s.devices(chain)[0].expanded, "and the view state");
+    assert!(!s.devices(chain)[0].bypass, "but restores the bypass");
+    let activator = s.activator_cell(chain, dev).unwrap();
+    assert_eq!(s.layouts[&chain].base(activator), Some(1.0));
+}
+
+/// A track holding a rack, its chain, and a device inside it.
+fn session_with_rack() -> (
+    rlive_engine::Engine,
+    Session,
+    TrackId,
+    DeviceId,
+    ChainId,
+    DeviceId,
+) {
+    let mut p = Project::new_default();
+    let t = p.tracks[0].id;
+    let mut rack = Device::rack(RackKind::Instrument, "Rack");
+    let rack_id = rack.id;
+    let mut chain = Chain::new("A");
+    let chain_id = chain.id;
+    let inner = Device::builtin("rlive.reverb", "Inner");
+    let inner_id = inner.id;
+    chain.devices.push(inner);
+    chain
+        .devices
+        .push(Device::builtin("rlive.delay", "Inner FX"));
+    if let DeviceKind::Rack { chains, .. } = &mut rack.kind {
+        chains.push(chain);
+    }
+    p.tracks[0].devices.push(rack);
+    let (engine, handle) = create_engine(48_000.0, 512);
+    let s = Session::new(handle, p, PluginCache::default());
+    (engine, s, t, rack_id, chain_id, inner_id)
+}
+
+#[test]
+fn undo_of_a_nested_chain_edit_restores_it_without_a_rebuild() {
+    let (mut engine, mut s, t, rack, chain_id, inner) = session_with_rack();
+    let root = ChainRef::Track(t);
+    let nested = root.child(rack, chain_id).unwrap();
+    let shared = s.track_shared[&t].clone();
+    render(&mut engine, &mut s, 1024);
+    assert_eq!(s.devices(nested).len(), 2);
+    assert!(s.runtimes.contains_key(&inner));
+
+    // A parameter on a nested device, then removing that device.
+    let info = s.runtimes[&inner].params[0].clone();
+    let value = info.from_normalized(0.7);
+    let cell = s.device_cell(nested, inner, info.id).unwrap();
+    s.set_param(nested, inner, info.id, value);
+    commit(&mut s);
+    assert_eq!(s.devices(nested)[0].params[&info.id], value);
+    assert_eq!(s.history.undo_label(), Some("Change Parameter"));
+
+    s.remove_device(nested, inner);
+    commit(&mut s);
+    assert_eq!(s.devices(nested).len(), 1);
+    assert!(!s.runtimes.contains_key(&inner));
+
+    assert!(s.undo(), "undo the removal");
+    assert_eq!(s.devices(nested).len(), 2);
+    assert_eq!(s.devices(nested)[0].id, inner);
+    assert_eq!(s.devices(nested)[0].params[&info.id], value);
+    assert!(s.runtimes.contains_key(&inner));
+    assert!(Arc::ptr_eq(&shared, &s.track_shared[&t]), "no rebuild");
+
+    assert!(s.undo(), "undo the parameter");
+    let cell_now = s.device_cell(nested, inner, info.id).unwrap();
+    assert_eq!(cell_now, cell, "the nested device kept its cell");
+    assert!(!s.devices(nested)[0].params.contains_key(&info.id));
+    render(&mut engine, &mut s, 1024);
+
+    assert!(s.redo());
+    assert_eq!(s.devices(nested)[0].params[&info.id], value);
+    assert!(s.redo());
+    assert_eq!(s.devices(nested).len(), 1);
+    render(&mut engine, &mut s, 1024);
+}
+
+#[test]
+fn undo_brings_back_a_rack_chain_with_its_devices() {
+    let (mut engine, mut s, t, rack, chain_id, inner) = session_with_rack();
+    let root = ChainRef::Track(t);
+    let nested = root.child(rack, chain_id).unwrap();
+    render(&mut engine, &mut s, 1024);
+    s.remove_rack_chain(root, rack, chain_id);
+    commit(&mut s);
+    assert!(!s.runtimes.contains_key(&inner));
+    assert!(s.devices(nested).is_empty());
+    render(&mut engine, &mut s, 1024);
+
+    assert!(s.undo());
+    assert_eq!(s.devices(nested).len(), 2);
+    assert!(s.runtimes.contains_key(&inner));
+    assert!(s.device_cell(nested, inner, 0).is_some());
+    render(&mut engine, &mut s, 1024);
+}
+
+#[test]
+fn undo_of_a_nested_chain_setting_changes_only_that_chain() {
+    let (mut engine, mut s, t, rack, chain_id, inner) = session_with_rack();
+    let root = ChainRef::Track(t);
+    render(&mut engine, &mut s, 1024);
+    let before = s.devices(root)[1].clone();
+    let shared = s.track_shared[&t].clone();
+    let rack_ref = s.project.track_mut(t).unwrap().device_mut(rack).unwrap();
+    rack_ref
+        .chains_mut()
+        .find(|c| c.id == chain_id)
+        .unwrap()
+        .mix
+        .volume_db = -3.0;
+    commit_direct(&mut s);
+    assert_eq!(s.history.undo_label(), Some("Edit"));
+    s.undo();
+    assert_eq!(s.devices(root)[1], before);
+    assert!(Arc::ptr_eq(&shared, &s.track_shared[&t]), "no rebuild");
+    assert!(s.runtimes.contains_key(&inner));
+}
+
+fn commit_direct(s: &mut Session) {
+    s.commit_edits(true);
+    s.commit_edits(false);
+}
+
+/// A plugin that counts how often the host touches its state.
+struct CountingPlugin {
+    inner: Box<FakePlugin>,
+    loads: Arc<std::sync::atomic::AtomicUsize>,
+    saves: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl rlive_plugin_host::PluginHandle for CountingPlugin {
+    fn descriptor(&self) -> &PluginDescriptor {
+        self.inner.descriptor()
+    }
+    fn params(&self) -> Vec<ParamInfo> {
+        self.inner.params()
+    }
+    fn param_value(&self, id: u32) -> Option<f64> {
+        self.inner.param_value(id)
+    }
+    fn format_value(&self, id: u32, v: f64) -> Option<String> {
+        self.inner.format_value(id, v)
+    }
+    fn save_state(&mut self) -> Option<Vec<u8>> {
+        self.saves
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(vec![7, 7, 7])
+    }
+    fn load_state(&mut self, _: &[u8]) -> bool {
+        self.loads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+    fn has_editor(&self) -> bool {
+        false
+    }
+    fn is_editor_open(&self) -> bool {
+        false
+    }
+    fn open_editor(&mut self) -> rlive_plugin_host::Result<()> {
+        Ok(())
+    }
+    fn close_editor(&mut self) {}
+    fn idle(&mut self) -> Vec<HostNotification> {
+        self.inner.idle()
+    }
+    fn latency(&self) -> u32 {
+        0
+    }
+}
+
+#[test]
+fn undo_does_not_touch_an_unaffected_plugin() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    s.add_builtin(chain, "rlive.reverb");
+    let plugin_dev = s.devices(chain)[1].id;
+    let params = s.runtimes[&plugin_dev].params.clone();
+    let loads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let saves = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    s.runtimes.get_mut(&plugin_dev).unwrap().plugin = Some(Box::new(CountingPlugin {
+        inner: FakePlugin::new(params, Vec::new()),
+        loads: loads.clone(),
+        saves: saves.clone(),
+    }));
+    s.commit_edits(false);
+
+    // Edit a different device on the same track, undo and redo it.
+    let poly = s.devices(chain)[0].id;
+    let info = poly_info(&s, poly);
+    s.set_param(chain, poly, info.id, info.from_normalized(0.4));
+    commit(&mut s);
+    s.undo();
+    s.redo();
+    render(&mut engine, &mut s, 1024);
+
+    use std::sync::atomic::Ordering::Relaxed;
+    assert_eq!(loads.load(Relaxed), 0, "state wasn't reloaded");
+    assert_eq!(saves.load(Relaxed), 0, "state wasn't read");
+    assert!(s.runtimes[&plugin_dev].plugin.is_some());
+}
+
+#[test]
+fn a_removed_plugin_gets_its_state_back_from_the_parked_blob() {
+    let (_engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    let device = Device::plugin(PluginFormat::Clap, "fake", "/nonexistent".into(), "Fake");
+    let dev = device.id;
+    s.add_device(chain, None, device);
+    s.runtimes.get_mut(&dev).unwrap().plugin = Some(Box::new(CountingPlugin {
+        inner: FakePlugin::new(Vec::new(), Vec::new()),
+        loads: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        saves: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    }));
+    commit(&mut s);
+    s.remove_device(chain, dev);
+    commit(&mut s);
+    assert_eq!(
+        s.history.parked_devices[&dev].plugin_state,
+        Some(vec![7, 7, 7]),
+        "the blob is parked, not in the snapshot"
+    );
+    assert!(s.undo());
+    let restored = s.devices(chain).iter().find(|d| d.id == dev).unwrap();
+    assert!(matches!(
+        &restored.kind,
+        DeviceKind::Plugin { state: Some(blob), .. } if blob == &[7, 7, 7]
+    ));
+}
+
+#[test]
+fn a_plugin_editors_changes_settle_into_one_step_and_undo_restores_them() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    s.add_builtin(chain, "rlive.reverb");
+    let dev = s.devices(chain)[1].id;
+    let info = s.runtimes[&dev].params[0].clone();
+    commit(&mut s);
+    let start = s.history.undo_label();
+
+    // A drag in the plugin's own window: values over several frames.
+    for v in [0.2, 0.4, 0.6] {
+        let value = info.from_normalized(v);
+        s.runtimes.get_mut(&dev).unwrap().plugin = Some(FakePlugin::new(
+            s.runtimes[&dev].params.clone(),
+            vec![HostNotification::ParamChanged { id: info.id, value }],
+        ));
+        render(&mut engine, &mut s, 512);
+        s.commit_edits(false);
+    }
+    assert_eq!(s.history.undo_label(), start, "still settling");
+    for _ in 0..super::undo::SETTLE_FRAMES {
+        s.commit_edits(false);
+    }
+    assert_eq!(s.history.undo_label(), Some("Change Parameter"));
+    assert!(s.undo());
+    assert!(!s.project.tracks[0].devices[1].params.contains_key(&info.id));
+    assert_eq!(s.history.undo_label(), start, "one step for the whole drag");
+}
+
+#[test]
+fn a_device_repeating_a_value_it_was_given_makes_no_step() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    s.add_builtin(chain, "rlive.reverb");
+    let dev = s.devices(chain)[1].id;
+    commit(&mut s);
+    let info = s.runtimes[&dev].params[0].clone();
+    let value = info.from_normalized(0.3);
+    s.set_param(chain, dev, info.id, value);
+    commit(&mut s);
+    s.undo();
+    // Undo pushed the old value down; a plugin echoing it back must not count as an edit.
+    let old = info.default;
+    s.runtimes.get_mut(&dev).unwrap().plugin = Some(FakePlugin::new(
+        s.runtimes[&dev].params.clone(),
+        vec![HostNotification::ParamChanged {
+            id: info.id,
+            value: old,
+        }],
+    ));
+    render(&mut engine, &mut s, 512);
+    assert!(s.history.pending.is_none(), "an echo isn't an edit");
+    assert_eq!(s.history.redo_label(), Some("Change Parameter"));
+    render(&mut engine, &mut s, 512);
+}
+
+#[test]
+fn undoing_a_plugins_first_knob_move_restores_its_loaded_value_not_its_default() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    let device = Device::plugin(PluginFormat::Clap, "fake", "/nonexistent".into(), "Fake");
+    let dev = device.id;
+    s.add_device(chain, None, device);
+    commit(&mut s);
+    let info = ParamInfo::continuous(5, "Knob", 0.0, 1.0, 0.25, "");
+    s.runtimes.get_mut(&dev).unwrap().params = vec![info.clone()];
+    s.refit_device_cells(chain, dev);
+    render(&mut engine, &mut s, 512);
+    let cell = s.device_cell(chain, dev, 5).unwrap();
+    // The value the plugin was seeded with, which isn't its declared default.
+    s.layouts.get_mut(&chain).unwrap().note_value(cell, 0.6);
+    s.set_param(chain, dev, 5, 0.9);
+    commit(&mut s);
+    assert!(s.undo());
+    assert_eq!(s.layouts[&chain].base(cell), Some(0.6));
+    assert!(!s.devices(chain)[1].params.contains_key(&5));
+    render(&mut engine, &mut s, 512);
+}
+
+#[test]
+fn undo_restores_a_samplers_sample() {
+    let dir = std::env::temp_dir().join(format!("rlive-undo-sample-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (a, b) = (dir.join("a.wav"), dir.join("b.wav"));
+    rlive_devices::write_wav(&a, &[0.5; 4800], &[0.5; 4800], 48_000).unwrap();
+    rlive_devices::write_wav(&b, &[0.25; 4800], &[0.25; 4800], 48_000).unwrap();
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    s.add_builtin(chain, "rlive.sampler");
+    let dev = s.devices(chain)[1].id;
+    commit(&mut s);
+    s.set_device_sample(chain, dev, a.clone());
+    commit(&mut s);
+    render(&mut engine, &mut s, 512);
+    s.set_device_sample(chain, dev, b.clone());
+    commit(&mut s);
+    assert_eq!(s.devices(chain)[1].sample(0).unwrap().path, b);
+    s.undo();
+    assert_eq!(s.devices(chain)[1].sample(0).unwrap().path, a);
+    render(&mut engine, &mut s, 512);
+    s.undo();
+    assert!(s.devices(chain)[1].sample(0).is_none(), "back to no sample");
+    render(&mut engine, &mut s, 512);
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn a_v1_fixture_loads_into_a_session_and_keeps_working() {
+    let (mut engine, mut s) = session();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../rlive-project/tests/fixtures/v1/audio_and_device_state.rlive");
+    let dir = std::env::temp_dir().join(format!("rlive-v1-load-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let copy = dir.join("song.rlive");
+    std::fs::copy(&path, &copy).unwrap();
+    s.load(&copy).unwrap();
+    assert_eq!(s.project.version, rlive_project::FORMAT_VERSION);
+    assert_eq!(s.project.master.devices.len(), 2);
+    assert_eq!(
+        s.project.tracks[1].devices[0].sample(0).unwrap().path,
+        PathBuf::from("/samples/piano C3.wav")
+    );
+    render(&mut engine, &mut s, 1024);
+    assert!(dir.join("song.v1.bak").exists());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_rack_in_a_project_reaches_the_engine() {
+    let (mut engine, mut s, t, rack, chain_id, inner) = session_with_rack();
+    let root = ChainRef::Track(t);
+    let nested = root.child(rack, chain_id).unwrap();
+    assert_eq!(s.devices(nested).len(), 2);
+    assert_eq!(s.chain_of_device(inner), Some(nested));
+    // The chain's cells live on the track's bus.
+    let info = s.runtimes[&inner].params[0].clone();
+    let value = info.from_normalized(0.5);
+    s.set_param(nested, inner, info.id, value);
+    render(&mut engine, &mut s, 2048);
+    assert!((s.effective_norm(nested, inner, info.id).unwrap() - 0.5).abs() < 1e-3);
 }
 
 #[test]
@@ -729,10 +1230,7 @@ fn swapping_a_sample_keeps_held_notes_sounding_and_recycles_the_old_one() {
         refs_with_device - 1,
         "the engine's reference came back and was dropped here"
     );
-    assert!(matches!(
-        &s.project.tracks[0].devices[0].kind,
-        DeviceKind::Builtin { sample: Some(p), .. } if *p == b
-    ));
+    assert_eq!(s.project.tracks[0].devices[0].sample(0).unwrap().path, b);
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -745,9 +1243,6 @@ fn a_sample_that_will_not_load_leaves_the_current_one_in_place() {
     let dev = s.devices(chain)[1].id;
     s.set_device_sample(chain, dev, PathBuf::from("/nonexistent/x.wav"));
     assert!(s.runtimes[&dev].error.is_some());
-    assert!(matches!(
-        &s.project.tracks[0].devices[1].kind,
-        DeviceKind::Builtin { sample: None, .. }
-    ));
+    assert!(s.project.tracks[0].devices[1].sample(0).is_none());
     render(&mut engine, &mut s, 512);
 }

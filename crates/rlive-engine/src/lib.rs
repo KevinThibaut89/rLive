@@ -398,7 +398,11 @@ impl Engine {
                 .iter_mut()
                 .find(|d| d.id == step.rack)?
                 .as_rack_mut()?;
-            let chain = rack.chains.iter_mut().find(|c| c.id == step.chain)?;
+            let chain = rack
+                .chains
+                .iter_mut()
+                .chain(rack.returns.iter_mut())
+                .find(|c| c.id == step.chain)?;
             devices = &mut chain.devices;
         }
         Some(devices)

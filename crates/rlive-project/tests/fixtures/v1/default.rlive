@@ -1,0 +1,196 @@
+(
+    version: 1,
+    tempo: 120.0,
+    time_signature: (
+        numerator: 4,
+        denominator: 4,
+    ),
+    quantize: Bar,
+    metronome: false,
+    scenes: [
+        (
+            name: "1",
+        ),
+        (
+            name: "2",
+        ),
+        (
+            name: "3",
+        ),
+        (
+            name: "4",
+        ),
+        (
+            name: "5",
+        ),
+        (
+            name: "6",
+        ),
+        (
+            name: "7",
+        ),
+        (
+            name: "8",
+        ),
+    ],
+    tracks: [
+        (
+            id: (1),
+            name: "1 Poly",
+            color: (84, 128, 228),
+            kind: Midi,
+            volume_db: 0.0,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            arm: false,
+            devices: [
+                (
+                    id: (2),
+                    name: "Poly Synth",
+                    kind: Builtin(
+                        type_id: "rlive.poly",
+                        sample: None,
+                    ),
+                    bypass: false,
+                    params: {},
+                    expanded: true,
+                ),
+            ],
+            clips: [
+                Some((
+                    name: "Chords",
+                    color: (84, 128, 228),
+                    length: 7680,
+                    looped: true,
+                    content: Midi(
+                        notes: [
+                            (
+                                start: 0,
+                                length: 3600,
+                                key: 57,
+                                velocity: 0.8,
+                            ),
+                            (
+                                start: 0,
+                                length: 3600,
+                                key: 60,
+                                velocity: 0.8,
+                            ),
+                            (
+                                start: 0,
+                                length: 3600,
+                                key: 64,
+                                velocity: 0.8,
+                            ),
+                            (
+                                start: 3840,
+                                length: 3600,
+                                key: 53,
+                                velocity: 0.8,
+                            ),
+                            (
+                                start: 3840,
+                                length: 3600,
+                                key: 57,
+                                velocity: 0.8,
+                            ),
+                            (
+                                start: 3840,
+                                length: 3600,
+                                key: 60,
+                                velocity: 0.8,
+                            ),
+                        ],
+                    ),
+                )),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            arrangement: [],
+        ),
+        (
+            id: (3),
+            name: "2 Poly",
+            color: (255, 165, 41),
+            kind: Midi,
+            volume_db: 0.0,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            arm: false,
+            devices: [
+                (
+                    id: (4),
+                    name: "Poly Synth",
+                    kind: Builtin(
+                        type_id: "rlive.poly",
+                        sample: None,
+                    ),
+                    bypass: false,
+                    params: {},
+                    expanded: true,
+                ),
+                (
+                    id: (5),
+                    name: "Delay",
+                    kind: Builtin(
+                        type_id: "rlive.delay",
+                        sample: None,
+                    ),
+                    bypass: false,
+                    params: {},
+                    expanded: true,
+                ),
+            ],
+            clips: [
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            arrangement: [],
+        ),
+        (
+            id: (6),
+            name: "3 Audio",
+            color: (26, 255, 47),
+            kind: Audio,
+            volume_db: 0.0,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            arm: false,
+            devices: [],
+            clips: [
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            arrangement: [],
+        ),
+    ],
+    master: (
+        volume_db: 0.0,
+        devices: [],
+    ),
+    arrangement: (
+        loop_enabled: false,
+        loop_start: 0,
+        loop_end: 15360,
+    ),
+)

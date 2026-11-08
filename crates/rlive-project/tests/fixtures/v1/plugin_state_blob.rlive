@@ -1,0 +1,126 @@
+(
+    version: 1,
+    tempo: 120.0,
+    time_signature: (
+        numerator: 4,
+        denominator: 4,
+    ),
+    quantize: Bar,
+    metronome: false,
+    scenes: [
+        (
+            name: "1",
+        ),
+        (
+            name: "2",
+        ),
+        (
+            name: "3",
+        ),
+        (
+            name: "4",
+        ),
+        (
+            name: "5",
+        ),
+        (
+            name: "6",
+        ),
+        (
+            name: "7",
+        ),
+        (
+            name: "8",
+        ),
+    ],
+    tracks: [
+        (
+            id: (27),
+            name: "Plugins",
+            color: (255, 148, 166),
+            kind: Midi,
+            volume_db: 0.0,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            arm: false,
+            devices: [
+                (
+                    id: (28),
+                    name: "Synth",
+                    kind: Plugin(
+                        format: Clap,
+                        plugin_id: "com.example.synth",
+                        path: "/plugins/Synth.clap",
+                        state: Some("AyhNcpe84QYrUHWav+QJLlN4ncLnDDFWe6DF6g80WX6jyO0SN1yBpsvwFTpfhKnO8xg9Yoes0fYbQGWKr9T5HkNojbLX/CFGa5C12v8kSW6TuN0CJ0xxlrvgBSpPdJm+4wgtUnecweYLMFV6n8TpDjNYfaLH7BE2W4Clyu8UOV6DqM3yFzxhhqvQ9Ro/ZImu0/gdQmeMsdb7IEVqj7TZ/iNIbZK33AEmS3CVut8EKU5zmL3iByxRdpvA5QovVHmew+gNMld8ocbrEDVaf6TJ7hM4XYKnzPEWO2CFqs/0GT5jiK3S9xxBZouw1fofRGmOs9j9IkdskbbbACVKb5S53gMoTXKXvOEGK1B1mr/kCS5TeJ3C5wwxVnugxeoPNFl+o8jtEjdcgabL8BU6X4SpzvMYPWKHrNH2G0Bliq/U+R5DaI2y1/whRmuQtdr/JEluk7jdAidMcZa74AUqT3SZvuMILVJ3nMHmCzBVep/E6Q4zWH2ix+wRNluApcrvFDleg6jN8hc8YYar0PUaP2SJrtP4HUJnjLHW+yBFao+02f4jSG2St9wBJktwlbrfBClOc5i94gcsUXabwOUKL1R5nsPoDTJXfKHG6xA1Wn+kye4TOF2Cp8zxFjtgharP9Bk+Y4it0vccQWaLsNX6H0RpjrPY/SJHbJG22wAlSm+Uud4DKE1yl7zhBitQdZq/5AkuU3idwucMMVZ7oMXqDzRZfqPI7RI3XIGmy/AVOl+Eqc7zGD1ih6zR9htAZYqv1PkeQ2iNstf8IUZrkLXa/yRJbpO43QInTHGWu+AFKk90mb7jCC1Sd5zB5gswVXqfxOkOM1h9osfsETZbgKXK7xQ5XoOozfIXPGGGq9D1Gj9kia7T+B1CZ4yx1vsgRWqPtNn+I0htkrfcASZLcJW63wQpTnOYveIHLFF2m8DlCi9UeZ7D6A0yV3yhxusQNVp/pMnuEzhdgqfM8RY7YIWqz/QZPmOIrdL3HEFmi7DV+h9EaY6z2P0iR2yRttsAJUpvlLneAyhNcpe84QYrUHWav+QJLlN4ncLnDDFWe6DF6g80WX6jyO0SN1yBpsvwFTpfhKnO8xg9Yoes0fYbQGWKr9T5HkNojbLX/CFGa5C12v8kSW6TuN0CJ0xxlrvgBSpPdJm+4wgtUnecweYLMFV6n8TpDjNYfaLH7BE2W4Clyu8UOV6DqM3yFzxhhqvQ9Ro/ZImu0/gdQmeMsdb7IEVqj7TZ/iNIbZK33AEmS3CVut8EKU5zmL3iByxRdpvA5QovVHmew+gNMld8ocbrEDVaf6TJ7hM4XYKnzPEWO2CFqs/0GT5jiK3S9xxBZouw1fofRGmOs9j9IkdskbbbACVKb5S53g=="),
+                    ),
+                    bypass: false,
+                    params: {
+                        7: 0.33,
+                    },
+                    expanded: true,
+                ),
+                (
+                    id: (29),
+                    name: "Delay",
+                    kind: Plugin(
+                        format: Vst3,
+                        plugin_id: "0123456789ABCDEF0123456789ABCDEF",
+                        path: "/plugins/Delay.vst3",
+                        state: Some("yO0SN1yBpsvwFTpfhKnO8xg9Yoes0fYbQGWKr9T5Hg=="),
+                    ),
+                    bypass: true,
+                    params: {},
+                    expanded: true,
+                ),
+            ],
+            clips: [
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            arrangement: [],
+        ),
+    ],
+    master: (
+        volume_db: 0.0,
+        devices: [
+            (
+                id: (30),
+                name: "AUDelay",
+                kind: Plugin(
+                    format: AudioUnit,
+                    plugin_id: "aufx:dely:appl",
+                    path: "/Library/Audio/Plug-Ins/Components/Delay.component",
+                    state: Some(""),
+                ),
+                bypass: false,
+                params: {},
+                expanded: true,
+            ),
+            (
+                id: (31),
+                name: "No State",
+                kind: Plugin(
+                    format: Clap,
+                    plugin_id: "com.example.gain",
+                    path: "/plugins/Gain.clap",
+                    state: None,
+                ),
+                bypass: false,
+                params: {},
+                expanded: true,
+            ),
+        ],
+    ),
+    arrangement: (
+        loop_enabled: false,
+        loop_start: 0,
+        loop_end: 15360,
+    ),
+)

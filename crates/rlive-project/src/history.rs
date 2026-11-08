@@ -1,10 +1,21 @@
-//! Undo history: snapshots of the parts of a project that undo covers.
+//! Undo history: snapshots of everything undo covers.
 //!
-//! Snapshots leave out device contents, mix settings and tempo, so moving a
-//! knob never creates a step and undo never reverts one. Unchanged clips are
-//! shared between snapshots, so a step costs roughly what it changed.
+//! A snapshot leaves out plugin state blobs and view state ([`Track::arm`], [`TrackUi`], a
+//! device's `expanded`), which are kept where they are and never compared, so a plugin reporting
+//! a slightly different blob never creates a step. Everything else in a project is covered,
+//! including settings no code knows how to restore yet: each level of the tree is captured as a
+//! "shell", a copy of the type with its children emptied.
+//!
+//! Unchanged data is shared between snapshots at every level down to a single device or clip, so
+//! a step costs roughly what it changed.
+//!
+//! The shells are written out field by field so that taking one never copies a track's notes.
+//! Adding a field is a compile error here, which is the prompt to decide if undo should cover it.
 
-use crate::{Arrangement, ArrangementClip, Clip, Device, Project, Scene, Track, TrackKind};
+use crate::{
+    Arrangement, ArrangementClip, Chain, Clip, Device, DeviceKind, Envelope, Project, Scene,
+    TakeLane, Track, TrackUi,
+};
 use rlive_core::{DeviceId, TrackId};
 use std::collections::{HashMap, HashSet};
 use std::mem::{size_of, size_of_val};
@@ -13,49 +24,101 @@ use std::sync::Arc;
 const MAX_STEPS: usize = 200;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 
+/// One chain of a rack in a snapshot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChainSnap {
+    /// The chain with no devices in it.
+    pub shell: Chain,
+    pub devices: Vec<Arc<DeviceSnap>>,
+}
+
+/// A device and everything nested in it, in a snapshot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceSnap {
+    /// The device with no plugin state, no chains and `expanded` set.
+    pub shell: Device,
+    /// A rack's chains; empty for anything else.
+    pub chains: Vec<ChainSnap>,
+    /// A rack's return chains; empty for anything else.
+    pub returns: Vec<ChainSnap>,
+}
+
+/// A track in a snapshot.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrackSnap {
-    pub id: TrackId,
-    pub name: String,
-    pub color: [u8; 3],
-    pub kind: TrackKind,
-    pub device_ids: Vec<DeviceId>,
+    /// The track with no devices or clips, and with its view state and arm reset.
+    pub shell: Track,
+    pub devices: Vec<Arc<DeviceSnap>>,
     pub clips: Vec<Option<Arc<Clip>>>,
     pub lane: Vec<Arc<ArrangementClip>>,
+    pub automation: Arc<Vec<Envelope>>,
+    pub take_lanes: Arc<Vec<TakeLane>>,
 }
 
+/// The state of a project.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
+    /// The project with no tracks or scenes: tempo, signature, grooves, mappings, and so on.
+    pub shell: Arc<Project>,
     pub scenes: Arc<Vec<Scene>>,
     pub tracks: Vec<Arc<TrackSnap>>,
-    pub master_devices: Vec<DeviceId>,
-    pub arrangement: Arrangement,
+    pub returns: Vec<Arc<TrackSnap>>,
+    pub master: Arc<TrackSnap>,
+    pub arrangement: Arc<Arrangement>,
 }
 
-/// Track settings that undo doesn't cover but a re-created track must keep.
+/// What undo must keep of a track it doesn't cover, for when it comes back.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParkedMix {
-    pub volume_db: f32,
-    pub pan: f32,
-    pub mute: bool,
-    pub solo: bool,
+pub struct ParkedTrack {
     pub arm: bool,
+    pub ui: TrackUi,
 }
 
-impl ParkedMix {
+impl ParkedTrack {
     pub fn of(t: &Track) -> Self {
         Self {
-            volume_db: t.volume_db,
-            pan: t.pan,
-            mute: t.mute,
-            solo: t.solo,
             arm: t.arm,
+            ui: t.ui.clone(),
+        }
+    }
+}
+
+/// What undo must keep of a device it doesn't cover, for when it comes back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParkedDevice {
+    pub plugin_state: Option<Vec<u8>>,
+    pub expanded: bool,
+}
+
+impl ParkedDevice {
+    pub fn of(d: &Device) -> Self {
+        let plugin_state = match &d.kind {
+            DeviceKind::Plugin { state, .. } => state.clone(),
+            _ => None,
+        };
+        Self {
+            plugin_state,
+            expanded: d.expanded,
         }
     }
 }
 
 fn clip_bytes(c: &Clip) -> usize {
     size_of::<Clip>() + size_of_val(c.notes()) + c.name.len()
+}
+
+/// Rough size of a device in a snapshot, not counting what it shares with its children.
+fn device_bytes(s: &DeviceSnap) -> usize {
+    size_of::<DeviceSnap>()
+        + s.shell.params.len() * (size_of::<u32>() + size_of::<f64>())
+        + s.shell.name.len()
+        + (s.chains.len() + s.returns.len()) * size_of::<ChainSnap>()
+}
+
+fn track_bytes(s: &TrackSnap) -> usize {
+    size_of::<TrackSnap>()
+        + (s.devices.len() + s.clips.len() + s.lane.len()) * size_of::<usize>()
+        + s.shell.name.len()
 }
 
 /// Returns `prev` if it already holds `value`, otherwise a new `Arc`, adding its size to `fresh`.
@@ -71,6 +134,149 @@ fn share<T: PartialEq + Clone>(
             *fresh += bytes(value);
             Arc::new(value.clone())
         }
+    }
+}
+
+/// `d` without its children, its plugin blob or its view state.
+fn device_shell(d: &Device) -> Device {
+    let kind = match &d.kind {
+        DeviceKind::Builtin {
+            type_id,
+            samples,
+            state,
+        } => DeviceKind::Builtin {
+            type_id: type_id.clone(),
+            samples: samples.clone(),
+            state: state.clone(),
+        },
+        DeviceKind::Plugin {
+            format,
+            plugin_id,
+            path,
+            ..
+        } => DeviceKind::Plugin {
+            format: *format,
+            plugin_id: plugin_id.clone(),
+            path: path.clone(),
+            state: None,
+        },
+        DeviceKind::Rack {
+            kind,
+            macros,
+            variations,
+            ..
+        } => DeviceKind::Rack {
+            kind: *kind,
+            chains: Vec::new(),
+            returns: Vec::new(),
+            macros: macros.clone(),
+            variations: variations.clone(),
+        },
+    };
+    Device {
+        id: d.id,
+        name: d.name.clone(),
+        kind,
+        bypass: d.bypass,
+        params: d.params.clone(),
+        expanded: true,
+        info: d.info.clone(),
+    }
+}
+
+/// `c` without its devices.
+fn chain_shell(c: &Chain) -> Chain {
+    Chain {
+        id: c.id,
+        name: c.name.clone(),
+        devices: Vec::new(),
+        zones: c.zones,
+        mix: c.mix.clone(),
+        color: c.color,
+        info: c.info.clone(),
+    }
+}
+
+fn capture_chains(
+    chains: &[Chain],
+    prev: Option<&[ChainSnap]>,
+    fresh: &mut usize,
+) -> Vec<ChainSnap> {
+    chains
+        .iter()
+        .map(|c| {
+            let p = prev.and_then(|p| p.iter().find(|o| o.shell.id == c.id));
+            ChainSnap {
+                shell: chain_shell(c),
+                devices: capture_devices(&c.devices, p.map(|p| p.devices.as_slice()), fresh),
+            }
+        })
+        .collect()
+}
+
+fn capture_devices(
+    devices: &[Device],
+    prev: Option<&[Arc<DeviceSnap>]>,
+    fresh: &mut usize,
+) -> Vec<Arc<DeviceSnap>> {
+    devices
+        .iter()
+        .map(|d| {
+            let p = prev.and_then(|p| p.iter().find(|o| o.shell.id == d.id));
+            capture_device(d, p, fresh)
+        })
+        .collect()
+}
+
+fn capture_device(
+    d: &Device,
+    prev: Option<&Arc<DeviceSnap>>,
+    fresh: &mut usize,
+) -> Arc<DeviceSnap> {
+    let (chains, returns) = match &d.kind {
+        DeviceKind::Rack {
+            chains, returns, ..
+        } => (
+            capture_chains(chains, prev.map(|p| p.chains.as_slice()), fresh),
+            capture_chains(returns, prev.map(|p| p.returns.as_slice()), fresh),
+        ),
+        _ => Default::default(),
+    };
+    let snap = DeviceSnap {
+        shell: device_shell(d),
+        chains,
+        returns,
+    };
+    share(prev, &snap, device_bytes, fresh)
+}
+
+/// `t` without what is shared separately, and with its arm and view state reset.
+fn track_shell(t: &Track) -> Track {
+    Track {
+        id: t.id,
+        name: t.name.clone(),
+        color: t.color,
+        kind: t.kind,
+        volume_db: t.volume_db,
+        pan: t.pan,
+        mute: t.mute,
+        solo: t.solo,
+        arm: false,
+        devices: Vec::new(),
+        clips: Vec::new(),
+        arrangement: Vec::new(),
+        group: t.group,
+        sends: t.sends.clone(),
+        routing: t.routing.clone(),
+        crossfade: t.crossfade,
+        pre_fader_sends: t.pre_fader_sends,
+        pan_mode: t.pan_mode,
+        delay: t.delay,
+        bypass_tuning: t.bypass_tuning,
+        automation: Vec::new(),
+        take_lanes: Vec::new(),
+        info: t.info.clone(),
+        ui: TrackUi::default(),
     }
 }
 
@@ -95,45 +301,159 @@ fn capture_track(t: &Track, prev: Option<&Arc<TrackSnap>>, fresh: &mut usize) ->
         })
         .collect();
     let snap = TrackSnap {
-        id: t.id,
-        name: t.name.clone(),
-        color: t.color,
-        kind: t.kind,
-        device_ids: t.devices.iter().map(|d| d.id).collect(),
+        shell: track_shell(t),
+        devices: capture_devices(&t.devices, prev.map(|p| p.devices.as_slice()), fresh),
         clips,
         lane,
+        automation: share(
+            prev.map(|p| &p.automation),
+            &t.automation,
+            |a| a.iter().map(|e| size_of_val(e.points.as_slice())).sum(),
+            fresh,
+        ),
+        take_lanes: share(
+            prev.map(|p| &p.take_lanes),
+            &t.take_lanes,
+            |l| {
+                l.iter()
+                    .map(|l| l.clips.len() * size_of::<ArrangementClip>())
+                    .sum()
+            },
+            fresh,
+        ),
     };
-    match prev {
-        Some(p) if **p == snap => p.clone(),
-        _ => Arc::new(snap),
-    }
+    share(prev, &snap, track_bytes, fresh)
+}
+
+fn capture_tracks(
+    tracks: &[Track],
+    prev: Option<&[Arc<TrackSnap>]>,
+    fresh: &mut usize,
+) -> Vec<Arc<TrackSnap>> {
+    tracks
+        .iter()
+        .map(|t| {
+            let p = prev.and_then(|p| p.iter().find(|o| o.shell.id == t.id));
+            capture_track(t, p, fresh)
+        })
+        .collect()
 }
 
 /// Records `project`, sharing whatever is unchanged since `prev`. Returns the
 /// snapshot and roughly how many bytes it newly allocated.
 pub fn capture(project: &Project, prev: Option<&Snapshot>) -> (Snapshot, usize) {
     let mut fresh = 0;
-    let tracks = project
-        .tracks
-        .iter()
-        .map(|t| {
-            let p = prev.and_then(|p| p.tracks.iter().find(|o| o.id == t.id));
-            capture_track(t, p, &mut fresh)
-        })
-        .collect();
-    let scenes = share(
-        prev.map(|p| &p.scenes),
-        &project.scenes,
-        |s| s.len() * size_of::<Scene>(),
-        &mut fresh,
-    );
+    let shell = Project {
+        version: project.version,
+        tempo: project.tempo,
+        time_signature: project.time_signature,
+        quantize: project.quantize,
+        metronome: project.metronome,
+        scenes: Vec::new(),
+        tracks: Vec::new(),
+        master: track_shell(&project.master),
+        arrangement: Arrangement::default(),
+        returns: Vec::new(),
+        crossfader: project.crossfader,
+        groove_pool: project.groove_pool.clone(),
+        tuning: project.tuning.clone(),
+        midi_mappings: project.midi_mappings.clone(),
+        key_mappings: project.key_mappings.clone(),
+    };
     let snapshot = Snapshot {
-        scenes,
-        tracks,
-        master_devices: project.master.devices.iter().map(|d| d.id).collect(),
-        arrangement: project.arrangement.clone(),
+        shell: share(
+            prev.map(|p| &p.shell),
+            &shell,
+            |_| size_of::<Project>(),
+            &mut fresh,
+        ),
+        scenes: share(
+            prev.map(|p| &p.scenes),
+            &project.scenes,
+            |s| s.len() * size_of::<Scene>(),
+            &mut fresh,
+        ),
+        tracks: capture_tracks(
+            &project.tracks,
+            prev.map(|p| p.tracks.as_slice()),
+            &mut fresh,
+        ),
+        returns: capture_tracks(
+            &project.returns,
+            prev.map(|p| p.returns.as_slice()),
+            &mut fresh,
+        ),
+        master: capture_track(&project.master, prev.map(|p| &p.master), &mut fresh),
+        arrangement: share(
+            prev.map(|p| &p.arrangement),
+            &project.arrangement,
+            |_| size_of::<Arrangement>(),
+            &mut fresh,
+        ),
     };
     (snapshot, fresh)
+}
+
+impl DeviceSnap {
+    /// Rebuilds the device, taking what undo doesn't cover from `kept`.
+    pub fn to_device(&self, kept: &impl Fn(DeviceId) -> Option<ParkedDevice>) -> Device {
+        let mut d = self.shell.clone();
+        let parked = kept(d.id);
+        if let Some(p) = &parked {
+            d.expanded = p.expanded;
+        }
+        match &mut d.kind {
+            DeviceKind::Plugin { state, .. } => *state = parked.and_then(|p| p.plugin_state),
+            DeviceKind::Rack {
+                chains, returns, ..
+            } => {
+                *chains = self.chains.iter().map(|c| c.to_chain(kept)).collect();
+                *returns = self.returns.iter().map(|c| c.to_chain(kept)).collect();
+            }
+            DeviceKind::Builtin { .. } => {}
+        }
+        d
+    }
+
+    /// Calls `f` with this device's id and those of everything nested in it.
+    fn for_each_id(&self, f: &mut impl FnMut(DeviceId)) {
+        f(self.shell.id);
+        for c in self.chains.iter().chain(&self.returns) {
+            for d in &c.devices {
+                d.for_each_id(f);
+            }
+        }
+    }
+}
+
+impl ChainSnap {
+    pub fn to_chain(&self, kept: &impl Fn(DeviceId) -> Option<ParkedDevice>) -> Chain {
+        Chain {
+            devices: self.devices.iter().map(|d| d.to_device(kept)).collect(),
+            ..self.shell.clone()
+        }
+    }
+}
+
+impl TrackSnap {
+    /// Rebuilds the track, taking what undo doesn't cover from `kept` and `parked`.
+    pub fn to_track(
+        &self,
+        kept: &impl Fn(DeviceId) -> Option<ParkedDevice>,
+        parked: Option<&ParkedTrack>,
+    ) -> Track {
+        let mut t = self.shell.clone();
+        if let Some(p) = parked {
+            t.arm = p.arm;
+            t.ui = p.ui.clone();
+        }
+        t.devices = self.devices.iter().map(|d| d.to_device(kept)).collect();
+        t.clips = self.clips.iter().map(|c| c.as_deref().cloned()).collect();
+        t.arrangement = self.lane.iter().map(|c| (**c).clone()).collect();
+        t.automation = (*self.automation).clone();
+        t.take_lanes = (*self.take_lanes).clone();
+        t
+    }
 }
 
 /// A snapshot, the bytes it added, and the label of the edit that produced it.
@@ -147,13 +467,16 @@ pub struct History {
     steps: Vec<Step>,
     cursor: usize,
     saved: Option<Arc<Snapshot>>,
-    /// Devices and mixes of things no longer in the project that undo may need back.
-    pub parked_devices: HashMap<DeviceId, Device>,
-    pub parked_mix: HashMap<TrackId, ParkedMix>,
+    /// What undo must restore about devices and tracks no longer in the project.
+    pub parked_devices: HashMap<DeviceId, ParkedDevice>,
+    pub parked_tracks: HashMap<TrackId, ParkedTrack>,
     /// An edit was made since the last commit; holds its description.
     pub pending: Option<&'static str>,
     /// The user was mid-gesture, so direct edits may be waiting to commit.
     pub was_busy: bool,
+    /// Frames left to wait for a device to stop reporting parameter changes before they become a
+    /// step. A plugin's editor has no gesture this app can see, only a stream of changes.
+    pub settling: u32,
     /// Something outside undo's coverage changed since the last save.
     pub untracked_dirty: bool,
 }
@@ -172,9 +495,10 @@ impl History {
             cursor: 0,
             saved: Some(snapshot),
             parked_devices: HashMap::new(),
-            parked_mix: HashMap::new(),
+            parked_tracks: HashMap::new(),
             pending: None,
             was_busy: false,
+            settling: 0,
             untracked_dirty: false,
         }
     }
@@ -218,14 +542,23 @@ impl History {
         let mut devices = HashSet::new();
         let mut tracks = HashSet::new();
         for s in &self.steps {
-            devices.extend(s.snapshot.master_devices.iter().copied());
-            for t in &s.snapshot.tracks {
-                tracks.insert(t.id);
-                devices.extend(t.device_ids.iter().copied());
+            let all = s
+                .snapshot
+                .tracks
+                .iter()
+                .chain(&s.snapshot.returns)
+                .chain([&s.snapshot.master]);
+            for t in all {
+                tracks.insert(t.shell.id);
+                for d in &t.devices {
+                    d.for_each_id(&mut |id| {
+                        devices.insert(id);
+                    });
+                }
             }
         }
         self.parked_devices.retain(|id, _| devices.contains(id));
-        self.parked_mix.retain(|id, _| tracks.contains(id));
+        self.parked_tracks.retain(|id, _| tracks.contains(id));
     }
 
     pub fn undo_label(&self) -> Option<&'static str> {
@@ -267,8 +600,8 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PALETTE;
-    use rlive_core::TimeSignature;
+    use crate::{DeviceKind, RackKind, PALETTE};
+    use rlive_core::{PluginFormat, TimeSignature};
 
     fn project() -> Project {
         let mut p = Project::new_default();
@@ -300,12 +633,131 @@ mod tests {
     }
 
     #[test]
-    fn mix_and_tempo_changes_make_no_step() {
+    fn mix_and_tempo_changes_make_a_step() {
         let mut p = project();
         let mut h = History::new(&p);
         p.tempo = 90.0;
         p.tracks[0].volume_db = -6.0;
-        assert!(!h.commit(&p, "Mix"));
+        assert!(h.commit(&p, "Mix"));
+    }
+
+    #[test]
+    fn a_parameter_change_shares_the_other_devices() {
+        let mut p = project();
+        let mut h = History::new(&p);
+        p.tracks[1].devices[0].params.insert(3, 0.5);
+        assert!(h.commit(&p, "Knob"));
+        let (a, b) = (&h.steps[0].snapshot, &h.steps[1].snapshot);
+        assert!(!Arc::ptr_eq(
+            &a.tracks[1].devices[0],
+            &b.tracks[1].devices[0]
+        ));
+        assert!(Arc::ptr_eq(
+            &a.tracks[1].devices[1],
+            &b.tracks[1].devices[1]
+        ));
+        assert!(Arc::ptr_eq(
+            &a.tracks[0].devices[0],
+            &b.tracks[0].devices[0]
+        ));
+        assert_eq!(b.tracks[1].devices[0].shell.params[&3], 0.5);
+    }
+
+    fn rack_project() -> Project {
+        let mut p = project();
+        let mut rack = Device::rack(RackKind::Instrument, "Rack");
+        let mut chain = Chain::new("A");
+        chain.devices.push(Device::builtin("rlive.poly", "Inner"));
+        chain
+            .devices
+            .push(Device::builtin("rlive.delay", "Inner FX"));
+        if let DeviceKind::Rack { chains, .. } = &mut rack.kind {
+            chains.push(chain);
+        }
+        p.tracks[0].devices.push(rack);
+        p
+    }
+
+    fn inner_devices(p: &mut Project) -> &mut Vec<Device> {
+        let DeviceKind::Rack { chains, .. } = &mut p.tracks[0].devices[1].kind else {
+            panic!("not a rack");
+        };
+        &mut chains[0].devices
+    }
+
+    #[test]
+    fn nested_devices_are_shared_individually() {
+        let mut p = rack_project();
+        let mut h = History::new(&p);
+        inner_devices(&mut p)[1].params.insert(0, 0.25);
+        assert!(h.commit(&p, "Nested knob"));
+        let (a, b) = (&h.steps[0].snapshot, &h.steps[1].snapshot);
+        let (ca, cb) = (
+            &a.tracks[0].devices[1].chains[0],
+            &b.tracks[0].devices[1].chains[0],
+        );
+        assert!(Arc::ptr_eq(&ca.devices[0], &cb.devices[0]));
+        assert!(!Arc::ptr_eq(&ca.devices[1], &cb.devices[1]));
+        assert!(!Arc::ptr_eq(
+            &a.tracks[0].devices[1],
+            &b.tracks[0].devices[1]
+        ));
+        assert!(Arc::ptr_eq(
+            &a.tracks[0].devices[0],
+            &b.tracks[0].devices[0]
+        ));
+    }
+
+    #[test]
+    fn a_routing_change_makes_a_step_and_survives_the_round_trip() {
+        let mut p = project();
+        let mut h = History::new(&p);
+        p.tracks[0].routing.monitor = crate::Monitor::In;
+        assert!(h.commit(&p, "Monitor"));
+        h.undo_target();
+        let snap = h.current().tracks[0].to_track(&|_| None, None);
+        assert_eq!(snap.routing.monitor, crate::Monitor::Auto);
+    }
+
+    #[test]
+    fn plugin_state_and_view_state_are_not_compared() {
+        let mut p = project();
+        let mut plug = Device::plugin(PluginFormat::Clap, "x", "/x".into(), "Plug");
+        if let DeviceKind::Plugin { state, .. } = &mut plug.kind {
+            *state = Some(vec![1, 2, 3]);
+        }
+        p.tracks[0].devices.push(plug);
+        let mut h = History::new(&p);
+        if let DeviceKind::Plugin { state, .. } = &mut p.tracks[0].devices[1].kind {
+            *state = Some(vec![9; 100]);
+        }
+        p.tracks[0].devices[1].expanded = false;
+        p.tracks[0].arm = true;
+        p.tracks[0].ui.folded = true;
+        assert!(!h.commit(&p, "Nothing undoable"));
+    }
+
+    #[test]
+    fn rebuilding_a_device_takes_blobs_from_what_was_parked() {
+        let mut p = rack_project();
+        let mut plug = Device::plugin(PluginFormat::Clap, "x", "/x".into(), "Plug");
+        let plug_id = plug.id;
+        if let DeviceKind::Plugin { state, .. } = &mut plug.kind {
+            *state = Some(vec![4, 5, 6]);
+        }
+        plug.expanded = false;
+        inner_devices(&mut p).push(plug.clone());
+        let snap = capture(&p, None).0;
+        let kept = |id| (id == plug_id).then(|| ParkedDevice::of(&plug));
+        let rebuilt = snap.tracks[0].devices[1].to_device(&kept);
+        let DeviceKind::Rack { chains, .. } = &rebuilt.kind else {
+            panic!("not a rack");
+        };
+        let DeviceKind::Plugin { state, .. } = &chains[0].devices[2].kind else {
+            panic!("not a plugin");
+        };
+        assert_eq!(state.as_deref(), Some(&[4u8, 5, 6][..]));
+        assert!(!chains[0].devices[2].expanded);
     }
 
     #[test]

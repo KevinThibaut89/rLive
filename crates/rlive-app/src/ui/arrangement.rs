@@ -333,8 +333,8 @@ fn paint_clip(
     if content.height() > 6.0 {
         match &c.clip.content {
             ClipContent::Midi { .. } => paint_notes(p, c, content, lanes, axis, color),
-            ClipContent::Audio { path, .. } => {
-                paint_waveform(p, session, c, path, content, lanes, axis, color)
+            ClipContent::Audio { file, .. } => {
+                paint_waveform(p, session, c, &file.path, content, lanes, axis, color)
             }
         }
     }

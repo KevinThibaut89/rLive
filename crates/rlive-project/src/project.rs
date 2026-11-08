@@ -1,10 +1,20 @@
-use crate::{Arrangement, Clip, Device, NoteData, Scene, Track, TrackKind};
+use crate::defaults::is_default;
+use crate::id_walk::walk_ids;
+use crate::migrate;
+use crate::{
+    Arrangement, Clip, Device, GroovePool, KeyMapping, MidiMapping, NoteData, Scene, Track,
+    TrackKind, Tuning,
+};
 use rlive_core::{ids::reserve_id, Quantize, TimeSignature, TrackId, PPQ};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Write};
+use std::path::{Path, PathBuf};
 
 pub const FILE_EXTENSION: &str = "rlive";
-pub const FORMAT_VERSION: u32 = 1;
+/// The format this build writes. An added field only needs `serde(default)`; a new version is
+/// needed only for a rename or a change of meaning (see `migrate/mod.rs`).
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Track/clip colour palette (Ableton-ish).
 pub const PALETTE: [[u8; 3]; 12] = [
@@ -22,10 +32,25 @@ pub const PALETTE: [[u8; 3]; 12] = [
     [216, 108, 228],
 ];
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Master {
-    pub volume_db: f32,
-    pub devices: Vec<Device>,
+pub(crate) const MASTER_COLOR: [u8; 3] = [154, 154, 154];
+
+/// The crossfader's state; tracks say which side they are on.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Crossfader {
+    /// -1 is full A, 1 is full B.
+    pub position: f32,
+    /// One of Live's seven curves, by its index in the list.
+    pub curve: u8,
+}
+
+impl Default for Crossfader {
+    fn default() -> Self {
+        Self {
+            position: 0.0,
+            curve: 3,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,9 +62,23 @@ pub struct Project {
     pub metronome: bool,
     pub scenes: Vec<Scene>,
     pub tracks: Vec<Track>,
-    pub master: Master,
+    /// Always a track of kind [`TrackKind::Master`], with no clip slots.
+    pub master: Track,
     #[serde(default)]
     pub arrangement: Arrangement,
+    /// Tracks of kind [`TrackKind::Return`].
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub returns: Vec<Track>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub crossfader: Crossfader,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub groove_pool: GroovePool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub tuning: Option<Tuning>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub midi_mappings: Vec<MidiMapping>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub key_mappings: Vec<KeyMapping>,
 }
 
 impl Default for Project {
@@ -58,6 +97,41 @@ pub enum ProjectError {
     Serialize(#[from] ron::Error),
     #[error("project was saved by a newer rLive (format {0})")]
     TooNew(u32),
+    #[error("project format {0} is not one rLive has ever written")]
+    UnknownVersion(u32),
+    #[error("could not back up {path} before upgrading it: {source}")]
+    Backup {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
+
+/// Copies a file about to be upgraded to `<name>.v<old>.bak`. An existing backup is the older,
+/// more valuable one, so it is never replaced; any other failure stops the load.
+fn back_up(path: &Path, version: u32, text: &str) -> Result<(), ProjectError> {
+    let backup = path.with_extension(format!("v{version}.bak"));
+    let failed = |source| ProjectError::Backup {
+        path: backup.clone(),
+        source,
+    };
+    let mut file = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&backup)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => return Ok(()),
+        Err(e) => return Err(failed(e)),
+    };
+    if let Err(e) = file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+    {
+        drop(file);
+        let _ = fs::remove_file(&backup);
+        return Err(failed(e));
+    }
+    Ok(())
 }
 
 impl Project {
@@ -68,17 +142,16 @@ impl Project {
             time_signature: TimeSignature::default(),
             quantize: Quantize::Bar,
             metronome: false,
-            scenes: (1..=8)
-                .map(|i| Scene {
-                    name: i.to_string(),
-                })
-                .collect(),
+            scenes: (1..=8).map(|i| Scene::new(i.to_string())).collect(),
             tracks: Vec::new(),
-            master: Master {
-                volume_db: 0.0,
-                devices: Vec::new(),
-            },
+            master: Track::new("Master", TrackKind::Master, MASTER_COLOR, 0),
             arrangement: Arrangement::default(),
+            returns: Vec::new(),
+            crossfader: Crossfader::default(),
+            groove_pool: GroovePool::default(),
+            tuning: None,
+            midi_mappings: Vec::new(),
+            key_mappings: Vec::new(),
         }
     }
 
@@ -97,12 +170,7 @@ impl Project {
             let bar = p.time_signature.ticks_per_bar();
             for (i, chord) in [[57u8, 60, 64], [53, 57, 60]].iter().enumerate() {
                 for &key in chord {
-                    notes.push(NoteData {
-                        start: i as u64 * bar,
-                        length: bar - PPQ / 4,
-                        key,
-                        velocity: 0.8,
-                    });
+                    notes.push(NoteData::new(i as u64 * bar, bar - PPQ / 4, key, 0.8));
                 }
             }
         }
@@ -137,8 +205,8 @@ impl Project {
     }
 
     pub fn add_scene(&mut self) {
-        let name = (self.scenes.len() + 1).to_string();
-        self.scenes.push(Scene { name });
+        self.scenes
+            .push(Scene::new((self.scenes.len() + 1).to_string()));
         self.normalize();
     }
 
@@ -147,39 +215,40 @@ impl Project {
         Ok(ron::ser::to_string_pretty(self, cfg)?)
     }
 
+    /// Parses a project of any supported format, upgrading it to the current one.
     pub fn from_ron(s: &str) -> Result<Self, ProjectError> {
-        let mut p: Project = ron::from_str(s)?;
-        if p.version > FORMAT_VERSION {
-            return Err(ProjectError::TooNew(p.version));
-        }
-        p.normalize();
-        // Make sure newly created ids never collide with loaded ones.
-        for t in &p.tracks {
-            reserve_id(t.id.0);
-            for d in &t.devices {
-                reserve_id(d.id.0);
-            }
-            for c in &t.arrangement {
-                reserve_id(c.id.0);
-            }
-        }
-        for d in &p.master.devices {
-            reserve_id(d.id.0);
-        }
+        let version = migrate::probe_version(s)?;
+        let mut p = migrate::to_current(s, version)?;
+        p.finish_loading();
         Ok(p)
+    }
+
+    /// Tidies a just-parsed project, and makes sure new ids never collide with loaded ones.
+    fn finish_loading(&mut self) {
+        self.normalize();
+        walk_ids(self, reserve_id);
     }
 
     pub fn save(&self, path: &Path) -> Result<(), ProjectError> {
         let s = self.to_ron()?;
         // Write atomically so a crash never leaves a half-written project.
         let tmp = path.with_extension("rlive.tmp");
-        std::fs::write(&tmp, s)?;
-        std::fs::rename(&tmp, path)?;
+        fs::write(&tmp, s)?;
+        fs::rename(&tmp, path)?;
         Ok(())
     }
 
+    /// Loads a project. A file in an older format is first copied to `<name>.v<old>.bak` so the
+    /// upgrade can never lose it; the load fails if that copy can't be made.
     pub fn load(path: &Path) -> Result<Self, ProjectError> {
-        Self::from_ron(&std::fs::read_to_string(path)?)
+        let text = fs::read_to_string(path)?;
+        let version = migrate::probe_version(&text)?;
+        if (migrate::OLDEST_VERSION..FORMAT_VERSION).contains(&version) {
+            back_up(path, version, &text)?;
+        }
+        let mut p = migrate::to_current(&text, version)?;
+        p.finish_loading();
+        Ok(p)
     }
 }
 
@@ -211,10 +280,8 @@ mod tests {
             color: PALETTE[2],
             length: 3840,
             looped: true,
-            content: ClipContent::Audio {
-                path: "/tmp/loop.wav".into(),
-                gain_db: -3.0,
-            },
+            content: ClipContent::audio("/tmp/loop.wav", -3.0),
+            ..Clip::default()
         });
         let dir = std::env::temp_dir().join(format!("rlive-proj-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -233,6 +300,30 @@ mod tests {
         let loaded = Project::from_ron(&s).unwrap();
         assert_eq!(loaded.tracks[0].id.0, 999_999);
         assert!(TrackId::new().0 > 999_999);
+    }
+
+    #[test]
+    fn nested_ids_are_reserved_after_load() {
+        let mut p = Project::new_default();
+        let mut rack = Device::rack(crate::RackKind::Instrument, "r");
+        let mut chain = crate::Chain::new("c");
+        let mut inner = Device::builtin("rlive.poly", "p");
+        inner.id = rlive_core::DeviceId(2_000_000);
+        chain.devices.push(inner);
+        chain.id = rlive_core::ChainId(2_000_100);
+        if let DeviceKind::Rack { chains, .. } = &mut rack.kind {
+            chains.push(chain);
+        }
+        p.master.devices.push(rack);
+        let s = p.to_ron().unwrap();
+        let loaded = Project::from_ron(&s).unwrap();
+        assert_eq!(p, loaded);
+        assert!(rlive_core::DeviceId::new().0 > 2_000_100);
+    }
+
+    #[test]
+    fn a_new_file_is_at_the_current_version() {
+        assert_eq!(Project::empty().version, FORMAT_VERSION);
     }
 
     #[test]

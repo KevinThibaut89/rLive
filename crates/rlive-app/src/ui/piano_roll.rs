@@ -234,9 +234,9 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
 
     let editor = Rect::from_min_max(Pos2::new(boxr.right() + 1.0, full.top()), full.max);
     match &clip.content {
-        ClipContent::Audio { path, gain_db } => {
+        ClipContent::Audio { file, gain_db, .. } => {
             let mut eu = ui.new_child(UiBuilder::new().max_rect(editor.shrink(8.0)));
-            audio_clip_panel(&mut eu, session, cref, path, *gain_db);
+            audio_clip_panel(&mut eu, session, cref, &file.path, *gain_db);
         }
         ClipContent::Midi { .. } => note_editor(ui, editor, session, state, cref),
     }
@@ -806,12 +806,12 @@ fn note_editor(
                     let start = (t / ps.grid as f64).floor().max(0.0) as u64 * ps.grid;
                     if start < clip.length {
                         let mut v = notes.clone();
-                        v.push(NoteData {
+                        v.push(NoteData::new(
                             start,
-                            length: ps.last_length.max(ps.grid / 2),
+                            ps.last_length.max(ps.grid / 2),
                             key,
-                            velocity: ps.new_velocity,
-                        });
+                            ps.new_velocity,
+                        ));
                         ps.selected = vec![v.len() - 1];
                         new_notes = Some(v);
                         preview_on = Some(key);

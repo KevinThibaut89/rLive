@@ -13,7 +13,7 @@ pub mod time;
 pub mod view;
 
 pub use device::{DeviceDesc, Item, Ports, SampleSlot, ScopeKind, Section, Status};
-pub use ids::{ArrClipId, ChainId, DeviceId, TrackId};
+pub use ids::{ArrClipId, ChainId, DeviceId, GrooveId, TrackId};
 pub use midi::{MidiEvent, MidiMessage};
 pub use param::{
     ClipParam, EnvTarget, ModMode, ParamEvent, ParamFlags, ParamId, ParamInfo, ParamKind,

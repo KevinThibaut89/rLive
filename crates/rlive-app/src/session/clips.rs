@@ -156,10 +156,8 @@ impl Session {
             color: self.project.next_color(),
             length: (beats as u64) * rlive_core::PPQ,
             looped: true,
-            content: ClipContent::Audio {
-                path: path.to_path_buf(),
-                gain_db: 0.0,
-            },
+            content: ClipContent::audio(path, 0.0),
+            ..Clip::default()
         })
     }
 }

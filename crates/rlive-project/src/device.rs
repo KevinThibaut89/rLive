@@ -1,4 +1,7 @@
-use rlive_core::{DeviceId, PluginFormat};
+use crate::defaults::{is_default, yes};
+use crate::FileRef;
+use rlive_core::param::ParamRef;
+use rlive_core::{ChainId, DeviceId, PluginFormat, TrackId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -7,8 +10,12 @@ use std::path::PathBuf;
 pub enum DeviceKind {
     Builtin {
         type_id: String,
-        #[serde(default)]
-        sample: Option<PathBuf>,
+        /// One entry per sample slot of the device.
+        #[serde(default, skip_serializing_if = "is_default")]
+        samples: Vec<Option<FileRef>>,
+        /// RON text the device writes and reads itself, versioned by the device.
+        #[serde(default, skip_serializing_if = "is_default")]
+        state: Option<String>,
     },
     Plugin {
         format: PluginFormat,
@@ -19,6 +26,179 @@ pub enum DeviceKind {
         #[serde(default, with = "base64_opt")]
         state: Option<Vec<u8>>,
     },
+    /// Parallel chains of devices, which may hold racks in turn.
+    Rack {
+        kind: RackKind,
+        #[serde(default, skip_serializing_if = "is_default")]
+        chains: Vec<Chain>,
+        /// Return chains, which the chains send to.
+        #[serde(default, skip_serializing_if = "is_default")]
+        returns: Vec<Chain>,
+        /// The visible macro controls; how many there are is part of the rack.
+        #[serde(default, skip_serializing_if = "is_default")]
+        macros: Vec<Macro>,
+        #[serde(default, skip_serializing_if = "is_default")]
+        variations: Vec<Variation>,
+    },
+}
+
+/// Which of Live's rack types a rack is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RackKind {
+    Instrument,
+    Audio,
+    Midi,
+    Drum,
+}
+
+/// One chain of a rack.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Chain {
+    pub id: ChainId,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub devices: Vec<Device>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub zones: Zones,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mix: ChainMix,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub color: Option<[u8; 3]>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub info: String,
+}
+
+impl Chain {
+    pub fn new(name: &str) -> Self {
+        Self {
+            id: ChainId::new(),
+            name: name.into(),
+            devices: Vec::new(),
+            zones: Zones::default(),
+            mix: ChainMix::default(),
+            color: None,
+            info: String::new(),
+        }
+    }
+}
+
+/// A range of MIDI values and the fade range around it, all 0..127.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Zone {
+    pub low: u8,
+    pub high: u8,
+    /// Where the fade below `low` starts, at or under `low`.
+    pub fade_low: u8,
+    /// Where the fade above `high` ends, at or over `high`.
+    pub fade_high: u8,
+}
+
+impl Zone {
+    pub const fn span(low: u8, high: u8) -> Self {
+        Self {
+            low,
+            high,
+            fade_low: low,
+            fade_high: high,
+        }
+    }
+}
+
+/// Which notes and Chain Selector values reach a chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Zones {
+    pub key: Zone,
+    pub velocity: Zone,
+    pub select: Zone,
+    /// Set on the chains of a Drum Rack.
+    pub drum: Option<DrumPad>,
+}
+
+impl Default for Zones {
+    fn default() -> Self {
+        Self {
+            key: Zone::span(0, 127),
+            velocity: Zone::span(1, 127),
+            select: Zone::span(0, 0),
+            drum: None,
+        }
+    }
+}
+
+/// The note a Drum Rack chain answers to and what it plays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DrumPad {
+    /// The note that triggers the chain; `None` is All Notes.
+    pub receive: Option<u8>,
+    /// The note sent to the devices in the chain.
+    pub play: u8,
+    /// Choke group, 1..16.
+    pub choke: Option<u8>,
+}
+
+/// A chain's strip in the rack's mixer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChainMix {
+    pub volume_db: f32,
+    pub pan: f32,
+    /// The Chain Activator.
+    pub active: bool,
+    pub solo: bool,
+    /// Levels into the rack's return chains.
+    pub sends: Vec<ChainSend>,
+    /// On a return chain: the Set's return track it feeds, or `None` for the rack's own output.
+    pub output: Option<TrackId>,
+}
+
+impl Default for ChainMix {
+    fn default() -> Self {
+        Self {
+            volume_db: 0.0,
+            pan: 0.0,
+            active: true,
+            solo: false,
+            sends: Vec::new(),
+            output: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ChainSend {
+    pub to: ChainId,
+    pub level_db: f32,
+}
+
+/// A rack's macro control.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Macro {
+    pub name: String,
+    /// 0..127, as on the knob.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub value: f64,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mappings: Vec<MacroMapping>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub exclude_random: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub exclude_variations: bool,
+}
+
+/// A parameter a macro controls, and the range it sweeps. `max` below `min` inverts it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MacroMapping {
+    pub target: ParamRef,
+    pub min: f64,
+    pub max: f64,
+}
+
+/// A stored set of macro values, one per macro.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Variation {
+    pub name: String,
+    pub values: Vec<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -33,45 +213,111 @@ pub struct Device {
     /// Whether the device card is expanded in the device view.
     #[serde(default = "yes")]
     pub expanded: bool,
-}
-
-fn yes() -> bool {
-    true
+    /// The user's info text.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub info: String,
 }
 
 impl Device {
-    pub fn builtin(type_id: &str, name: &str) -> Self {
+    fn new(kind: DeviceKind, name: &str) -> Self {
         Self {
             id: DeviceId::new(),
             name: name.into(),
-            kind: DeviceKind::Builtin {
-                type_id: type_id.into(),
-                sample: None,
-            },
+            kind,
             bypass: false,
             params: BTreeMap::new(),
             expanded: true,
+            info: String::new(),
         }
     }
 
+    pub fn builtin(type_id: &str, name: &str) -> Self {
+        Self::new(
+            DeviceKind::Builtin {
+                type_id: type_id.into(),
+                samples: Vec::new(),
+                state: None,
+            },
+            name,
+        )
+    }
+
     pub fn plugin(format: PluginFormat, plugin_id: &str, path: PathBuf, name: &str) -> Self {
-        Self {
-            id: DeviceId::new(),
-            name: name.into(),
-            kind: DeviceKind::Plugin {
+        Self::new(
+            DeviceKind::Plugin {
                 format,
                 plugin_id: plugin_id.into(),
                 path,
                 state: None,
             },
-            bypass: false,
-            params: BTreeMap::new(),
-            expanded: true,
+            name,
+        )
+    }
+
+    /// A rack with no chains yet.
+    pub fn rack(kind: RackKind, name: &str) -> Self {
+        Self::new(
+            DeviceKind::Rack {
+                kind,
+                chains: Vec::new(),
+                returns: Vec::new(),
+                macros: Vec::new(),
+                variations: Vec::new(),
+            },
+            name,
+        )
+    }
+
+    /// The file loaded in a sample slot of a built-in device.
+    pub fn sample(&self, slot: usize) -> Option<&FileRef> {
+        match &self.kind {
+            DeviceKind::Builtin { samples, .. } => samples.get(slot)?.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The chains of this device: a rack's chains then its returns, none for anything else.
+    pub fn chains(&self) -> impl Iterator<Item = &Chain> {
+        let (chains, returns): (&[Chain], &[Chain]) = match &self.kind {
+            DeviceKind::Rack {
+                chains, returns, ..
+            } => (chains, returns),
+            _ => (&[], &[]),
+        };
+        chains.iter().chain(returns)
+    }
+
+    pub fn chains_mut(&mut self) -> impl Iterator<Item = &mut Chain> {
+        let (chains, returns): (&mut [Chain], &mut [Chain]) = match &mut self.kind {
+            DeviceKind::Rack {
+                chains, returns, ..
+            } => (chains, returns),
+            _ => (&mut [], &mut []),
+        };
+        chains.iter_mut().chain(returns)
+    }
+
+    /// Calls `f` on this device and everything nested in it.
+    pub fn for_each(&self, f: &mut impl FnMut(&Device)) {
+        f(self);
+        for chain in self.chains() {
+            for d in &chain.devices {
+                d.for_each(f);
+            }
+        }
+    }
+
+    pub fn for_each_mut(&mut self, f: &mut impl FnMut(&mut Device)) {
+        f(self);
+        for chain in self.chains_mut() {
+            for d in &mut chain.devices {
+                d.for_each_mut(f);
+            }
         }
     }
 }
 
-mod base64_opt {
+pub(crate) mod base64_opt {
     use serde::{Deserialize, Deserializer, Serializer};
 
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

@@ -1,4 +1,6 @@
-use crate::{ArrangementClip, Clip, Device};
+use crate::defaults::is_default;
+use crate::{ArrangementClip, Clip, Device, Envelope, TakeLane};
+use rlive_core::param::EnvTarget;
 use rlive_core::{DeviceId, TrackId};
 use serde::{Deserialize, Serialize};
 
@@ -6,6 +8,129 @@ use serde::{Deserialize, Serialize};
 pub enum TrackKind {
     Midi,
     Audio,
+    /// Holds tracks, whose output it mixes.
+    Group,
+    /// Fed by the sends of other tracks. Lives in [`Project::returns`](crate::Project).
+    Return,
+    /// The Main output. There is exactly one, [`Project::master`](crate::Project).
+    Master,
+}
+
+/// A track's level into a return track.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TrackSend {
+    /// The return track.
+    pub to: TrackId,
+    pub level_db: f32,
+    /// Whether the send is switched on. A send that would feed back starts out off.
+    #[serde(
+        default = "crate::defaults::yes",
+        skip_serializing_if = "crate::defaults::is_true"
+    )]
+    pub enabled: bool,
+}
+
+/// One end of a track's routing.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Route {
+    /// The natural choice for the track: all MIDI or no audio in, out to its group or Main.
+    #[default]
+    Default,
+    /// `No Input`, or for an output no destination.
+    None,
+    /// A hardware input or output.
+    External(ExternalRoute),
+    /// Input only: what the Main output is playing.
+    Resampling,
+    /// Output only: the track reaches the mix through its sends alone.
+    SendsOnly,
+    /// Another track, or one of its devices wherever it is nested.
+    Track {
+        track: TrackId,
+        #[serde(default, skip_serializing_if = "is_default")]
+        device: Option<DeviceId>,
+    },
+}
+
+/// Hardware audio channels or a MIDI port.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExternalRoute {
+    /// Audio channels of the interface, by the first channel's zero-based index.
+    Audio { channel: u16, stereo: bool },
+    /// `None` is All Ins or All Channels.
+    Midi {
+        port: Option<String>,
+        channel: Option<u8>,
+    },
+}
+
+/// Where in another track's signal path a track listens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Tap {
+    PreFx,
+    PostFx,
+    #[default]
+    PostMixer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Monitor {
+    In,
+    #[default]
+    Auto,
+    Off,
+}
+
+/// A track's connections, as the In/Out section of the mixer shows them.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Routing {
+    pub input: Route,
+    pub output: Route,
+    pub monitor: Monitor,
+    /// Where the signal is taken when `input` is another track.
+    pub tap: Tap,
+}
+
+/// Which side of the crossfader a track is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Crossfade {
+    #[default]
+    None,
+    A,
+    B,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub enum PanMode {
+    #[default]
+    Stereo,
+    /// Pans the left and right inputs independently, each -1..1.
+    Split { left: f32, right: f32 },
+}
+
+/// Delay applied to the whole track, for compensating external gear.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub enum TrackDelay {
+    #[default]
+    None,
+    Ms(f32),
+    Samples(i32),
+}
+
+/// View state stored with the track. Undo leaves it alone.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackUi {
+    /// A group track's children are hidden, or a track's Arrangement lane is folded.
+    pub folded: bool,
+    /// The Arrangement lane's height in points, when set by hand.
+    pub height: Option<f32>,
+    pub show_take_lanes: bool,
+    /// The take lane being auditioned, by index.
+    pub audition_lane: Option<usize>,
+    /// Automation lanes on show, in display order.
+    pub automation_lanes: Vec<EnvTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -25,6 +150,35 @@ pub struct Track {
     /// Clips on the timeline, sorted by start and not overlapping.
     #[serde(default)]
     pub arrangement: Vec<ArrangementClip>,
+    /// The group track this track belongs to.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub group: Option<TrackId>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub sends: Vec<TrackSend>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub routing: Routing,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub crossfade: Crossfade,
+    /// On a return track: whether the sends feeding it tap before the fader.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub pre_fader_sends: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub pan_mode: PanMode,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub delay: TrackDelay,
+    /// Plays 12-TET even when the project has a tuning loaded.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub bypass_tuning: bool,
+    /// Automation of this track's parameters. Sorted by target only for stable files.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub automation: Vec<Envelope>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub take_lanes: Vec<TakeLane>,
+    /// The user's info text.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub info: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub ui: TrackUi,
 }
 
 impl Track {
@@ -42,6 +196,18 @@ impl Track {
             devices: Vec::new(),
             clips: vec![None; scenes],
             arrangement: Vec::new(),
+            group: None,
+            sends: Vec::new(),
+            routing: Routing::default(),
+            crossfade: Crossfade::default(),
+            pre_fader_sends: false,
+            pan_mode: PanMode::default(),
+            delay: TrackDelay::default(),
+            bypass_tuning: false,
+            automation: Vec::new(),
+            take_lanes: Vec::new(),
+            info: String::new(),
+            ui: TrackUi::default(),
         }
     }
 

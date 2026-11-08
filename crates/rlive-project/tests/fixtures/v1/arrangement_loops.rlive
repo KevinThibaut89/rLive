@@ -1,0 +1,287 @@
+(
+    version: 1,
+    tempo: 128.0,
+    time_signature: (
+        numerator: 7,
+        denominator: 8,
+    ),
+    quantize: Beat,
+    metronome: true,
+    scenes: [
+        (
+            name: "1",
+        ),
+        (
+            name: "2",
+        ),
+        (
+            name: "3",
+        ),
+        (
+            name: "4",
+        ),
+        (
+            name: "5",
+        ),
+        (
+            name: "6",
+        ),
+        (
+            name: "7",
+        ),
+        (
+            name: "8",
+        ),
+        (
+            name: "Outro",
+        ),
+    ],
+    tracks: [
+        (
+            id: (7),
+            name: "1 Poly",
+            color: (84, 128, 228),
+            kind: Midi,
+            volume_db: 0.0,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            arm: false,
+            devices: [
+                (
+                    id: (8),
+                    name: "Poly Synth",
+                    kind: Builtin(
+                        type_id: "rlive.poly",
+                        sample: None,
+                    ),
+                    bypass: false,
+                    params: {},
+                    expanded: true,
+                ),
+            ],
+            clips: [
+                Some((
+                    name: "Chords",
+                    color: (84, 128, 228),
+                    length: 7680,
+                    looped: true,
+                    content: Midi(
+                        notes: [
+                            (
+                                start: 0,
+                                length: 3600,
+                                key: 57,
+                                velocity: 0.8,
+                            ),
+                            (
+                                start: 0,
+                                length: 3600,
+                                key: 60,
+                                velocity: 0.8,
+                            ),
+                            (
+                                start: 0,
+                                length: 3600,
+                                key: 64,
+                                velocity: 0.8,
+                            ),
+                            (
+                                start: 3840,
+                                length: 3600,
+                                key: 53,
+                                velocity: 0.8,
+                            ),
+                            (
+                                start: 3840,
+                                length: 3600,
+                                key: 57,
+                                velocity: 0.8,
+                            ),
+                            (
+                                start: 3840,
+                                length: 3600,
+                                key: 60,
+                                velocity: 0.8,
+                            ),
+                        ],
+                    ),
+                )),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            arrangement: [
+                (
+                    id: (14),
+                    start: 1200,
+                    length: 6480,
+                    offset: 240,
+                    clip: (
+                        name: "One shot",
+                        color: (247, 244, 124),
+                        length: 6720,
+                        looped: false,
+                        content: Midi(
+                            notes: [
+                                (start: 120, length: 480, key: 67, velocity: 0.55),
+                            ],
+                        ),
+                    ),
+                ),
+                (
+                    id: (13),
+                    start: 7680,
+                    length: 16320,
+                    offset: 3840,
+                    clip: (
+                        name: "Looped",
+                        color: (247, 244, 124),
+                        length: 6720,
+                        looped: true,
+                        content: Midi(
+                            notes: [
+                                (start: 120, length: 480, key: 67, velocity: 0.55),
+                            ],
+                        ),
+                    ),
+                ),
+            ],
+        ),
+        (
+            id: (9),
+            name: "2 Poly",
+            color: (255, 165, 41),
+            kind: Midi,
+            volume_db: 0.0,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            arm: false,
+            devices: [
+                (
+                    id: (10),
+                    name: "Poly Synth",
+                    kind: Builtin(
+                        type_id: "rlive.poly",
+                        sample: None,
+                    ),
+                    bypass: false,
+                    params: {},
+                    expanded: true,
+                ),
+                (
+                    id: (11),
+                    name: "Delay",
+                    kind: Builtin(
+                        type_id: "rlive.delay",
+                        sample: None,
+                    ),
+                    bypass: false,
+                    params: {},
+                    expanded: true,
+                ),
+            ],
+            clips: [
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            arrangement: [
+                (
+                    id: (15),
+                    start: 0,
+                    length: 1920,
+                    offset: 0,
+                    clip: (
+                        name: "Looped",
+                        color: (247, 244, 124),
+                        length: 6720,
+                        looped: true,
+                        content: Midi(
+                            notes: [
+                                (start: 120, length: 480, key: 67, velocity: 0.55),
+                            ],
+                        ),
+                    ),
+                ),
+                (
+                    id: (16),
+                    start: 1920,
+                    length: 3360,
+                    offset: 0,
+                    clip: (
+                        name: "Overdub",
+                        color: (92, 255, 232),
+                        length: 3360,
+                        looped: true,
+                        content: Midi(
+                            notes: [],
+                        ),
+                    ),
+                ),
+                (
+                    id: (17),
+                    start: 5280,
+                    length: 4320,
+                    offset: 5280,
+                    clip: (
+                        name: "Looped",
+                        color: (247, 244, 124),
+                        length: 6720,
+                        looped: true,
+                        content: Midi(
+                            notes: [
+                                (start: 120, length: 480, key: 67, velocity: 0.55),
+                            ],
+                        ),
+                    ),
+                ),
+            ],
+        ),
+        (
+            id: (12),
+            name: "3 Audio",
+            color: (26, 255, 47),
+            kind: Audio,
+            volume_db: 0.0,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            arm: false,
+            devices: [],
+            clips: [
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            arrangement: [],
+        ),
+    ],
+    master: (
+        volume_db: 0.0,
+        devices: [],
+    ),
+    arrangement: (
+        loop_enabled: true,
+        loop_start: 1920,
+        loop_end: 9600,
+    ),
+)
