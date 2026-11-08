@@ -204,7 +204,7 @@ pub static BINDINGS: &[Binding] = &[
     a("42.5", All, "Ignore grid while dragging", g("Cmd", "Alt"), W),
     a("42.5", All, "Edit clips and slots across all tracks", g1("Shift"), p!("C4")),
     a("42.5", All, "Edit time across all tracks", g1("Shift"), p!("C4")),
-    a("42.5", All, "Edit the selected part of an envelope", g1("Alt"), p!("C3")),
+    a("42.5", All, "Edit the selected part of an envelope", g1("Alt"), W),
 
     // 42.6 Adjusting values
     b("42.6", All, Wh::ValueControl, "Decrement value", k(NO, Key::ArrowDown), p!("C19")),
@@ -229,12 +229,12 @@ pub static BINDINGS: &[Binding] = &[
     b("42.6", All, Wh::ValueControl, "Confirm value entry", k(NO, Key::Enter), p!("C19")),
 
     // 42.7 Breakpoint envelopes
-    a("42.7", Arr, "Toggle Automation Mode", k(NO, Key::A), p!("C3")),
-    a("42.7", Time, "Finer envelope resolution", g1("Shift"), p!("C3")),
-    a("42.7", Time, "Curve an automation segment", g1("Alt"), p!("C3")),
+    a("42.7", Arr, "Toggle Automation Mode", k(NO, Key::A), L(M::View(View::ToggleAutomationMode))),
+    a("42.7", Time, "Finer envelope resolution", g1("Shift"), W),
+    a("42.7", Time, "Curve an automation segment", g1("Alt"), W),
     a("42.7", Time, "Toggle fade controls for a moment", k(NO, Key::F), p!("C5")),
-    a("42.7", Time, "Delete the selected envelope", k(CMD, Key::Delete), p!("C3")),
-    a("42.7", Time, "Ignore grid while dragging breakpoints", g("Cmd", "Alt"), p!("C3")),
+    a("42.7", Time, "Delete the selected envelope", k(CMD, Key::Delete), L(M::Edit(Edit::DeleteEnvelope))),
+    a("42.7", Time, "Ignore grid while dragging breakpoints", g("Cmd", "Alt"), W),
 
     // 42.8 Loop brace and start/end markers
     a("42.8", Time, "Set start marker", k(CMD, Key::F9), p!("C2")),
@@ -341,7 +341,7 @@ pub static BINDINGS: &[Binding] = &[
     a("42.12", Notes, "Show/hide note filters", k(CMD_SHIFT, Key::F), p!("C9")),
 
     // 42.13 Grid snapping and drawing
-    a("42.13", Time, "Toggle Draw Mode", k(NO, Key::B), p!("C9")),
+    a("42.13", Time, "Toggle Draw Mode", k(NO, Key::B), W),
     a("42.13", Time, "Narrow grid", k(CMD, Key::Num1), p!("C2")),
     a("42.13", Time, "Widen grid", k(CMD, Key::Num2), p!("C2")),
     a("42.13", Time, "Triplet grid", k(CMD, Key::Num3), p!("C2")),

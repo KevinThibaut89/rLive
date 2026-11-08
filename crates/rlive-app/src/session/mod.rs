@@ -5,6 +5,7 @@
 
 mod arrangement;
 mod automation;
+pub mod automation_edit;
 mod build;
 mod clips;
 mod devices;
@@ -25,6 +26,8 @@ mod warping;
 mod warping_tests;
 
 #[cfg(test)]
+mod automation_edit_tests;
+#[cfg(test)]
 mod automation_tests;
 #[cfg(test)]
 mod compensation_tests;
@@ -42,6 +45,7 @@ mod sample_tests;
 mod tests;
 
 pub use arrangement::{ArrMove, TrimEdge};
+pub use automation_edit::{EnvGroup, EnvParam};
 pub use build::{descriptor_for, mix_of, Builder, DeviceRuntime, PluginWiring};
 pub use clips::ClipRef;
 pub use devices::ChainRef;

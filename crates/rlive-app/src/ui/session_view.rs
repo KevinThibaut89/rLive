@@ -10,6 +10,7 @@
 //! Track widths and slot heights adapt to the window; headers, stop row, mixer, return tracks and
 //! the Master/scene column stay put while the grid scrolls.
 
+use super::automation;
 use super::icons;
 use super::in_out;
 use super::info_view::edit_info_item;
@@ -21,6 +22,7 @@ use crate::session::{can_arm, ChainRef, ClipRef, InfoTarget, Session};
 use egui::{
     Align2, Color32, Layout, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
 };
+use rlive_core::param::{mixer, EnvTarget, ParamId, ParamOwner, ParamRef};
 use rlive_core::TrackId;
 use rlive_engine::mix_cell;
 use rlive_engine::shared::{NO_SLOT, STOP_QUEUED};
@@ -124,6 +126,14 @@ impl Geo {
     fn slot_y(&self, j: usize, scroll_y: f32) -> f32 {
         self.grid.top() + j as f32 * self.slot_h - scroll_y
     }
+}
+
+/// A mixer control of a track, as an envelope addresses it.
+fn mixer_target(track: TrackId, id: ParamId) -> EnvTarget {
+    EnvTarget::Param(ParamRef {
+        owner: ParamOwner::Track(track),
+        id,
+    })
 }
 
 pub(super) fn child(ui: &mut egui::Ui, clip: Rect, rect: Rect, layout: Layout) -> egui::Ui {
@@ -1074,9 +1084,17 @@ fn mixer_strip(
         }
         Led::of(session.cell_state(chain, mix_cell::PAN))
             .paint(&p, knob_r.left_top() + Vec2::new(2.0, 2.0));
+        automation::control_zone(
+            &ku,
+            session,
+            state,
+            knob_r,
+            chain,
+            mixer_target(id, mixer::PAN),
+        );
         y += 30.0;
         if !sends.is_empty() {
-            y = send_knobs(ui, session, id, is_return, &sends, inner, y);
+            y = send_knobs(ui, session, state, id, is_return, &sends, inner, y);
         }
         y = track_delay_row(ui, session, id, delay, inner, y);
     }
@@ -1108,6 +1126,14 @@ fn mixer_strip(
     }
     Led::of(session.cell_state(chain, mix_cell::VOLUME))
         .paint(&p, fader_r.left_top() + Vec2::new(-5.0, 4.0));
+    automation::control_zone(
+        &fu,
+        session,
+        state,
+        fader_r,
+        chain,
+        mixer_target(id, mixer::VOLUME),
+    );
     let db_r = Rect::from_center_size(
         Pos2::new(inner.center().x, fader_r.bottom() + 9.0),
         Vec2::new(inner.width().min(54.0), 14.0),
@@ -1238,6 +1264,7 @@ fn mixer_strip(
 fn send_knobs(
     ui: &mut egui::Ui,
     session: &mut Session,
+    state: &mut UiState,
     id: TrackId,
     is_return: bool,
     sends: &[(TrackId, f32, bool)],
@@ -1296,6 +1323,10 @@ fn send_knobs(
         );
         if let Some(value) = changed {
             session.set_send(id, *ret, value);
+        }
+        if !is_return {
+            let target = mixer_target(id, ParamId(mixer::FIRST_SEND.0 + n as u32));
+            automation::control_zone(ui, session, state, hit, ChainRef::Track(id), target);
         }
         let label = if *db <= SEND_OFF_DB + 0.5 {
             "-inf".to_string()
@@ -1660,6 +1691,18 @@ fn master_column(
             .map_or(session.project.master.volume_db, |v| v as f32);
         Led::of(session.cell_state(ChainRef::Master, mix_cell::VOLUME))
             .paint(&p, fader_r.left_top() + Vec2::new(-5.0, 4.0));
+        let master_volume = EnvTarget::Param(ParamRef {
+            owner: ParamOwner::Master,
+            id: mixer::VOLUME,
+        });
+        automation::control_zone(
+            &fu,
+            session,
+            state,
+            fader_r,
+            ChainRef::Master,
+            master_volume,
+        );
         if let Some(db) = widgets::fader(
             &mut fu,
             fader_r.size(),

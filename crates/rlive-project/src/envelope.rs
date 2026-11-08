@@ -45,7 +45,7 @@ impl EnvPoint for Breakpoint {
 }
 
 /// `points` read in knob position, which is the space segments run straight in.
-fn as_knob(points: &[Breakpoint], range: ParamRange) -> Vec<Breakpoint> {
+pub(crate) fn as_knob(points: &[Breakpoint], range: ParamRange) -> Vec<Breakpoint> {
     points
         .iter()
         .map(|p| Breakpoint {
@@ -125,10 +125,27 @@ impl Envelope {
     /// it, the envelope keeps the shape it had, even where the cut falls inside a curved segment.
     /// A new envelope holds `before` up to the stroke, and the stroke's end after it.
     pub fn overwrite(&mut self, stroke: &[Breakpoint], before: f64, range: ParamRange) {
-        let (Some(first), Some(last)) = (stroke.first().copied(), stroke.last().copied()) else {
+        let (Some(first), Some(last)) = (stroke.first(), stroke.last()) else {
             return;
         };
-        let thinned = thin_recorded(stroke, range);
+        let span = (first.time, last.time);
+        self.splice(span, &thin_recorded(stroke, range), before, range);
+    }
+
+    /// Replaces the `span` of the envelope with `body`, exactly as given. Outside it the envelope
+    /// keeps the shape it had. A new envelope holds `before` up to `body`, and its end after it.
+    pub fn splice(
+        &mut self,
+        span: (f64, f64),
+        body: &[Breakpoint],
+        before: f64,
+        range: ParamRange,
+    ) {
+        let (Some(first), Some(end)) = (body.first().copied(), body.last().copied()) else {
+            return;
+        };
+        let last = Breakpoint::new(span.1, end.value);
+        let first = Breakpoint::new(span.0, first.value);
         if self.points.is_empty() {
             if first.time > 0.0 {
                 self.points.push(Breakpoint::new(0.0, before));
@@ -136,14 +153,14 @@ impl Envelope {
                     self.points.push(Breakpoint::new(first.time, before));
                 }
             }
-            self.points.extend(thinned);
+            self.points.extend_from_slice(body);
             return;
         }
         let interp = Interp::of(range.quantized);
         let knob = as_knob(&self.points, range);
         let head = self.points.partition_point(|p| p.time < first.time);
         let tail = self.points.partition_point(|p| p.time <= last.time);
-        let mut merged = Vec::with_capacity(self.points.len() + thinned.len() + 2);
+        let mut merged = Vec::with_capacity(self.points.len() + body.len() + 2);
         merged.extend_from_slice(&self.points[..head]);
 
         // Arrive at the stroke the way the old envelope did.
@@ -163,7 +180,7 @@ impl Envelope {
         if let Some(value) = arrive.filter(|v| *v != first.value) {
             merged.push(Breakpoint::new(first.time, value));
         }
-        merged.extend(thinned);
+        merged.extend_from_slice(body);
 
         // Leave it where the old envelope would have been by then.
         let leave = envelope::value_at(&knob, last.time, interp).map(|v| range.from_normalized(v));

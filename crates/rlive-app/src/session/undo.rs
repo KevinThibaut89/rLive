@@ -148,7 +148,11 @@ impl Session {
             self.restore_track(s);
         }
         self.restore_master(&target.master);
+        let tempo_changed = self.project.arrangement.tempo != target.arrangement.tempo;
         self.project.arrangement = (*target.arrangement).clone();
+        if tempo_changed {
+            self.sync_time_maps();
+        }
         self.restore_settings(&target.shell);
         self.sync_loop();
         self.project.normalize();

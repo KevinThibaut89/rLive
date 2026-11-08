@@ -5,6 +5,7 @@ mod clip;
 mod defaults;
 mod device;
 mod envelope;
+pub mod envelope_edit;
 mod file_ref;
 mod groove;
 pub mod history;
@@ -38,6 +39,6 @@ pub use project::{Crossfader, Project, ProjectError, FILE_EXTENSION, FORMAT_VERS
 pub use routing::SEND_OFF_DB;
 pub use scene::Scene;
 pub use track::{
-    ChainTap, Crossfade, ExternalRoute, Monitor, PanMode, Route, Routing, Tap, Track, TrackDelay,
-    TrackKind, TrackSend, TrackUi,
+    ChainTap, Crossfade, ExternalRoute, MainLane, Monitor, PanMode, Route, Routing, Tap, Track,
+    TrackDelay, TrackKind, TrackSend, TrackUi,
 };

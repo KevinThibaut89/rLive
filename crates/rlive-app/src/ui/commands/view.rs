@@ -8,6 +8,7 @@ super::domain! {
     /// The View menu, and the Navigate commands that move keyboard focus.
     View {
         ToggleMainView,
+        ToggleAutomationMode,
         SwitchDetail,
         ToggleBrowser,
         ToggleDetail,
@@ -35,6 +36,7 @@ super::domain! {
 
 pub const MENU: &[Entry] = &[
     Item("Session / Arrangement (Tab)", M::View(View::ToggleMainView)),
+    Item("Automation Mode", M::View(View::ToggleAutomationMode)),
     Item(
         "Clip / Device View (Shift+Tab)",
         M::View(View::SwitchDetail),
@@ -54,6 +56,7 @@ pub const MENU: &[Entry] = &[
 
 impl RliveApp {
     pub(super) fn view_state(&self, s: &mut MenuState) {
+        s.check(M::View(View::ToggleAutomationMode), self.ui.arr.auto.mode);
         s.check(M::View(View::ToggleBrowser), self.ui.show_browser);
         s.check(M::View(View::ToggleDetail), self.ui.show_detail);
         s.check(M::View(View::ToggleMixer), self.ui.layout.show_mixer);
@@ -112,6 +115,10 @@ impl RliveApp {
                     MainView::Session => MainView::Arrangement,
                     MainView::Arrangement => MainView::Session,
                 };
+            }
+            View::ToggleAutomationMode => {
+                self.ui.arr.auto.mode = !self.ui.arr.auto.mode;
+                self.ui.main_view = MainView::Arrangement;
             }
             View::SwitchDetail => {
                 self.ui.show_detail = true;

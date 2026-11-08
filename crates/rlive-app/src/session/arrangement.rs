@@ -80,6 +80,10 @@ impl Session {
                 Some((*m, c))
             })
             .collect();
+        let spans: Vec<(ArrMove, f64, f64)> = lifted
+            .iter()
+            .map(|(m, c)| (*m, c.start as f64, c.end() as f64))
+            .collect();
         let mut placed = Vec::with_capacity(lifted.len());
         let mut touched = HashSet::new();
         for (m, mut c) in lifted {
@@ -94,6 +98,7 @@ impl Session {
                 t.place_clip(c);
             }
         }
+        self.carry_automation(&spans, copy);
         self.sync_lanes(touched, if copy { "Copy Clips" } else { "Move Clips" });
         placed
     }

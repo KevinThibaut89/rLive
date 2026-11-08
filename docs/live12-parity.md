@@ -797,22 +797,22 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[~]` Overwrite: mouse is touch; hardware is latch; first pass in a clip always latch. M
 - `[~]` Override by manual change; Re-Enable global button and per parameter; relaunching clip restores. M
 - `[ ]` Clip Envelope Editor with Automation toggle and Device/Control choosers; Show Adjusted Only merges choosers. M
-- `[ ]` Automation Mode (A), main lane, Add Lane; hide additional lanes; duplicates limited to two; Add Lane for Each Automated Envelope; remove with modifiers; arrow navigation. L
+- `[~]` Automation Mode (A), main lane, Add Lane; hide additional lanes; duplicates limited to two; Add Lane for Each Automated Envelope; remove with modifiers; arrow navigation. L
 - `[ ]` Show Automation and Show in New Lane from parameter context menu. S
 - `[ ]` Dashed line for unautomated control; clicking a control shows its envelope. S
-- `[ ]` Breakpoint creation: click line, double-click off-line, Add Value, snap bypass. M
+- `[~]` Breakpoint creation: click line, double-click off-line, Add Value, snap bypass. M
 - `[x]` Stepped envelopes for discrete parameters. S
-- `[ ]` Draw Mode (B, momentary hold), grid-width steps; Snap to Grid off for smooth. M
-- `[ ]` Shapes: sine, triangle, saw, inverse saw, square; ramps relative to neighbours; ADSR; only square for discrete. M
-- `[ ]` Edit breakpoints and segments, selections, fine drag, axis constrain, drag-through overwrite only on drop. L
-- `[ ]` Curved segments with Alt, straighten with Alt-double-click. M
-- `[ ]` Edit Value, typed, relative across selection. S
-- `[ ]` Stretch and skew handles, mirrored with modifier. M
-- `[ ]` Simplify Envelope. M
-- `[ ]` Delete Automation, Clear Envelope, Clear All of device, Clear All in Set. S
+- `[~]` Draw Mode (B, momentary hold), grid-width steps; Snap to Grid off for smooth. M
+- `[~]` Shapes: sine, triangle, saw, inverse saw, square; ramps relative to neighbours; ADSR; only square for discrete. M
+- `[~]` Edit breakpoints and segments, selections, fine drag, axis constrain, drag-through overwrite only on drop. L
+- `[~]` Curved segments with Alt, straighten with Alt-double-click. M
+- `[~]` Edit Value, typed, relative across selection. S
+- `[~]` Stretch and skew handles, mirrored with modifier. M
+- `[~]` Simplify Envelope. M
+- `[~]` Delete Automation, Clear Envelope, Clear All of device, Clear All in Set. S
 - `[ ]` Tempo automation with Min/Max display range, which also bounds MIDI control. S
-- `[ ]` Lock Envelopes to timeline. S
-- `[ ]` Cut, copy, duplicate, delete inside time selections, across lanes, even across parameters. M
+- `[~]` Lock Envelopes to timeline. S
+- `[~]` Cut, copy, duplicate, delete inside time selections, across lanes, even across parameters. M
 
 
 ## 27. Clip Envelopes (533-545)
@@ -1345,13 +1345,12 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **C18:** Hide/show video window
 - `[ ]` **C19:** Cancel value entry; Confirm value entry; Current scene from the last track; Decrement value; Delete track from title bar; Eight scenes down; Eight scenes up; First track of the scene; Focus Mixer; Increment value; Jump to highlighted track title; Last track of the scene; Move nonadjacent tracks down; Move nonadjacent tracks left; Move nonadjacent tracks right; Move nonadjacent tracks up; Next control; Next field; Next name while renaming; Next neighbouring control; Next track while renaming; Previous control; Previous neighbouring control; Return to default; Scene down; Scene up; Select all clips and slots; Select clip above; Select clip below; Select clip left; Select clip right; Type a value; Value down by an octave or fine step; Value up by an octave or fine step
 - `[ ]` **C2:** Double loop length; Envelopes tab; Fit content to view height; Fit content to view width; Fixed or zoom-adaptive grid; Focus clip panels; Focus selected clip panel; Follow playback; Halve loop length; Hide/show Overview; Lengthen loop; Lengthen loop brace; Move clip region left with start marker; Move clip region right with start marker; Move end marker to position; Move loop by its length, down; Move loop by its length, up; Move start marker to position; Narrow grid; Nudge loop brace left; Nudge loop brace right; Sample or Notes tab; Select loop brace contents; Select material in loop; Set end marker; Set loop end; Set loop start; Set start marker; Shorten loop; Shorten loop brace; Show Device and Clip View together; Snap to grid; Switch Notes/Envelopes/MPE tabs; Switch Sample/Envelopes tabs; Toggle full-size Clip View; Triplet grid; Widen grid; Zoom back from clip selection; Zoom to clip selection
-- `[ ]` **C3:** Curve an automation segment; Delete the selected envelope; Edit the selected part of an envelope; Finer envelope resolution; Ignore grid while dragging breakpoints; Toggle Automation Mode
 - `[ ]` **C4:** Consolidate selection; Copy time; Crop selected clips; Cut time; Deactivate selection; Delete time; Duplicate time; Edit clips and slots across all tracks; Edit time across all tracks; Fold or unfold selected tracks; Fold selected tracks; Insert marker to playhead; Insert silence; Nudge selection left; Nudge selection right; Optimize height; Optimize width; Pan beside a selection; Paste time; Play from insert marker in clip; Play the selection; Resize clip at the insert marker; Select time within a clip; Shorter tracks or clips; Slide waveform; Split Arrangement clip at time selection; Split clip at selection; Stop at the end of the selection; Taller tracks or clips; Unfold all tracks; Unfold selected tracks; Zoom back from time selection; Zoom to time selection
 - `[ ]` **C5:** Create fade or crossfade; Delete fades in selected clips; Toggle fade controls for a moment; Toggle fade handles for a moment
 - `[ ]` **C6:** Add take area to the main lane; Add take lane; Audition take lane; Duplicate take lane; Next take into the main clip; Previous take into the main clip; Show take lanes
 - `[ ]` **C7:** Add or remove stop button; Deactivate selected clip; Insert captured scene; Move nonadjacent scenes down; Move nonadjacent scenes up
 - `[ ]` **C8:** Create Follow Action chain; Toggle Follow Actions
-- `[ ]` **C9:** Change velocity from the note editor; Chop notes or split at time selection; Chop notes, one at a time; Chop notes, two at a time; Copy notes; Fit notes to time range; Fit notes to view height; Fit notes to view width; Group notes (play all); Highlight scale; Insert marker to beginning; Insert marker to end; Invert note selection; Join notes; Lower note chance; Lower note velocity; Lower velocity deviation; Quantize; Quantize settings; Raise note chance; Raise note velocity; Raise velocity deviation; Scroll editor down; Scroll editor down, fine; Scroll editor left; Scroll editor right; Scroll editor up; Scroll editor up, fine; Select next note; Select next note in key track; Select previous note; Select previous note in key track; Set note velocity by typing; Show/hide note filters; Split notes at an exact place; Toggle Draw Mode; Ungroup notes; Zoom back from clip selection; Zoom in horizontally; Zoom out horizontally; Zoom to clip selection
+- `[ ]` **C9:** Change velocity from the note editor; Chop notes or split at time selection; Chop notes, one at a time; Chop notes, two at a time; Copy notes; Fit notes to time range; Fit notes to view height; Fit notes to view width; Group notes (play all); Highlight scale; Insert marker to beginning; Insert marker to end; Invert note selection; Join notes; Lower note chance; Lower note velocity; Lower velocity deviation; Quantize; Quantize settings; Raise note chance; Raise note velocity; Raise velocity deviation; Scroll editor down; Scroll editor down, fine; Scroll editor left; Scroll editor right; Scroll editor up; Scroll editor up, fine; Select next note; Select next note in key track; Select previous note; Select previous note in key track; Set note velocity by typing; Show/hide note filters; Split notes at an exact place; Ungroup notes; Zoom back from clip selection; Zoom in horizontally; Zoom out horizontally; Zoom to clip selection
 - `[ ]` **out:** Focus Learn View; Hide/show Learn View
 <!-- pending-shortcuts:end -->
 

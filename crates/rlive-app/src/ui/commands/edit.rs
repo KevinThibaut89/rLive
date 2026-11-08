@@ -2,13 +2,14 @@
 
 use super::{Entry, Entry::Item, Entry::Separator, FocusArea, MenuCommand as M, MenuState};
 use crate::session::{ChainRef, ClipRef};
+use crate::ui::automation::{self, EnvelopeClipboard};
 use crate::ui::{piano_roll, session_view, Detail, MainView, RliveApp};
 use rlive_core::TrackId;
 use rlive_project::{ArrangementClip, Clip, NoteData, TrackKind};
 
 super::domain! {
     /// The Edit menu.
-    Edit { Undo, Redo, Cut, Copy, Paste, Duplicate, Delete, SelectAll, Rename, ReturnToDefault }
+    Edit { Undo, Redo, Cut, Copy, Paste, Duplicate, Delete, SelectAll, Rename, ReturnToDefault, DeleteEnvelope }
 }
 
 pub const MENU: &[Entry] = &[
@@ -43,6 +44,8 @@ pub enum EditFocus {
     Notes,
     ArrClips,
     SessionClip,
+    /// A time selection in the automation lanes.
+    Envelopes,
     None,
 }
 
@@ -53,6 +56,8 @@ pub enum ClipBoard {
     Slot(Box<Clip>),
     /// Clips with their tracks, their starts relative to the earliest.
     ArrClips(Vec<(TrackId, ArrangementClip)>),
+    /// Stretches of envelope, which can be pasted onto other parameters.
+    Envelopes(EnvelopeClipboard),
 }
 
 /// Resolves focus to an Edit target; pure so the precedence can be tested.
@@ -88,6 +93,15 @@ impl RliveApp {
                 .is_some_and(|c| c.is_midi())
     }
 
+    /// Whether Edit commands in the Arrangement act on the automation lanes.
+    fn lanes_have_selection(&self) -> bool {
+        let auto = &self.ui.arr.auto;
+        auto.mode
+            && (auto.sel.is_some()
+                || (auto.focus.is_some()
+                    && matches!(self.ui.clipboard, Some(ClipBoard::Envelopes(_)))))
+    }
+
     pub(in crate::ui) fn edit_focus(&self, ctx: &egui::Context) -> EditFocus {
         // Clicking away from an editor doesn't change what Edit commands act on.
         let area = match self.ui.focus {
@@ -99,6 +113,10 @@ impl RliveApp {
             }
             other => other,
         };
+        if !ctx.text_edit_focused() && area == FocusArea::Arrangement && self.lanes_have_selection()
+        {
+            return EditFocus::Envelopes;
+        }
         resolve_focus(
             ctx.text_edit_focused(),
             area,
@@ -124,6 +142,10 @@ impl RliveApp {
             EditFocus::ArrClips => (
                 !self.ui.arr.selection.is_empty(),
                 matches!(self.ui.clipboard, Some(ClipBoard::ArrClips(_))),
+            ),
+            EditFocus::Envelopes => (
+                self.ui.arr.auto.sel.is_some(),
+                matches!(self.ui.clipboard, Some(ClipBoard::Envelopes(_))),
             ),
             EditFocus::None => (false, false),
         };
@@ -168,6 +190,9 @@ impl RliveApp {
             Edit::ReturnToDefault => {
                 let ids = self.selected_track_ids();
                 self.session.reset_monitor(&ids);
+            }
+            Edit::DeleteEnvelope => {
+                automation::delete_focused_envelope(&mut self.session, &self.ui);
             }
             Edit::Rename => {
                 if let Some(ChainRef::Track(id)) = self.ui.selected {
@@ -225,6 +250,7 @@ impl RliveApp {
             EditFocus::Notes => self.edit_notes(c),
             EditFocus::ArrClips => self.edit_arr_clips(c),
             EditFocus::SessionClip => self.edit_session_clip(c),
+            EditFocus::Envelopes => automation::edit_selection(&mut self.session, &mut self.ui, c),
             // Text fields handle their own editing inside egui.
             EditFocus::Text | EditFocus::None => {}
         }

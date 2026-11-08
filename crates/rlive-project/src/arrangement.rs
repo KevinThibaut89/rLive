@@ -133,6 +133,9 @@ pub struct Arrangement {
     pub signatures: Vec<SignatureMarker>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub tempo: TempoAutomation,
+    /// Envelopes stay put on the timeline when clips move, instead of going with them.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub lock_envelopes: bool,
     /// Groups of tracks whose clips edit together. A track is in at most one.
     #[serde(default, skip_serializing_if = "is_default")]
     pub linked_tracks: Vec<Vec<TrackId>>,
@@ -150,6 +153,7 @@ impl Default for Arrangement {
             locators: Vec::new(),
             signatures: Vec::new(),
             tempo: TempoAutomation::default(),
+            lock_envelopes: false,
             linked_tracks: Vec::new(),
         }
     }

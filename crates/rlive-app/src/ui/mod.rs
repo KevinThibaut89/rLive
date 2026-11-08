@@ -1,6 +1,7 @@
 //! The rLive user interface (Ableton Live–style).
 
 mod arrangement;
+mod automation;
 mod browser;
 pub mod commands;
 mod devices;
@@ -449,8 +450,35 @@ impl RliveApp {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        self.draw_key(ctx);
         if self.ui.computer_keys && !ctx.egui_wants_keyboard_input() {
             self.computer_keyboard(ctx);
+        }
+    }
+
+    /// B toggles Draw Mode, and held down while it's off, switches it on just for as long.
+    fn draw_key(&mut self, ctx: &egui::Context) {
+        let area = matches!(self.ui.focus, FocusArea::Arrangement | FocusArea::Clip);
+        if !area || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let (pressed, released, modified, now) = ctx.input(|i| {
+            (
+                i.key_pressed(Key::B),
+                i.key_released(Key::B),
+                i.modifiers.any(),
+                i.time,
+            )
+        });
+        if modified {
+            return;
+        }
+        let auto = &mut self.ui.arr.auto;
+        if pressed {
+            auto.draw = auto.draw_key.pressed(auto.draw, now);
+        }
+        if released {
+            auto.draw = auto.draw_key.released(auto.draw, now);
         }
     }
 
@@ -661,6 +689,16 @@ impl RliveApp {
         );
         if info(r, "Metronome — click on every beat while playing (O)").clicked() {
             self.session.set_metronome(!metro);
+        }
+        let draw = self.ui.arr.auto.draw;
+        let r = widgets::state_button(&mut lu, Vec2::new(38.0, h), draw, pal().accent, "Draw");
+        if info(
+            r,
+            "Draw Mode — draw envelopes freely in the automation lanes (B)",
+        )
+        .clicked()
+        {
+            self.ui.arr.auto.draw = !draw;
         }
 
         // ---- centre: transport + position
@@ -1253,6 +1291,7 @@ impl eframe::App for RliveApp {
             menu.publish(self.menu_state(&ctx));
         }
         self.dialogs(&ctx);
+        automation::show_popups(&ctx, &mut self.session, &mut self.ui);
     }
 
     #[cfg(target_os = "macos")]

@@ -163,6 +163,17 @@ pub enum TrackDelay {
     Samples(i32),
 }
 
+/// What a track's main automation lane shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum MainLane {
+    /// Nothing has been chosen yet, so the mixer's volume.
+    #[default]
+    Volume,
+    /// The Device chooser is set to None.
+    None,
+    Show(EnvTarget),
+}
+
 /// View state stored with the track. Undo leaves it alone.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -174,8 +185,12 @@ pub struct TrackUi {
     pub show_take_lanes: bool,
     /// The take lane being auditioned, by index.
     pub audition_lane: Option<usize>,
-    /// Automation lanes on show, in display order.
+    /// Automation lanes on show under the main one, in display order.
     pub automation_lanes: Vec<EnvTarget>,
+    /// The main automation lane.
+    pub automation_main: MainLane,
+    /// The additional automation lanes are folded away.
+    pub automation_lanes_hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

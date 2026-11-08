@@ -11,12 +11,12 @@
 //! [`EngineEvent::AutomationMoved`]: rlive_engine::EngineEvent::AutomationMoved
 
 use super::devices::mixer_cell_of;
-use super::{ChainRef, Session};
-use rlive_core::param::{EnvTarget, ParamOwner, ParamRef, ACTIVATOR};
+use super::{build, ChainRef, Session};
+use rlive_core::param::{transport, EnvTarget, ParamOwner, ParamRef, ACTIVATOR};
 use rlive_core::{ChainId, DeviceId, ParamRange, TrackId};
 use rlive_engine::{
     AutomationLane, BusLayout, CellIx, CellState, CellTarget, EngineCommand, GraphOp, MacroRoute,
-    ParamCmd, RecordCmd, TrackRef, TrackRoutes,
+    ParamCmd, RecordCmd, TrackRef, TrackRoutes, TransportCmd,
 };
 use rlive_project::{Breakpoint, Device, DeviceKind, EnvMode, Envelope};
 use std::collections::HashMap;
@@ -118,9 +118,9 @@ fn param_of(owner: TrackRef, target: CellTarget) -> Option<ParamRef> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct CellKey {
-    track: TrackRef,
-    cell: CellIx,
+pub(super) struct CellKey {
+    pub track: TrackRef,
+    pub cell: CellIx,
 }
 
 /// What a control was moved with, which decides how its gesture ends.
@@ -187,9 +187,15 @@ pub(super) struct AutomationRecorder {
     done: Vec<Stroke>,
     /// Something was written to the project in this pass.
     wrote: bool,
+    /// The last control the user moved, as its track and cell, for the automation lanes to show.
+    touched: Option<(ChainRef, CellIx)>,
 }
 
 impl AutomationRecorder {
+    pub(super) fn take_touched(&mut self) -> Option<(ChainRef, CellIx)> {
+        self.touched.take()
+    }
+
     /// Forget the pass in progress, as its parameters may no longer exist.
     pub(super) fn abandon(&mut self) {
         self.gestures.clear();
@@ -290,21 +296,21 @@ impl Session {
 
     // ------------------------------------------------------------- compiling
 
-    fn envelopes(&self, track: TrackRef) -> Option<&Vec<Envelope>> {
+    pub(super) fn envelopes(&self, track: TrackRef) -> Option<&Vec<Envelope>> {
         match track {
             TrackRef::Master => Some(&self.project.master.automation),
             TrackRef::Track(id) => self.project.track(id).map(|t| &t.automation),
         }
     }
 
-    fn envelopes_mut(&mut self, track: TrackRef) -> Option<&mut Vec<Envelope>> {
+    pub(super) fn envelopes_mut(&mut self, track: TrackRef) -> Option<&mut Vec<Envelope>> {
         match track {
             TrackRef::Master => Some(&mut self.project.master.automation),
             TrackRef::Track(id) => self.project.track_mut(id).map(|t| &mut t.automation),
         }
     }
 
-    fn track_devices(&self, track: TrackRef) -> Option<&Vec<Device>> {
+    pub(super) fn track_devices(&self, track: TrackRef) -> Option<&Vec<Device>> {
         match track {
             TrackRef::Master => Some(&self.project.master.devices),
             TrackRef::Track(id) => self.project.track(id).map(|t| &t.devices),
@@ -324,6 +330,14 @@ impl Session {
     /// Replace a parameter's envelope. No points removes it. This is what editing envelopes goes
     /// through, as one undoable edit.
     pub fn set_envelope(&mut self, chain: ChainRef, target: EnvTarget, points: Vec<Breakpoint>) {
+        if target == transport::tempo_target() {
+            if self.project.arrangement.tempo.points != points {
+                self.project.arrangement.tempo.points = points;
+                self.sync_time_maps();
+                self.mark_edit("Edit Automation");
+            }
+            return;
+        }
         let track: TrackRef = chain.into();
         let Some(envelopes) = self.envelopes_mut(track) else {
             return;
@@ -338,6 +352,12 @@ impl Session {
         }
         self.send_routes(track);
         self.mark_edit("Edit Automation");
+    }
+
+    /// Give the engine the song's tempo and meter as the project has them now.
+    pub(super) fn sync_time_maps(&mut self) {
+        let maps = Arc::new(build::time_maps(&self.project));
+        self.send(EngineCommand::Transport(TransportCmd::SetTimeMaps(maps)));
     }
 
     /// Give the engine the routes of a track as the project has them now.
@@ -401,6 +421,7 @@ impl Session {
 
     /// A control is being moved. Call before the value goes to the engine.
     pub(super) fn note_gesture(&mut self, chain: ChainRef, cell: CellIx) {
+        self.automation.touched = Some((chain.owner(), cell));
         if self.automation.arm && self.is_recording() {
             let key = CellKey {
                 track: chain.into(),
@@ -460,7 +481,7 @@ impl Session {
     }
 
     /// The envelope a parameter would be recorded into, and how its values convert.
-    fn lane_of(&self, key: CellKey) -> Option<(EnvTarget, ParamRange)> {
+    pub(super) fn lane_of(&self, key: CellKey) -> Option<(EnvTarget, ParamRange)> {
         let spec = self.layouts.get(&owner_of(key.track))?.spec(key.cell)?;
         let target = param_of(key.track, spec.target)?;
         Some((EnvTarget::Param(target), spec.range))

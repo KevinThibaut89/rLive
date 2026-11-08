@@ -155,6 +155,22 @@ pub mod mixer {
     }
 }
 
+/// The Song Tempo, as a parameter of [`ParamOwner::Transport`]. Its points are in BPM and live with
+/// the Arrangement rather than on a track.
+pub mod transport {
+    use super::{EnvTarget, ParamId, ParamOwner, ParamRef};
+
+    pub const TEMPO: ParamId = ParamId(0);
+
+    /// What an automation lane showing the tempo has as its target.
+    pub const fn tempo_target() -> EnvTarget {
+        EnvTarget::Param(ParamRef {
+            owner: ParamOwner::Transport,
+            id: TEMPO,
+        })
+    }
+}
+
 /// A rack's own parameters: its Macro Controls and the Chain Selector, as ids of a
 /// [`ParamOwner::Device`]. A rack always has cells for all sixteen macros, so showing or hiding
 /// one never moves a cell.

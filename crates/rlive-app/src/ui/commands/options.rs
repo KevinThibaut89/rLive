@@ -15,6 +15,8 @@ super::domain! {
         ToggleDelayCompensation,
         ToggleReducedLatency,
         RescanPlugins,
+        ToggleDrawMode,
+        ToggleLockEnvelopes,
     }
 }
 
@@ -32,6 +34,8 @@ pub const MENU: &[Entry] = &[
         "Reduced Latency When Monitoring",
         M::Options(Options::ToggleReducedLatency),
     ),
+    Item("Draw Mode", M::Options(Options::ToggleDrawMode)),
+    Item("Lock Envelopes", M::Options(Options::ToggleLockEnvelopes)),
     Item("Rescan Plugins", M::Options(Options::RescanPlugins)),
 ];
 
@@ -41,6 +45,11 @@ const MIN_VELOCITY: f32 = 1.0 / 127.0;
 
 impl RliveApp {
     pub(super) fn options_state(&self, s: &mut MenuState) {
+        s.check(M::Options(Options::ToggleDrawMode), self.ui.arr.auto.draw);
+        s.check(
+            M::Options(Options::ToggleLockEnvelopes),
+            self.session.project.arrangement.lock_envelopes,
+        );
         s.enable(
             M::Options(Options::RescanPlugins),
             self.ui.scan_rx.is_none(),
@@ -82,11 +91,16 @@ impl RliveApp {
                 let on = !self.session.project.reduced_latency_when_monitoring;
                 return self.session.set_reduced_latency_when_monitoring(on);
             }
+            Options::ToggleLockEnvelopes => {
+                let on = !self.session.project.arrangement.lock_envelopes;
+                return self.session.set_lock_envelopes(on);
+            }
             _ => {}
         }
         let ui = &mut self.ui;
         match c {
             Options::ToggleComputerKeys => ui.computer_keys = !ui.computer_keys,
+            Options::ToggleDrawMode => ui.arr.auto.draw = !ui.arr.auto.draw,
             Options::OctaveDown => ui.octave = (ui.octave - 1).max(-2),
             Options::OctaveUp => ui.octave = (ui.octave + 1).min(8),
             Options::VelocityDown => {
@@ -96,7 +110,8 @@ impl RliveApp {
             Options::RescanPlugins => self.start_plugin_scan(),
             Options::ToggleSoloInPlace
             | Options::ToggleDelayCompensation
-            | Options::ToggleReducedLatency => {}
+            | Options::ToggleReducedLatency
+            | Options::ToggleLockEnvelopes => {}
         }
     }
 }
