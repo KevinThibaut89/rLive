@@ -13,12 +13,13 @@ use rlive_devices::{DeviceInit, DeviceRole};
 use rlive_engine::shared::{ChainShared, TrackShared};
 use rlive_engine::{
     mix_cell, ArrangementLane, AudioClip, BusLayout, ChainNode, ClipCurve, ClipData, ClipEnvelopes,
-    DeviceSlot, EnvCurve, EnvTiming, EnvelopedClip, ExprPoint, LaneClip, MidiClip, MixSettings,
-    Note, NoteExpression, NullProcessor, RackKind as EngineRackKind, RackNode, TrackNode,
-    WarpedClip, MAX_RACK_DEPTH, MAX_SENDS,
+    DeviceSlot, EnvCurve, EnvTiming, EnvelopedClip, ExprPoint, LaneClip, LaneFades, MidiClip,
+    MixSettings, Note, NoteExpression, NullProcessor, RackKind as EngineRackKind, RackNode,
+    TrackNode, WarpedClip, MAX_RACK_DEPTH, MAX_SENDS,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
+use rlive_project::arrangement_edit::effective_fades;
 use rlive_project::{
     clip_envelope, ArrangementClip, BeatsPreserve, Breakpoint, Chain, Clip, ClipContent,
     ClipEnvelope, ClipScale, Device, DeviceKind, DrumPad as ProjectPad, Project, RackKind, Track,
@@ -253,6 +254,8 @@ pub struct Builder<'a> {
     pub wiring: &'a PluginWiring,
     /// Where chains publish what the UI reads, if anyone is reading.
     pub chain_shared: Option<&'a mut HashMap<ChainId, Arc<ChainShared>>>,
+    /// Create Fades on Clip Edges: the default fade length, in ticks.
+    pub edge_fade: Option<u64>,
 }
 
 /// Which plug-ins have something routed to or tapped from their extra buses.
@@ -609,15 +612,35 @@ impl Builder<'_> {
     /// Compiles a timeline. Clips whose sample isn't there are left out.
     pub fn lane(&mut self, clips: &[ArrangementClip]) -> Arc<ArrangementLane> {
         let mut lane = Vec::with_capacity(clips.len());
-        for c in clips {
-            if let Some(data) = self.clip(&c.clip) {
-                lane.push(LaneClip {
-                    start: c.start,
-                    end: c.end(),
-                    offset: c.offset,
-                    data,
-                });
-            }
+        let fades = effective_fades(clips, self.edge_fade);
+        // A clip takes the second voice while it overlaps the one before it.
+        let (mut voice, mut prev_tail) = (0u8, false);
+        for (c, f) in clips.iter().zip(fades) {
+            let Some(data) = c.clip.active.then(|| self.clip(&c.clip)).flatten() else {
+                prev_tail = false;
+                continue;
+            };
+            voice = if prev_tail || f.lead > 0 {
+                1 - voice
+            } else {
+                0
+            };
+            prev_tail = f.tail > 0;
+            lane.push(LaneClip {
+                start: c.start,
+                end: c.end(),
+                offset: c.offset,
+                data,
+                fades: LaneFades {
+                    fade_in: f.fade_in,
+                    fade_out: f.fade_out,
+                    in_curve: f.in_curve,
+                    out_curve: f.out_curve,
+                    lead: f.lead,
+                    tail: f.tail,
+                    voice,
+                },
+            });
         }
         Arc::new(ArrangementLane { clips: lane })
     }
@@ -1019,6 +1042,7 @@ mod tests {
             samples: &mut samples,
             wiring: &PluginWiring::default(),
             chain_shared: None,
+            edge_fade: None,
         };
         let mut clip = Clip {
             length: 4 * PPQ,

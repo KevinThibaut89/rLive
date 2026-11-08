@@ -150,6 +150,48 @@ struct FocusRects {
     main: Option<Rect>,
 }
 
+/// Where the small light goes that says a song has signature changes.
+fn r_led_pos(ui: &egui::Ui) -> Pos2 {
+    let at = ui.cursor().min;
+    Pos2::new(at.x - 4.0, at.y + 3.0)
+}
+
+/// Reads a bar.beat.sixteenth position back into ticks.
+fn parse_position(text: &str, sig: TimeSignature) -> Option<f64> {
+    let mut parts = text.split(['.', ':']).map(str::parse::<u64>);
+    let bar = parts.next()?.ok()?.max(1) - 1;
+    let beat = parts.next().unwrap_or(Ok(1)).ok()?.max(1) - 1;
+    let sixteenth = parts.next().unwrap_or(Ok(1)).ok()?.max(1) - 1;
+    Some(
+        (bar * sig.ticks_per_bar()
+            + beat * sig.ticks_per_beat()
+            + sixteenth * (rlive_core::PPQ / 4)) as f64,
+    )
+}
+
+/// A length as bars.beats.sixteenths, zero-based, as Live's length fields show it.
+fn format_length(ticks: f64, sig: TimeSignature) -> String {
+    let t = ticks.max(0.0) as u64;
+    let bars = t / sig.ticks_per_bar();
+    let rest = t % sig.ticks_per_bar();
+    let beats = rest / sig.ticks_per_beat();
+    let sixteenths = (rest % sig.ticks_per_beat()) / (rlive_core::PPQ / 4);
+    format!("{bars}.{beats}.{sixteenths}")
+}
+
+/// The inverse of [`format_length`].
+fn parse_length(text: &str, sig: TimeSignature) -> Option<f64> {
+    let mut parts = text.split(['.', ':']).map(str::parse::<u64>);
+    let bars = parts.next()?.ok()?;
+    let beats = parts.next().unwrap_or(Ok(0)).ok()?;
+    let sixteenths = parts.next().unwrap_or(Ok(0)).ok()?;
+    Some(
+        (bars * sig.ticks_per_bar()
+            + beats * sig.ticks_per_beat()
+            + sixteenths * (rlive_core::PPQ / 4)) as f64,
+    )
+}
+
 #[cfg(not(target_os = "macos"))]
 const MENU_H: f32 = 22.0;
 const CONTROL_BAR_H: f32 = 34.0;
@@ -187,6 +229,7 @@ impl RliveApp {
         session.samples.configure(settings.samples.loader_config());
         session.send_midi_envelope_auto_reset(settings.midi_envelope_auto_reset);
         session.set_session_automation_in(settings.record_session_automation_in);
+        session.set_chase(settings.chase_notes);
         let routing = MidiRouting {
             sender: Arc::new(Mutex::new(sender)),
             targets: session.midi_targets.clone(),
@@ -291,6 +334,7 @@ impl RliveApp {
         *self.routing.sender.lock().unwrap() = handle.take_midi_sender();
         self.audio = audio;
         self.session.replace_engine(handle);
+        self.session.set_chase(self.settings.chase_notes);
         self.ui.status = match &self.audio.error {
             Some(e) => format!("Audio: {e}"),
             None => format!(
@@ -526,6 +570,7 @@ impl RliveApp {
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         self.draw_key(ctx);
+        self.fade_key(ctx);
         if self.ui.computer_keys && !ctx.egui_wants_keyboard_input() {
             self.computer_keyboard(ctx);
         }
@@ -557,6 +602,16 @@ impl RliveApp {
         }
     }
 
+    /// F held in the Arrangement shows the fade handles; with the computer keyboard on, F is a
+    /// note, so as for other single keys it takes Shift.
+    fn fade_key(&mut self, ctx: &egui::Context) {
+        let area = self.ui.focus == FocusArea::Arrangement;
+        let computer_keys = self.ui.computer_keys;
+        self.ui.arr.fades_key = area
+            && !ctx.egui_wants_keyboard_input()
+            && ctx.input(|i| i.key_down(Key::F) && (!computer_keys || i.modifiers.shift));
+    }
+
     /// What the keymap needs to resolve this frame's key presses.
     fn key_context(&self, ctx: &egui::Context) -> KeyContext {
         KeyContext {
@@ -577,6 +632,13 @@ impl RliveApp {
                 .any(|t| self.session.project.track(*t).is_some_and(|t| t.is_group())),
             warp_selected: self.ui.sample.has_selection(),
             chain_selected: !self.ui.devices.mixer_selection.is_empty(),
+            time_selection: self.ui.focus == FocusArea::Arrangement
+                && self.ui.arr.has_selection()
+                && !self.ui.arr.loop_selected,
+            loop_brace: self.ui.focus == FocusArea::Arrangement && self.ui.arr.loop_selected,
+            track_header: self.ui.focus == FocusArea::Arrangement && self.ui.arr.header_selected,
+            enter_held: ctx.input(|i| i.key_down(Key::Enter)),
+            lane_focused: self.ui.arr.auto.mode && self.ui.arr.auto.focus.is_some(),
         }
     }
 
@@ -756,20 +818,26 @@ impl RliveApp {
             self.session.set_tempo(tempo);
         }
         info(r, "Tempo (BPM) — drag or double-click to type");
-        let mut sig = self.session.project.time_signature;
+        let tick_now = self.session.engine.shared.tick.load();
+        let has_markers = !self.session.project.arrangement.signatures.is_empty();
+        let mut sig = self.session.project.bar_map().signature_at(tick_now);
         let mut changed = false;
         let r = lu.add_sized(
             [26.0, h],
-            egui::DragValue::new(&mut sig.numerator).range(1..=32),
+            egui::DragValue::new(&mut sig.numerator).range(1..=99),
         );
         changed |= r.changed();
         info(r, "Time Signature Numerator — beats in a bar");
+        if has_markers {
+            let c = r_led_pos(&lu);
+            lu.painter().circle_filled(c, 2.0, pal().accent);
+        }
         lu.label(RichText::new("/").color(pal().text_dim));
         let r = egui::ComboBox::from_id_salt("sig_den")
             .width(34.0)
             .selected_text(sig.denominator.to_string())
             .show_ui(&mut lu, |ui| {
-                for d in [2u8, 4, 8, 16] {
+                for d in [1u8, 2, 4, 8, 16] {
                     changed |= ui
                         .selectable_value(&mut sig.denominator, d, d.to_string())
                         .changed();
@@ -780,7 +848,7 @@ impl RliveApp {
             "Time Signature Denominator — the note value of a beat",
         );
         if changed {
-            self.session.set_time_signature(TimeSignature { ..sig });
+            self.session.set_signature_at(tick_now, sig);
         }
         let metro = self.session.project.metronome;
         let r = widgets::icon_button(
@@ -811,6 +879,11 @@ impl RliveApp {
         .clicked()
         {
             self.ui.arr.auto.draw = !draw;
+        }
+
+        if !narrow {
+            lu.add_space(6.0);
+            self.follow_and_loop_fields(&mut lu, h);
         }
 
         // ---- centre: transport + position
@@ -1151,6 +1224,48 @@ impl RliveApp {
         }
     }
 
+    /// Follow, and the loop's position and length.
+    fn follow_and_loop_fields(&mut self, ui: &mut egui::Ui, h: f32) {
+        let follow = self.ui.arr.follow.on;
+        let r = widgets::state_button(ui, Vec2::new(44.0, h), follow, pal().accent, "Follow");
+        if info(r, "Follow — the Arrangement scrolls with the song position").clicked() {
+            self.ui.arr.follow.on = !follow;
+        }
+        let a = self.session.project.arrangement.clone();
+        let sig = self.session.project.time_signature;
+        let mut start = a.loop_start as f64;
+        let r = ui.add_sized(
+            [58.0, h],
+            egui::DragValue::new(&mut start)
+                .speed(sig.ticks_per_beat() as f64 * 0.25)
+                .custom_formatter(|v, _| sig.format_position(v))
+                .custom_parser(|text| parse_position(text, sig)),
+        );
+        if r.changed() {
+            let new = start.max(0.0) as u64;
+            let len = a.loop_end - a.loop_start;
+            self.session.set_loop(a.loop_enabled, new, new + len);
+        }
+        info(r, "Loop Start — bar.beat.sixteenth, type or drag");
+        let mut length = (a.loop_end - a.loop_start) as f64;
+        let r = ui.add_sized(
+            [58.0, h],
+            egui::DragValue::new(&mut length)
+                .speed(sig.ticks_per_beat() as f64 * 0.25)
+                .range(1.0..=f64::MAX)
+                .custom_formatter(|v, _| format_length(v, sig))
+                .custom_parser(|text| parse_length(text, sig)),
+        );
+        if r.changed() {
+            self.session.set_loop(
+                a.loop_enabled,
+                a.loop_start,
+                a.loop_start + length.max(1.0) as u64,
+            );
+        }
+        info(r, "Loop Length — bars.beats.sixteenths, type or drag");
+    }
+
     /// Info view (left), messages (middle), panel toggles (right).
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
@@ -1366,6 +1481,7 @@ impl eframe::App for RliveApp {
                 commands::options::Options::ToggleMidiEnvelopeAutoReset,
             ));
         }
+        self.session.set_edge_fades(self.settings.create_fades);
         self.session.idle();
         self.poll_scan();
         if std::mem::take(&mut self.ui.request_scan) && self.ui.scan_rx.is_none() {
@@ -1537,5 +1653,21 @@ mod count_in_tests {
         assert_eq!(count_in_label(bar as f64, sig), "-1.  1.  1");
         assert_eq!(count_in_label(bar as f64 * 1.5, sig), "-2.  3.  1");
         assert_eq!(count_in_label(120.0, sig), "-1.  4.  4", "almost there");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loop_fields_read_back_what_they_show() {
+        let sig = TimeSignature::default();
+        assert_eq!(parse_position("3.2.2", sig), Some(8880.0));
+        assert_eq!(parse_position("1", sig), Some(0.0));
+        assert_eq!(parse_position("x", sig), None);
+        assert_eq!(format_length(8880.0, sig), "2.1.1");
+        assert_eq!(parse_length("2.1.1", sig), Some(8880.0));
+        assert_eq!(parse_length("0.1", sig), Some(960.0));
     }
 }

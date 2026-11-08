@@ -243,7 +243,7 @@ impl Stretcher for Passthrough {
 }
 
 /// Voices kept per [`StretchKind`], so a crossfade can run two clips of one mode.
-pub const VOICES_PER_MODE: usize = 2;
+pub const VOICES_PER_MODE: usize = 3;
 
 /// A track's stretchers, built up front so playing a clip never allocates.
 pub struct StretchBank {

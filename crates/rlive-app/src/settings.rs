@@ -286,6 +286,9 @@ pub struct Settings {
     pub midi_envelope_auto_reset: bool,
     /// Where Session Record's automation goes (manual p. 512).
     pub record_session_automation_in: SessionAutomationIn,
+    /// Short default fades at clip edges, and crossfades where audio clips touch.
+    pub create_fades: bool,
+    pub chase_notes: bool,
 }
 
 impl Default for Settings {
@@ -310,6 +313,8 @@ impl Default for Settings {
             record: RecordSettings::default(),
             midi_envelope_auto_reset: false,
             record_session_automation_in: SessionAutomationIn::default(),
+            create_fades: true,
+            chase_notes: true,
         }
     }
 }
@@ -453,6 +458,8 @@ mod tests {
             },
             midi_envelope_auto_reset: true,
             record_session_automation_in: SessionAutomationIn::AllTracks,
+            create_fades: false,
+            chase_notes: false,
         };
         let path = temp_file("round-trip.json");
         settings.save_to(&path);

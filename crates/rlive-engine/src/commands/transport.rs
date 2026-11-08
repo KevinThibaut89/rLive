@@ -19,6 +19,19 @@ pub enum TransportCmd {
     SetQuantize(Quantize),
     /// Move the playhead and the insert marker to this tick.
     Seek(f64),
+    /// Play on from where the transport last stopped.
+    Continue,
+    /// Launch from `to`, at the next launch point when already playing. With `hold`, playback
+    /// then repeats the quantized region starting there until [`Self::ReleaseHold`].
+    Trigger {
+        to: f64,
+        hold: bool,
+    },
+    /// Let go of a held scrub.
+    ReleaseHold,
+    /// Stop when the playhead reaches this tick.
+    StopAt(Option<f64>),
+    SetChase(bool),
     /// Loop playback over `(start, end)` in ticks, or stop looping.
     SetLoop(Option<(f64, f64)>),
 }
@@ -29,6 +42,16 @@ impl Engine {
         match cmd {
             C::Play => self.start_transport(),
             C::Stop => self.stop_transport(),
+            C::Continue => {
+                if !self.playing {
+                    self.jump(self.stop_point, JumpKind::Seek);
+                    self.start_transport();
+                }
+            }
+            C::Trigger { to, hold } => self.trigger(to, hold),
+            C::ReleaseHold => self.hold_loop = None,
+            C::StopAt(at) => self.stop_at = at.filter(|t| t.is_finite()),
+            C::SetChase(on) => self.chase = on,
             C::SetTempo(t) => {
                 if let Some(maps) = Arc::get_mut(&mut self.maps) {
                     maps.tempo.set_constant(t);
@@ -112,16 +135,43 @@ impl Engine {
         }
     }
 
-    fn stop_transport(&mut self) {
+    /// The scrub area and the locators: a jump the global quantization holds back while playing.
+    fn trigger(&mut self, to: f64, hold: bool) {
+        if !to.is_finite() {
+            return;
+        }
+        let to = to.max(0.0);
+        let quantum = self.quantize.ticks(self.maps.bars.signature_at(to)) as f64;
+        self.hold_loop = (hold && quantum > 0.0).then_some((to, to + quantum));
+        if !self.playing {
+            self.jump(to, JumpKind::Seek);
+            self.start_transport();
+            self.pending_jump = None;
+            return;
+        }
+        let at = self.maps.bars.next_boundary(self.tick, self.quantize);
+        if quantum > 0.0 && at > self.tick {
+            self.pending_jump = Some(crate::PendingJump { at, to });
+        } else {
+            self.pending_jump = None;
+            self.jump(to, JumpKind::Seek);
+        }
+    }
+
+    pub(crate) fn stop_transport(&mut self) {
         if self.playing || self.count_in.is_some() {
             // Before the tick resets, so the UI sees every recorded note first.
             self.finish_recording();
             self.abort_slot_recordings(self.tick);
+            self.stop_point = self.tick;
         } else {
             self.insert_marker = 0.0;
         }
         self.count_in = None;
         self.shared.count_in_left.store(0.0);
+        self.pending_jump = None;
+        self.hold_loop = None;
+        self.stop_at = None;
         self.playing = false;
         self.tick = self.insert_marker;
         self.reached_loop_end = false;

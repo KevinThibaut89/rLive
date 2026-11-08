@@ -42,7 +42,7 @@ pub use graph::{
     AudioIo, BusIn, BusRead, ChainAddr, ChainPath, ChainStep, HardwareOut, InputGate, MidiRoute,
     OutputPair, RenderPlan, SidechainIn, Step, Tap, TapOut, TrackIo, TrackRef, MAX_RACK_DEPTH,
 };
-pub use lane::{ArrangementLane, LaneClip};
+pub use lane::{ArrangementLane, LaneClip, LaneFades};
 pub use params::{
     mix_cell, BusLayout, CellIx, CellSpec, CellState, CellTarget, ControlHooks, ControlStep,
     ParamBus, TrackRoutes, CONTROL_STEP, MAX_SENDS, SEND_MAX_DB, SEND_MIN_DB,
@@ -513,6 +513,16 @@ pub struct Engine {
     sample_pos: u64,
     insert_marker: f64,
     loop_range: Option<(f64, f64)>,
+    /// Where the transport last stopped, for Continue.
+    stop_point: f64,
+    /// A jump waiting for the next launch point.
+    pending_jump: Option<PendingJump>,
+    /// Playback is held looping over this range, while the scrub area is held down.
+    hold_loop: Option<(f64, f64)>,
+    /// The transport stops when it reaches this tick.
+    stop_at: Option<f64>,
+    /// Whether clips entered in the middle of a note play that note.
+    chase: bool,
     /// The last block played up to `loop_end`. Tells that apart from being sought onto it,
     /// since only the former wraps.
     reached_loop_end: bool,
@@ -590,6 +600,11 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         sample_pos: 0,
         insert_marker: 0.0,
         loop_range: None,
+        stop_point: 0.0,
+        pending_jump: None,
+        hold_loop: None,
+        stop_at: None,
+        chase: true,
         reached_loop_end: false,
         recording: false,
         rec_from: 0.0,
@@ -830,6 +845,12 @@ impl Engine {
         if !self.playing {
             return None;
         }
+        if let Some((start, end)) = self
+            .hold_loop
+            .filter(|&(start, end)| self.tick >= start && end - start >= run.ticks_per_sample)
+        {
+            return Some((start, end));
+        }
         let (start, end) = self.loop_range?;
         // A tick already past the end (sought there) plays on; a loop shorter than one frame
         // could never advance.
@@ -851,6 +872,39 @@ impl Engine {
         } else {
             let remainder = tempo.tick_to_seconds(end) - tempo.tick_to_seconds(self.tick);
             tempo.seconds_to_tick(tempo.tick_to_seconds(start) - remainder)
+        }
+    }
+
+    /// The next tick something is due at: a queued jump or a stop.
+    fn next_timed_event(&self) -> Option<f64> {
+        match (self.pending_jump, self.stop_at) {
+            (Some(j), Some(at)) => Some(j.at.min(at)),
+            (Some(j), None) => Some(j.at),
+            (None, at) => at,
+        }
+    }
+
+    /// Carry out what has come due at the start of the next block.
+    fn run_timed_events(&mut self, run: &mut TempoRun) {
+        if !self.playing {
+            return;
+        }
+        if self
+            .stop_at
+            .is_some_and(|at| self.frames_until(at, run) == 0)
+        {
+            self.stop_at = None;
+            self.stop_transport();
+            *run = self.tempo_run();
+            return;
+        }
+        if let Some(j) = self
+            .pending_jump
+            .filter(|j| self.frames_until(j.at, run) == 0)
+        {
+            self.pending_jump = None;
+            self.jump(j.to, JumpKind::Seek);
+            *run = self.tempo_run();
         }
     }
 
@@ -905,8 +959,18 @@ impl Engine {
                 continue;
             }
             let mut run = self.tempo_run();
+            self.run_timed_events(&mut run);
             self.wrap_at_loop_end(&mut run);
             let mut n = self.limit_to_tempo_point(&mut run, (total - done).min(self.max_block));
+            if self.playing {
+                if let Some(frames) = self
+                    .next_timed_event()
+                    .map(|at| self.frames_until(at, &run))
+                    .filter(|f| *f > 0)
+                {
+                    n = n.min(frames);
+                }
+            }
             let loop_end = self
                 .active_loop(&run)
                 .and_then(|(_, end)| (self.frames_until(end, &run) <= n).then_some(end));
@@ -980,6 +1044,7 @@ impl Engine {
         let smooth = self.smooth_coeff;
         for t in self.tracks.iter_mut() {
             t.smooth = smooth;
+            t.lane.set_chase(self.chase);
             t.begin_block(time, &transport, self.midi_auto_reset, &mut retire_clip);
         }
         self.master.smooth = smooth;
@@ -1661,6 +1726,13 @@ fn push_param_changed(
         param,
         value,
     });
+}
+
+/// A jump of the playhead that happens at the next launch point.
+#[derive(Clone, Copy)]
+struct PendingJump {
+    at: f64,
+    to: f64,
 }
 
 #[derive(Clone, Copy)]

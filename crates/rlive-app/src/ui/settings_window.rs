@@ -733,6 +733,7 @@ fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     let warp = &mut settings.warp;
     let record = &mut settings.record;
     let session_automation = &mut settings.record_session_automation_in;
+    let create_fades = &mut settings.create_fades;
     widgets::section_label(ui, "RECORD");
     grid(ui, "record", |ui| {
         label(ui, "File Type");
@@ -813,7 +814,9 @@ fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
                 }
             });
         ui.end_row();
-        soon_check(ui, "Create Fades on Clip Edges", true, "C5");
+        ui.label("Create Fades on Clip Edges");
+        ui.checkbox(create_fades, "");
+        ui.end_row();
     });
     ui.add_space(10.0);
     widgets::section_label(ui, "LAUNCH");

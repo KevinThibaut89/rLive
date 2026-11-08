@@ -11,7 +11,7 @@ mod headers;
 pub mod lanes;
 mod popups;
 
-use super::arrangement::Rows;
+use super::arrangement::{Rows, TimeSel};
 use super::theme::*;
 use super::timeline::TimeAxis;
 use super::UiState;
@@ -35,14 +35,6 @@ pub const EXTRA_LANE_H: f32 = 62.0;
 const CLIP_TITLE: f32 = 13.0;
 /// How long B has to be held to be a momentary switch rather than a tap.
 const DRAW_HOLD_SECONDS: f64 = 0.25;
-
-/// A time selection in the automation lanes.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TimeSel {
-    pub start: f64,
-    pub end: f64,
-    pub lanes: Vec<LaneKey>,
-}
 
 /// The frame of a time selection, kept so its handles remember what they've done.
 #[derive(Debug, Clone, PartialEq)]
@@ -98,18 +90,16 @@ impl DrawKey {
 }
 
 /// What's going on in the automation lanes.
+#[derive(Default)]
 pub struct AutomationState {
     pub mode: bool,
     pub draw: bool,
     pub draw_key: DrawKey,
     /// The choosers list only automated parameters.
     pub automated_only: bool,
-    /// Edits in the lanes follow the grid.
-    pub snap: bool,
     pub focus: Option<LaneKey>,
     /// Additional lane headers selected together.
     pub headers: Vec<LaneKey>,
-    pub sel: Option<TimeSel>,
     frame: Option<Frame>,
     gesture: Option<gestures::Gesture>,
     menu: Option<popups::LaneMenu>,
@@ -117,36 +107,16 @@ pub struct AutomationState {
     param_menu: Option<popups::ParamMenu>,
 }
 
-impl Default for AutomationState {
-    fn default() -> Self {
-        Self {
-            mode: false,
-            draw: false,
-            draw_key: DrawKey::default(),
-            automated_only: false,
-            snap: true,
-            focus: None,
-            headers: Vec::new(),
-            sel: None,
-            frame: None,
-            gesture: None,
-            menu: None,
-            edit_value: None,
-            param_menu: None,
-        }
-    }
-}
-
 impl AutomationState {
     pub fn dragging(&self) -> bool {
         self.gesture.is_some()
     }
+}
 
-    /// Whether a lane is covered by the time selection.
-    fn in_sel(&self, key: LaneKey) -> Option<(f64, f64)> {
-        let s = self.sel.as_ref()?;
-        s.lanes.contains(&key).then_some((s.start, s.end))
-    }
+/// Whether a lane is covered by the time selection.
+fn in_sel(sel: &Option<TimeSel>, key: LaneKey) -> Option<(f64, f64)> {
+    let s = sel.as_ref().filter(|s| !s.is_point())?;
+    s.lanes.contains(&key).then_some((s.start, s.end))
 }
 
 /// How tall a row is in Automation Mode: its main lane, then the additional lanes on show.
@@ -360,7 +330,7 @@ fn paint_envelope(p: &egui::Painter, view: &LaneView, color: Color32, state: &Ui
     if lp.x < view.rect.right() {
         p.line_segment([lp, Pos2::new(view.rect.right(), lp.y)], stroke);
     }
-    let sel = state.arr.auto.in_sel(view.key);
+    let sel = in_sel(&state.arr.time, view.key);
     for (i, point) in view.points.iter().enumerate() {
         let at = g.pos(point);
         if i + 1 < view.points.len() {
@@ -384,7 +354,9 @@ fn paint_envelope(p: &egui::Painter, view: &LaneView, color: Color32, state: &Ui
 
 fn paint_time_selection(ui: &egui::Ui, state: &UiState, views: &[LaneView], lanes: Rect) {
     let auto = &state.arr.auto;
-    let Some(sel) = &auto.sel else { return };
+    let Some(sel) = state.arr.time.as_ref().filter(|s| !s.is_point()) else {
+        return;
+    };
     let pointer = ui.input(|i| i.pointer.hover_pos());
     for view in views.iter().filter(|v| sel.lanes.contains(&v.key)) {
         let rect = selection_rect(view, sel);

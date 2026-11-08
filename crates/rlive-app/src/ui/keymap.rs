@@ -128,6 +128,13 @@ pub enum When {
     GroupTrack,
     /// A track title bar is highlighted.
     TrackTitle,
+    /// A track header in the Arrangement has the keyboard.
+    TrackHeader,
+    /// Enter is held in the Arrangement, for resizing clips from the keyboard.
+    EnterHeld,
+    /// The arrow keys aren't navigating the automation lanes. Ranks like [`When::Always`], so
+    /// a selection's arrow bindings still win.
+    ArrowsFree,
     /// A Session slot is selected.
     SlotSelected,
     /// A chain is selected in a Rack.
@@ -239,6 +246,16 @@ pub struct KeyContext {
     pub warp_selected: bool,
     /// A chain is selected in the Session View's rack mixer.
     pub chain_selected: bool,
+    /// Clips or a span of time are selected in the Arrangement.
+    pub time_selection: bool,
+    /// The Arrangement's loop brace has the arrow keys.
+    pub loop_brace: bool,
+    /// A track header in the Arrangement has the keyboard.
+    pub track_header: bool,
+    /// Enter is held down.
+    pub enter_held: bool,
+    /// An automation lane has the arrow keys.
+    pub lane_focused: bool,
 }
 
 impl KeyContext {
@@ -250,6 +267,11 @@ impl KeyContext {
             When::GroupTrack => self.group_selected,
             When::WarpMarker => self.warp_selected,
             When::ChainSelected => self.chain_selected,
+            When::TimeSelection => self.time_selection,
+            When::LoopBrace => self.loop_brace,
+            When::TrackHeader => self.track_header,
+            When::EnterHeld => self.enter_held,
+            When::ArrowsFree => !self.lane_focused,
             // The rest are built by the milestones that need them.
             _ => false,
         }
@@ -405,7 +427,10 @@ fn lookup(chord: Chord, cx: &KeyContext) -> Option<&'static Binding> {
     candidates
         .iter()
         .filter(|b| b.area.contains(cx.focus, cx.clip_is_midi) && cx.holds(b.when))
-        .max_by_key(|b| (b.when != When::Always, b.area.specificity()))
+        .max_by_key(|b| {
+            let ranks_as_always = matches!(b.when, When::Always | When::ArrowsFree);
+            (!ranks_as_always, b.area.specificity())
+        })
         .copied()
 }
 

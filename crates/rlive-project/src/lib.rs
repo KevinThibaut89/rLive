@@ -1,6 +1,7 @@
 //! The rLive project model: the UI thread's source of truth, saved as RON (`.rlive`).
 
 mod arrangement;
+pub mod arrangement_edit;
 mod clip;
 pub mod clip_envelope;
 mod defaults;

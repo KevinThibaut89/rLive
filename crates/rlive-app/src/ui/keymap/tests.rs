@@ -1,3 +1,4 @@
+use super::super::commands::arrange::Arrange;
 use super::super::commands::create::Create;
 use super::super::commands::edit::Edit;
 use super::super::commands::options::Options;
@@ -25,6 +26,11 @@ fn cx(focus: FocusArea) -> KeyContext {
         group_selected: false,
         warp_selected: false,
         chain_selected: false,
+        time_selection: false,
+        loop_brace: false,
+        track_header: false,
+        enter_held: false,
+        lane_focused: false,
     }
 }
 
@@ -67,8 +73,8 @@ fn the_same_chord_means_different_things_by_focus() {
     assert_eq!(resolve(cmd(Key::I), &cx(FocusArea::Session)), insert_scene);
     assert_eq!(
         resolve(cmd(Key::I), &cx(FocusArea::Arrangement)),
-        Resolution::Pending,
-        "Cmd+I inserts silence in the Arrangement once C4 builds it"
+        Resolution::Run(MenuCommand::Arrange(Arrange::InsertSilence)),
+        "Cmd+I inserts silence in the Arrangement"
     );
     assert_eq!(
         resolve(cmd(Key::E), &cx(FocusArea::Session)),
@@ -359,7 +365,10 @@ fn with_the_keyboard_off_its_letters_are_ordinary_shortcuts() {
         resolve(bare(Key::S), &off),
         Resolution::Run(MenuCommand::Track(Track::Solo))
     );
-    assert_eq!(resolve(bare(Key::Z), &off), Resolution::Pending);
+    assert_eq!(
+        resolve(bare(Key::Z), &off),
+        Resolution::Run(MenuCommand::Arrange(Arrange::ZoomToSelection))
+    );
     assert_eq!(
         resolve(bare(Key::C), &off),
         Resolution::Run(MenuCommand::Track(Track::Arm))
@@ -748,5 +757,70 @@ fn pending_shortcuts_are_listed_in_the_checklist() {
         &doc[start..end],
         expected,
         "checklist is stale; run with RLIVE_UPDATE_CHECKLIST=1"
+    );
+}
+
+// ---------------------------------------------------------------- the Arrangement's selection
+
+#[test]
+fn arrows_act_on_what_the_arrangement_has_selected() {
+    let plain = cx(FocusArea::Arrangement);
+    assert_eq!(
+        resolve(bare(Key::ArrowLeft), &plain),
+        Resolution::Run(MenuCommand::Arrange(Arrange::MoveLeft))
+    );
+    let selection = KeyContext {
+        time_selection: true,
+        ..plain
+    };
+    assert_eq!(
+        resolve(bare(Key::ArrowLeft), &selection),
+        Resolution::Run(MenuCommand::Arrange(Arrange::NudgeLeft))
+    );
+    let brace = KeyContext {
+        loop_brace: true,
+        ..plain
+    };
+    assert_eq!(
+        resolve(bare(Key::ArrowLeft), &brace),
+        Resolution::Run(MenuCommand::Arrange(Arrange::LoopNudgeLeft))
+    );
+    assert_eq!(
+        resolve(cmd(Key::ArrowUp), &brace),
+        Resolution::Run(MenuCommand::Arrange(Arrange::LoopDouble))
+    );
+    let lanes = KeyContext {
+        lane_focused: true,
+        ..plain
+    };
+    assert_eq!(
+        resolve(bare(Key::ArrowLeft), &lanes),
+        Resolution::Unbound,
+        "an automation lane has the arrows"
+    );
+    let enter = KeyContext {
+        enter_held: true,
+        ..plain
+    };
+    assert_eq!(
+        resolve(bare(Key::ArrowRight), &enter),
+        Resolution::Run(MenuCommand::Arrange(Arrange::ResizeRight))
+    );
+}
+
+#[test]
+fn zero_deactivates_the_selection_or_the_track() {
+    let plain = cx(FocusArea::Arrangement);
+    assert_eq!(
+        resolve(bare(Key::Num0), &plain),
+        Resolution::Run(MenuCommand::Track(Track::ToggleActivator))
+    );
+    let selection = KeyContext {
+        time_selection: true,
+        ..plain
+    };
+    assert_eq!(
+        resolve(bare(Key::Num0), &selection),
+        Resolution::Run(MenuCommand::Arrange(Arrange::Deactivate))
     );
 }

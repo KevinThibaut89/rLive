@@ -77,6 +77,9 @@ impl Session {
             samples: &mut self.samples,
             wiring: &self.wiring,
             chain_shared: None,
+            edge_fade: self
+                .edge_fades
+                .then(|| super::arrange_edit::edge_fade_ticks(self.project.tempo)),
         };
         let p = &self.project;
         let mut tracks = Vec::with_capacity(MAX_TRACKS);

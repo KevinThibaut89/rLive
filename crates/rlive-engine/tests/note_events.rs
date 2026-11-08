@@ -260,6 +260,7 @@ fn on_timeline(clip: Arc<ClipData>) -> (Engine, EngineHandle, Log) {
             end: 9600,
             offset: 0,
             data: clip,
+            fades: Default::default(),
         }],
     }));
     send(

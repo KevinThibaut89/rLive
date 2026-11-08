@@ -760,6 +760,7 @@ fn lane_clip(start: u64, end: u64, offset: u64, data: Arc<ClipData>) -> LaneClip
         end,
         offset,
         data,
+        fades: Default::default(),
     }
 }
 
@@ -1583,6 +1584,7 @@ fn a_timeline_clips_scale_reaches_the_devices_on_its_track() {
             end: 3840,
             offset: 0,
             data: scaled_clip(),
+            fades: Default::default(),
         }],
     }));
     h.send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))

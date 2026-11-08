@@ -463,6 +463,7 @@ fn arrangement_clip_modulation_composes_with_the_lane() {
                 end: 4 * BAR as u64,
                 offset: 0,
                 data: midi_clip(),
+                fades: Default::default(),
             }],
         }),
     }));

@@ -317,6 +317,13 @@ pub struct Fades {
     pub fade_out: u64,
     pub in_curve: f32,
     pub out_curve: f32,
+    /// How far the clip keeps sounding before its start, under the clip ahead of it, in a
+    /// crossfade. The fade in then runs over this and `fade_in` together.
+    #[serde(skip_serializing_if = "is_default")]
+    pub in_tail: u64,
+    /// How far the clip keeps sounding after its end, under the clip after it, in a crossfade.
+    #[serde(skip_serializing_if = "is_default")]
+    pub out_tail: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

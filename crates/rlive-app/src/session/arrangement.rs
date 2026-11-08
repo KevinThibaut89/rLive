@@ -52,6 +52,9 @@ impl Session {
 
     fn sync_lanes(&mut self, tracks: HashSet<TrackId>, label: &'static str) {
         for t in tracks {
+            if let Some(track) = self.project.track_mut(t) {
+                track.settle_fades();
+            }
             self.sync_lane(t);
         }
         self.mark_edit(label);
@@ -60,6 +63,7 @@ impl Session {
     pub fn arr_place(&mut self, track: TrackId, clip: ArrangementClip) {
         if let Some(t) = self.project.track_mut(track) {
             t.place_clip(clip);
+            t.settle_fades();
             self.sync_lane(track);
             self.mark_edit("Add Clip");
         }
@@ -115,6 +119,7 @@ impl Session {
             TrimEdge::Right(to) => c.trim_right(to),
         }
         t.place_clip(c);
+        t.settle_fades();
         self.sync_lane(track);
         self.mark_edit("Trim Clip");
     }

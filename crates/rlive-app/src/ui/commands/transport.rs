@@ -36,7 +36,7 @@ impl RliveApp {
                     self.session.play();
                 }
             }
-            Transport::Continue => self.session.play(),
+            Transport::Continue => self.session.continue_play(),
             Transport::Record => self.toggle_recording(false),
             Transport::RecordInverted => self.toggle_recording(true),
             Transport::SessionRecord => self.session_record(),

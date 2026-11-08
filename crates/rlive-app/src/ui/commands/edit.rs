@@ -5,6 +5,7 @@ use crate::session::{ChainRef, ClipRef};
 use crate::ui::automation::{self, EnvelopeClipboard};
 use crate::ui::{piano_roll, session_view, Detail, MainView, RliveApp};
 use rlive_core::TrackId;
+use rlive_project::arrangement_edit::TimeClip;
 use rlive_project::{ArrangementClip, Clip, NoteData, RecordQuantize, TrackKind};
 
 super::domain! {
@@ -119,6 +120,8 @@ pub enum ClipBoard {
     ArrClips(Vec<(TrackId, ArrangementClip)>),
     /// Stretches of envelope, which can be pasted onto other parameters.
     Envelopes(EnvelopeClipboard),
+    /// A stretch of the whole Arrangement, from Cut Time or Copy Time.
+    Time(TimeClip),
 }
 
 /// Resolves focus to an Edit target; pure so the precedence can be tested.
@@ -157,8 +160,10 @@ impl RliveApp {
     /// Whether Edit commands in the Arrangement act on the automation lanes.
     fn lanes_have_selection(&self) -> bool {
         let auto = &self.ui.arr.auto;
+        let span = self.ui.arr.time.as_ref().is_some_and(|t| !t.is_point());
         auto.mode
-            && (auto.sel.is_some()
+            && self.ui.arr.selection.is_empty()
+            && (span
                 || (auto.focus.is_some()
                     && matches!(self.ui.clipboard, Some(ClipBoard::Envelopes(_)))))
     }
@@ -201,11 +206,14 @@ impl RliveApp {
                 matches!(self.ui.clipboard, Some(ClipBoard::Slot(_))),
             ),
             EditFocus::ArrClips => (
-                !self.ui.arr.selection.is_empty(),
+                self.ui.arr.has_selection()
+                    || self.ui.arr.selected_fade.is_some()
+                    || self.ui.arr.selected_locator.is_some()
+                    || self.ui.arr.selected_signature.is_some(),
                 matches!(self.ui.clipboard, Some(ClipBoard::ArrClips(_))),
             ),
             EditFocus::Envelopes => (
-                self.ui.arr.auto.sel.is_some(),
+                self.ui.arr.time.as_ref().is_some_and(|t| !t.is_point()),
                 matches!(self.ui.clipboard, Some(ClipBoard::Envelopes(_))),
             ),
             EditFocus::None => (false, false),
@@ -261,6 +269,7 @@ impl RliveApp {
         match c {
             Edit::Undo | Edit::Redo => self.undo_redo(ctx, c),
             Edit::Rename if self.rename_in_rack() => {}
+            Edit::Rename if self.rename_marker() => {}
             Edit::ReturnToDefault => {
                 let ids = self.selected_track_ids();
                 self.session.reset_monitor(&ids);
@@ -277,6 +286,27 @@ impl RliveApp {
             }
             _ => self.edit_command(ctx, c),
         }
+    }
+
+    /// Cmd+R on a selected locator or signature marker.
+    fn rename_marker(&mut self) -> bool {
+        let arr = &mut self.ui.arr;
+        if let Some(i) = arr.selected_locator {
+            if let Some(l) = self.session.project.arrangement.locators.get(i) {
+                arr.renaming_locator = Some((i, l.name.clone()));
+                return true;
+            }
+        }
+        if let Some(i) = arr.selected_signature {
+            if let Some(m) = self.session.project.arrangement.signatures.get(i) {
+                arr.editing_signature = Some((
+                    i,
+                    format!("{}/{}", m.signature.numerator, m.signature.denominator),
+                ));
+                return true;
+            }
+        }
+        false
     }
 
     fn undo_redo(&mut self, ctx: &egui::Context, c: Edit) {
@@ -371,16 +401,57 @@ impl RliveApp {
         clips
     }
 
+    /// The material a time selection covers, relative to its start, from every lane it spans.
+    fn copy_span(&self, a: u64, b: u64) -> Vec<(TrackId, ArrangementClip)> {
+        let tracks = self.ui.arr.selected_tracks();
+        self.session.arr_copy_span(&tracks, a, b)
+    }
+
+    /// Delete on what isn't a clip or a span: a fade handle or a marker.
+    fn delete_handle(&mut self) -> bool {
+        if let Some(t) = self.ui.arr.selected_fade.take() {
+            self.session.arr_delete_fade(t.track, t.clip, t.side);
+            return true;
+        }
+        if let Some(i) = self.ui.arr.selected_locator.take() {
+            self.session.delete_locator(i);
+            return true;
+        }
+        if let Some(i) = self.ui.arr.selected_signature.take() {
+            self.session.delete_signature_marker(i);
+            return true;
+        }
+        false
+    }
+
     fn edit_arr_clips(&mut self, c: Edit) {
+        let span = self
+            .ui
+            .arr
+            .time
+            .as_ref()
+            .filter(|t| !t.is_point() && self.ui.arr.selection.is_empty())
+            .map(|t| t.ticks());
         match c {
             Edit::Copy | Edit::Cut => {
-                let clips = self.copy_arr_clips();
+                let clips = match span {
+                    Some((a, b)) => self.copy_span(a, b),
+                    None => self.copy_arr_clips(),
+                };
                 if !clips.is_empty() {
                     self.ui.clipboard = Some(ClipBoard::ArrClips(clips));
                 }
                 if c == Edit::Cut {
-                    let items = std::mem::take(&mut self.ui.arr.selection);
-                    self.session.arr_delete(&items);
+                    match span {
+                        Some((a, b)) => {
+                            let tracks = self.ui.arr.selected_tracks();
+                            self.session.arr_delete_span(&tracks, a, b);
+                        }
+                        None => {
+                            let items = std::mem::take(&mut self.ui.arr.selection);
+                            self.session.arr_delete(&items);
+                        }
+                    }
                 }
             }
             Edit::Paste => {
@@ -389,13 +460,35 @@ impl RliveApp {
                     self.ui.arr.selection = self.session.arr_paste(&clips, at);
                 }
             }
-            Edit::Duplicate => {
-                let items = self.ui.arr.selection.clone();
-                self.ui.arr.selection = self.session.arr_duplicate(&items);
-            }
+            Edit::Duplicate => match span {
+                Some((a, b)) => {
+                    let clips = self.copy_span(a, b);
+                    self.ui.arr.selection = self.session.arr_paste(&clips, b);
+                    let len = (b - a) as f64;
+                    if let Some(t) = self.ui.arr.time.as_mut() {
+                        t.start += len;
+                        t.end += len;
+                    }
+                }
+                None => {
+                    let items = self.ui.arr.selection.clone();
+                    self.ui.arr.selection = self.session.arr_duplicate(&items);
+                }
+            },
             Edit::Delete => {
-                let items = std::mem::take(&mut self.ui.arr.selection);
-                self.session.arr_delete(&items);
+                if self.delete_handle() {
+                    return;
+                }
+                match span {
+                    Some((a, b)) => {
+                        let tracks = self.ui.arr.selected_tracks();
+                        self.session.arr_delete_span(&tracks, a, b);
+                    }
+                    None => {
+                        let items = std::mem::take(&mut self.ui.arr.selection);
+                        self.session.arr_delete(&items);
+                    }
+                }
             }
             Edit::SelectAll => {
                 self.ui.arr.selection = self

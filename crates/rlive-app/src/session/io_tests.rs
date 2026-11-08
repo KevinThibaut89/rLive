@@ -335,6 +335,7 @@ fn clip_lane(level: f32) -> Arc<ArrangementLane> {
             end: PPQ * 16,
             offset: 0,
             data: Arc::new(clip),
+            fades: Default::default(),
         }],
     })
 }

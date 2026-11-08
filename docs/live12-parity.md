@@ -197,37 +197,37 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** A7, C4, C5, C6
 
-- `[ ]` Overview strip: drag scroll/zoom, double-click full [M]
-- `[ ]` Beat-time and min-sec-ms rulers; drag zoom; double-click zoom to selection [M]
-- `[ ]` Zoom: +/-, modifier scroll, zoom to selection with step-back history [S]
-- `[ ]` Track height: unfold, drag, pinch, all-tracks modifier, unfold all, Optimize Height/Width [M]
-- `[ ]` Waveform vertical zoom applied to all audio tracks [S]
-- `[ ]` Follow with auto-pause on edit or scroll, resume on restart or scrub click [S]
-- `[ ]` Play, Stop, space, continue from stop point, double-stop to start [S]
-- `[ ]` Insert marker as play origin, keyboard-movable across tracks and to edges [M]
+- `[~]` Overview strip: drag scroll/zoom, double-click full [M]
+- `[~]` Beat-time and min-sec-ms rulers; drag zoom; double-click zoom to selection [M]
+- `[x]` Zoom: +/-, modifier scroll, zoom to selection with step-back history [S]
+- `[~]` Track height: unfold, drag, pinch, all-tracks modifier, unfold all, Optimize Height/Width [M]
+- `[~]` Waveform vertical zoom applied to all audio tracks [S]
+- `[x]` Follow with auto-pause on edit or scroll, resume on restart or scrub click [S]
+- `[x]` Play, Stop, space, continue from stop point, double-stop to start [S]
+- `[~]` Insert marker as play origin, keyboard-movable across tracks and to edges [M]
 - `[ ]` Arrangement Position fields: drag, type, arrows [S]
-- `[ ]` Scrub click starts quantized; hold repeats quantized region [M] → global quantize
-- `[ ]` Chase MIDI Notes toggle [M]
+- `[x]` Scrub click starts quantized; hold repeats quantized region [M] → global quantize
+- `[x]` Chase MIDI Notes toggle [M]
 - `[ ]` Locators: add in real time (quantized), context menu, delete, rename, info text, MIDI/key map, double-click plays [M]
-- `[ ]` Previous/Next locator with quantized jump [S]
-- `[ ]` Loop to Next Locator; Set Song Start Time Here on locator or loop brace [S]
-- `[ ]` Time signature markers: numerators 1-2 digits, denominators 1/2/4/8/16, unquantized, marker lane hidden if none [L] → tempo map
-- `[ ]` Fragmentary bars with hatch display; Delete Fragmentary Bar Time, Complete Fragmentary Bar [M]
+- `[x]` Previous/Next locator with quantized jump [S]
+- `[x]` Loop to Next Locator; Set Song Start Time Here on locator or loop brace [S]
+- `[x]` Time signature markers: numerators 1-2 digits, denominators 1/2/4/8/16, unquantized, marker lane hidden if none [L] → tempo map
+- `[x]` Fragmentary bars with hatch display; Delete Fragmentary Bar Time, Complete Fragmentary Bar [M]
 - `[ ]` Import MIDI time signatures option [S]
-- `[ ]` Arrangement loop: numeric fields, Loop Selection, brace drag, arrow nudges, double/halve [M]
-- `[ ]` Punch in/out [M]
-- `[ ]` Clip move, cross-track move, edge resize, snap to grid, clips, locators, signatures [L]
-- `[ ]` Slide clip content within bounds; snap bypass [M]
-- `[ ]` Fades: handles, curve, limits (no crossing loop bounds, no overlap), limit indicator, F-key momentary [L]
-- `[ ]` Crossfades by drag or selection command [M]
-- `[ ]` Create Fades on Clip Edges: 4 ms default fades and crossfades; Delete resets [S]
-- `[ ]` Selection model: clip, insert point, timespan, in-clip time, Shift-extend, loop-brace select [L]
-- `[ ]` Deactivate clips with 0; also tracks when header selected [S]
+- `[x]` Arrangement loop: numeric fields, Loop Selection, brace drag, arrow nudges, double/halve [M]
+- `[x]` Punch in/out [M]
+- `[x]` Clip move, cross-track move, edge resize, snap to grid, clips, locators, signatures [L]
+- `[x]` Slide clip content within bounds; snap bypass [M]
+- `[~]` Fades: handles, curve, limits (no crossing loop bounds, no overlap), limit indicator, F-key momentary [L]
+- `[~]` Crossfades by drag or selection command [M]
+- `[x]` Create Fades on Clip Edges: 4 ms default fades and crossfades; Delete resets [S]
+- `[x]` Selection model: clip, insert point, timespan, in-clip time, Shift-extend, loop-brace select [L]
+- `[x]` Deactivate clips with 0; also tracks when header selected [S]
 - `[ ]` Reverse multi-clip audio selection [M] → Reverse
-- `[ ]` Nudge selection with arrows [S]
-- `[ ]` Grid: adaptive or fixed, narrow, widen, triplets, snap toggle, modifier bypass, spacing display [M]
-- `[ ]` Cut/Paste/Duplicate/Delete Time, Insert Silence, moves signatures too [M]
-- `[ ]` Split at point or selection [M]
+- `[x]` Nudge selection with arrows [S]
+- `[x]` Grid: adaptive or fixed, narrow, widen, triplets, snap toggle, modifier bypass, spacing display [M]
+- `[x]` Cut/Paste/Duplicate/Delete Time, Insert Silence, moves signatures too [M]
+- `[x]` Split at point or selection [M]
 - `[ ]` Consolidate across tracks: renders pre-effects, includes warp, attenuation, clip envelopes; stored Processed/Consolidate [L] → offline clip renderer
 - `[ ]` Linked tracks: multiple exclusive groups, hover highlight, click selects, add/unlink, group shortcut [L]
 - `[ ]` Linked operations: move, resize, select, time commands, split, consolidate, fades, arm, take lanes [L] → comping (ch. 21)
@@ -1328,7 +1328,7 @@ Requirement: Cmd+Shift+F, Cmd+Shift+E, Cmd+I, Cmd+E and Z/X all change meaning b
 Shortcuts declared in the keymap that do nothing yet, by milestone. This list is generated from `crates/rlive-app/src/ui/keymap/bindings.rs`.
 
 <!-- pending-shortcuts:begin -->
-- `[ ]` **A12:** Bounce to new track; Freeze or unfreeze tracks; Paste bounced audio
+- `[ ]` **A12:** Bounce to new track; Consolidate selection; Freeze or unfreeze tracks; Paste bounced audio
 - `[ ]` **A14:** Focus Groove Pool; Hide/show Groove Pool
 - `[ ]` **A17:** Hide/show plug-in windows; Keep several plug-in windows open
 - `[ ]` **A19:** Next similar sample; Previous similar sample; Return to reference; Save as similarity reference; Show similar-sample swap controls; Similarity search
@@ -1342,9 +1342,7 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **C17:** Hide/show Sends; Hide/show return tracks; Toggle second window
 - `[ ]` **C18:** Hide/show video window
 - `[ ]` **C19:** Cancel value entry; Confirm value entry; Current scene from the last track; Decrement value; Delete track from title bar; Eight scenes down; Eight scenes up; First track of the scene; Focus Mixer; Increment value; Jump to highlighted track title; Last track of the scene; Move nonadjacent tracks down; Move nonadjacent tracks left; Move nonadjacent tracks right; Move nonadjacent tracks up; Next control; Next field; Next name while renaming; Next neighbouring control; Next track while renaming; Previous control; Previous neighbouring control; Return to default; Scene down; Scene up; Select all clips and slots; Select clip above; Select clip below; Select clip left; Select clip right; Type a value; Value down by an octave or fine step; Value up by an octave or fine step
-- `[ ]` **C2:** Double loop length; Envelopes tab; Fit content to view height; Fit content to view width; Fixed or zoom-adaptive grid; Focus clip panels; Focus selected clip panel; Follow playback; Halve loop length; Hide/show Overview; Lengthen loop; Lengthen loop brace; Move clip region left with start marker; Move clip region right with start marker; Move end marker to position; Move loop by its length, down; Move loop by its length, up; Move start marker to position; Narrow grid; Nudge loop brace left; Nudge loop brace right; Sample or Notes tab; Select loop brace contents; Select material in loop; Set end marker; Set loop end; Set loop start; Set start marker; Shorten loop; Shorten loop brace; Show Device and Clip View together; Snap to grid; Switch Notes/Envelopes/MPE tabs; Switch Sample/Envelopes tabs; Toggle full-size Clip View; Triplet grid; Widen grid; Zoom back from clip selection; Zoom to clip selection
-- `[ ]` **C4:** Consolidate selection; Copy time; Crop selected clips; Cut time; Deactivate selection; Delete time; Duplicate time; Edit clips and slots across all tracks; Edit time across all tracks; Fold or unfold selected tracks; Fold selected tracks; Insert marker to playhead; Insert silence; Nudge selection left; Nudge selection right; Optimize height; Optimize width; Pan beside a selection; Paste time; Play from insert marker in clip; Play the selection; Resize clip at the insert marker; Select time within a clip; Shorter tracks or clips; Slide waveform; Split Arrangement clip at time selection; Split clip at selection; Stop at the end of the selection; Taller tracks or clips; Unfold all tracks; Unfold selected tracks; Zoom back from time selection; Zoom to time selection
-- `[ ]` **C5:** Create fade or crossfade; Delete fades in selected clips; Toggle fade controls for a moment; Toggle fade handles for a moment
+- `[ ]` **C2:** Envelopes tab; Fit content to view height; Fit content to view width; Focus clip panels; Focus selected clip panel; Follow playback; Move clip region left with start marker; Move clip region right with start marker; Move end marker to position; Move start marker to position; Sample or Notes tab; Set end marker; Set loop end; Set loop start; Set start marker; Show Device and Clip View together; Switch Notes/Envelopes/MPE tabs; Switch Sample/Envelopes tabs; Toggle full-size Clip View; Zoom back from clip selection; Zoom to clip selection
 - `[ ]` **C6:** Add take area to the main lane; Add take lane; Audition take lane; Duplicate take lane; Next take into the main clip; Previous take into the main clip; Show take lanes
 - `[ ]` **C7:** Add or remove stop button; Deactivate selected clip; Insert captured scene; Move nonadjacent scenes down; Move nonadjacent scenes up
 - `[ ]` **C8:** Create Follow Action chain; Toggle Follow Actions

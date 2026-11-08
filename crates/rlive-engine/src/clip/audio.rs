@@ -3,6 +3,7 @@
 use super::data::{AudioClip, WarpedClip};
 use super::envelopes::ClipEnvelopes;
 use super::BlockTime;
+use rlive_core::fade::EdgeFades;
 use rlive_core::warp::{StretchBank, StretchKind, StretchSpan, WarpMap, WarpMode};
 use rlive_core::PPQ;
 
@@ -13,6 +14,8 @@ pub(crate) const FADE_FRAMES: u32 = 64;
 /// lane and a launched clip can both sound in a block.
 pub(crate) const LANE_VOICE: usize = 0;
 pub(crate) const SESSION_VOICE: usize = 1;
+/// The lane's second voice, for the clip that fades in under another during a crossfade.
+pub(crate) const LANE_CROSSFADE_VOICE: usize = 2;
 
 /// Read position of an audio clip.
 pub(crate) struct AudioCursor {
@@ -34,6 +37,8 @@ pub(crate) struct AudioCursor {
     /// Where the gain envelope has got to, smoothed so a step in it doesn't click. `None` until
     /// the clip starts, so it doesn't fade in from nothing.
     env_gain: Option<f32>,
+    /// The clip's user fades.
+    pub fades: EdgeFades,
 }
 
 impl AudioCursor {
@@ -47,6 +52,7 @@ impl AudioCursor {
             needs_seek: true,
             in_progress: false,
             env_gain: None,
+            fades: EdgeFades::default(),
         }
     }
 
@@ -191,6 +197,7 @@ pub(super) fn render_audio_env(
             if frames_left < FADE_FRAMES as f64 {
                 gain *= (frames_left / FADE_FRAMES as f64).max(0.0) as f32;
             }
+            gain *= audio.fades.gain(local);
             l[f] += voice_l[f] * gain;
             r[f] += voice_r[f] * gain;
         }
@@ -355,6 +362,7 @@ fn render_following(
             if frames_left < FADE_FRAMES as f64 {
                 gain *= (frames_left / FADE_FRAMES as f64).max(0.0) as f32;
             }
+            gain *= audio.fades.gain(at);
             l[i] += voice_l[i] * gain;
             r[i] += voice_r[i] * gain;
         }

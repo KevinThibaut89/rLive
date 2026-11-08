@@ -10,7 +10,7 @@ mod following_tests;
 mod launcher;
 mod midi;
 
-pub(crate) use audio::{AudioCursor, LANE_VOICE, SESSION_VOICE};
+pub(crate) use audio::{AudioCursor, LANE_CROSSFADE_VOICE, LANE_VOICE, SESSION_VOICE};
 pub use data::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
 pub use envelopes::{ClipCurve, ClipEnvelopes, EnvCurve, EnvTiming, EnvelopedClip};
 pub(crate) use launcher::{ClipPlayer, Pending, Playing};

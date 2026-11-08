@@ -16,6 +16,12 @@ impl Session {
     }
 
     pub fn play(&mut self) {
+        // Set Song Start Time Here overrules the insert marker.
+        if let Some(start) = self.project.arrangement.song_start {
+            if !self.is_playing() {
+                self.seek(start as f64);
+            }
+        }
         self.send(EngineCommand::Transport(TransportCmd::Play));
     }
 

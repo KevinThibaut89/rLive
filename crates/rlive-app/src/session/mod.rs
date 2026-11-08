@@ -3,6 +3,7 @@
 //! Every edit goes through [`Session`] so the project (what gets saved) and the engine (what
 //! you hear) never drift apart.
 
+mod arrange_edit;
 mod arrangement;
 mod automation;
 pub mod automation_edit;
@@ -30,6 +31,8 @@ mod warping;
 mod warping_tests;
 
 #[cfg(test)]
+mod arrange_tests;
+#[cfg(test)]
 mod automation_edit_tests;
 #[cfg(test)]
 mod automation_tests;
@@ -52,9 +55,12 @@ mod takes_tests;
 #[cfg(test)]
 mod tests;
 
+pub use arrange_edit::{
+    edge_fade_ticks, next_locator, prev_locator, quantized_tick, FadeSide, LoopEdit,
+};
 pub use arrangement::{ArrMove, TrimEdge};
 pub use automation_edit::{EnvGroup, EnvParam};
-pub use build::{descriptor_for, mix_of, Builder, DeviceRuntime, PluginWiring};
+pub use build::{descriptor_for, mix_of, time_maps, Builder, DeviceRuntime, PluginWiring};
 pub use clips::ClipRef;
 pub use devices::ChainRef;
 pub use graph::compile_plan;
@@ -107,6 +113,9 @@ pub struct Session {
     pub warp_defaults: WarpDefaults,
     /// The Record, Warp & Launch options that recording follows.
     pub record: RecordSettings,
+    /// Create Fades on Clip Edges, from the settings. Off until the app says otherwise, so a
+    /// project rendered without settings sounds exactly as it is written.
+    pub(crate) edge_fades: bool,
     recording: Option<Recording>,
     disk: Option<DiskWriter>,
     /// Audio takes in progress, by track.
@@ -164,6 +173,7 @@ impl Session {
             colors: ColorSettings::default(),
             warp_defaults: WarpDefaults::default(),
             record: RecordSettings::default(),
+            edge_fades: false,
             recording: None,
             disk: None,
             takes: HashMap::new(),
@@ -229,6 +239,9 @@ impl Session {
                 samples: &mut self.samples,
                 wiring: &self.wiring,
                 chain_shared: Some(&mut self.chain_shared),
+                edge_fade: self
+                    .edge_fades
+                    .then(|| arrange_edit::edge_fade_ticks(self.project.tempo)),
             },
             &self.project,
         )

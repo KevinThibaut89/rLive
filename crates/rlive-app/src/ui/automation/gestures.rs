@@ -1,5 +1,6 @@
 //! What the mouse and keyboard do in an automation lane.
 
+use super::super::arrangement::TimeSel;
 use super::super::keymap::{self, Platform};
 use super::super::timeline;
 use super::super::widgets;
@@ -7,7 +8,7 @@ use super::super::UiState;
 use super::geom::{handle_at, hit_test, DragAccum, EnvHit, Handle};
 use super::lanes::{self, Arrow, LaneKey, Nav};
 use super::popups::{LaneMenu, MenuHit};
-use super::{apply_handle, selection_rect, Frame, LaneView, TimeSel};
+use super::{apply_handle, selection_rect, Frame, LaneView};
 use crate::session::Session;
 use egui::{Modifiers, Pos2, Rect, Sense};
 use rlive_core::param::EnvTarget;
@@ -72,7 +73,7 @@ pub(super) enum Gesture {
 
 /// The modifier that puts a click or drag on the time grid off it.
 fn snapping(state: &UiState, m: Modifiers) -> bool {
-    state.arr.auto.snap && !keymap::ignores_grid(m, Platform::current())
+    state.arr.grid.snapping(m, Platform::current())
 }
 
 fn snap_tick(tick: f64, grid: u64, snap: bool) -> f64 {
@@ -234,7 +235,7 @@ fn begin_drag(
         });
         return;
     }
-    if let Some((s0, s1)) = state.arr.auto.in_sel(key) {
+    if let Some((s0, s1)) = super::in_sel(&state.arr.time, key) {
         let sel = TimeSel {
             start: s0,
             end: s1,
@@ -249,7 +250,7 @@ fn begin_drag(
     let accum = DragAccum::default();
     state.arr.auto.gesture = match hit {
         EnvHit::Point(i) => {
-            let span = state.arr.auto.in_sel(key);
+            let span = super::in_sel(&state.arr.time, key);
             let moved: Vec<usize> = match span {
                 Some((a, b)) if view.points[i].time >= a && view.points[i].time <= b => view
                     .points
@@ -318,11 +319,7 @@ fn begin_drag(
 
 fn segment_gesture(state: &UiState, view: &LaneView, target: EnvTarget, i: usize) -> Gesture {
     let mid = (view.points[i].time + view.points[i + 1].time) / 2.0;
-    let span = state
-        .arr
-        .auto
-        .in_sel(view.key)
-        .filter(|(a, b)| mid >= *a && mid <= *b);
+    let span = super::in_sel(&state.arr.time, view.key).filter(|(a, b)| mid >= *a && mid <= *b);
     Gesture::Segment {
         key: view.key,
         target,
@@ -344,7 +341,7 @@ fn begin_select(
     let Some(start) = start else { return };
     let anchor = snap_tick(view.geom.axis.tick(start.x), grid, snap);
     state.arr.auto.frame = None;
-    state.arr.auto.sel = Some(TimeSel {
+    state.arr.time = Some(TimeSel {
         start: anchor,
         end: anchor,
         lanes: vec![view.key],
@@ -476,7 +473,7 @@ fn update_gesture(
             let tick = snap_tick(axis.tick(pos.x), grid, snap);
             let (start, end) = (anchor.min(tick), anchor.max(tick));
             let lanes = spanned_lanes(all, usable, *origin, pos.y);
-            auto.sel = Some(TimeSel { start, end, lanes });
+            state.arr.time = Some(TimeSel { start, end, lanes });
         }
         Gesture::Draw {
             key,
@@ -522,7 +519,7 @@ fn update_gesture(
             let points = frame.result(range);
             let span = frame.span;
             auto.frame = Some(frame);
-            if let Some(sel) = auto.sel.as_mut() {
+            if let Some(sel) = state.arr.time.as_mut() {
                 sel.start = span.0;
                 sel.end = span.1;
             }
@@ -651,7 +648,7 @@ fn background_click(
     grid: u64,
     snap: bool,
 ) {
-    state.arr.auto.sel = None;
+    state.arr.time = None;
     state.arr.auto.frame = None;
     if !session.is_playing() {
         session.seek(snap_tick(view.geom.axis.tick(pos.x), grid, snap));

@@ -224,6 +224,7 @@ impl Session {
             }
             let id = placed.id;
             t.place_clip(placed);
+            t.settle_fades();
             if let Some(r) = self.recording.as_mut() {
                 r.set_clip(p.track, id);
             }

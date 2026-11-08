@@ -18,6 +18,7 @@ super::domain! {
         ToggleDrawMode,
         ToggleLockEnvelopes,
         ToggleMidiEnvelopeAutoReset,
+        ToggleChaseNotes,
     }
 }
 
@@ -41,6 +42,7 @@ pub const MENU: &[Entry] = &[
         "MIDI Envelope Auto-Reset",
         M::Options(Options::ToggleMidiEnvelopeAutoReset),
     ),
+    Item("Chase MIDI Notes", M::Options(Options::ToggleChaseNotes)),
     Item("Rescan Plugins", M::Options(Options::RescanPlugins)),
 ];
 
@@ -58,6 +60,10 @@ impl RliveApp {
         s.check(
             M::Options(Options::ToggleLockEnvelopes),
             self.session.project.arrangement.lock_envelopes,
+        );
+        s.check(
+            M::Options(Options::ToggleChaseNotes),
+            self.settings.chase_notes,
         );
         s.enable(
             M::Options(Options::RescanPlugins),
@@ -111,6 +117,12 @@ impl RliveApp {
                 self.session.send_midi_envelope_auto_reset(on);
                 return;
             }
+            Options::ToggleChaseNotes => {
+                self.settings.chase_notes = !self.settings.chase_notes;
+                self.session.set_chase(self.settings.chase_notes);
+                self.settings.save();
+                return;
+            }
             _ => {}
         }
         let ui = &mut self.ui;
@@ -128,7 +140,8 @@ impl RliveApp {
             | Options::ToggleDelayCompensation
             | Options::ToggleReducedLatency
             | Options::ToggleLockEnvelopes
-            | Options::ToggleMidiEnvelopeAutoReset => {}
+            | Options::ToggleMidiEnvelopeAutoReset
+            | Options::ToggleChaseNotes => {}
         }
     }
 }

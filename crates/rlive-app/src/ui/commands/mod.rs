@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 pub mod app;
+pub mod arrange;
 pub mod create;
 pub mod edit;
 pub mod file;
@@ -64,6 +65,7 @@ registry! {
     Transport(transport::Transport),
     Track(track::Track),
     Rack(rack::Rack),
+    Arrange(arrange::Arrange),
 }
 
 static ALL: LazyLock<Vec<MenuCommand>> = LazyLock::new(build_all);
@@ -151,6 +153,7 @@ impl RliveApp {
         self.create_state(&mut s);
         self.view_state(&mut s);
         self.options_state(&mut s);
+        self.arrange_state(&mut s);
         s
     }
 
@@ -165,6 +168,7 @@ impl RliveApp {
             MenuCommand::Transport(c) => self.transport_command(c),
             MenuCommand::Track(c) => self.track_command(c),
             MenuCommand::Rack(c) => self.rack_command(c),
+            MenuCommand::Arrange(c) => self.arrange_command(c),
         }
     }
 
@@ -204,9 +208,18 @@ impl RliveApp {
                 ui.separator();
                 entries(ui, &[app::QUIT], &st, &mut fired);
             });
-            ui.menu_button("Edit", |ui| entries(ui, edit::MENU, &st, &mut fired));
-            ui.menu_button("Create", |ui| entries(ui, create::MENU, &st, &mut fired));
-            ui.menu_button("View", |ui| entries(ui, view::MENU, &st, &mut fired));
+            ui.menu_button("Edit", |ui| {
+                entries(ui, edit::MENU, &st, &mut fired);
+                entries(ui, arrange::EDIT_ITEMS, &st, &mut fired);
+            });
+            ui.menu_button("Create", |ui| {
+                entries(ui, create::MENU, &st, &mut fired);
+                entries(ui, arrange::CREATE_ITEMS, &st, &mut fired);
+            });
+            ui.menu_button("View", |ui| {
+                entries(ui, view::MENU, &st, &mut fired);
+                entries(ui, arrange::VIEW_ITEMS, &st, &mut fired);
+            });
             ui.menu_button("Options", |ui| {
                 entries(ui, &[app::PREFERENCES], &st, &mut fired);
                 entries(ui, options::MENU, &st, &mut fired);
@@ -242,7 +255,8 @@ mod tests {
             + options::Options::ALL.len()
             + transport::Transport::ALL.len()
             + track::Track::ALL.len()
-            + rack::Rack::ALL.len();
+            + rack::Rack::ALL.len()
+            + arrange::Arrange::ALL.len();
         assert_eq!(MenuCommand::all().len(), expected);
         let unique: std::collections::HashSet<_> = MenuCommand::all().iter().collect();
         assert_eq!(unique.len(), expected, "a command appears twice");

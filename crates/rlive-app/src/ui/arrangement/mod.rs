@@ -1,6 +1,12 @@
 //! The Arrangement view: clips on a linear timeline, one lane per track.
 
-use super::automation::{self, AutomationState};
+pub mod fades;
+pub mod grid;
+pub mod ruler;
+pub mod selection;
+pub mod view;
+
+use super::automation::{self, AutomationState, LaneKey};
 use super::icons;
 use super::info_view::edit_info_item;
 use super::keymap::{self, Platform};
@@ -11,13 +17,26 @@ use super::widgets::{self, info, info_note, rgb};
 use super::{BrowserItem, Detail, UiState};
 use crate::session::{can_arm, ArrMove, ChainRef, ClipRef, InfoTarget, Session, TrimEdge};
 use egui::{Align2, Color32, CursorIcon, Layout, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
+use fades::{FadeDrag, FadeTarget};
+use grid::GridState;
 use rlive_audio_io::SampleStatus;
+use rlive_core::time::BarMap;
 use rlive_core::{ArrClipId, TrackId, PPQ};
 use rlive_project::{ArrangementClip, Clip, ClipContent, TrackKind};
+pub use selection::TimeSel;
 use std::sync::atomic::Ordering;
+use view::{Follow, ZoomHistory};
 
-const RULER_H: f32 = 28.0;
 const LOOP_H: f32 = 11.0;
+const RULER_H: f32 = LOOP_H + ruler::BEAT_H + ruler::SCRUB_H;
+const OVERVIEW_H: f32 = 16.0;
+const TIME_RULER_H: f32 = 16.0;
+/// A folded track's height.
+const FOLDED_H: f32 = 22.0;
+/// The tallest a track can be dragged.
+const MAX_TRACK_H: f32 = 420.0;
+/// How far an object's pull reaches when snapping, in screen points.
+const SNAP_PX: f32 = 6.0;
 const HEADER_W: f32 = 176.0;
 const SCROLLBAR: f32 = 8.0;
 const CLIP_TITLE_H: f32 = 13.0;
@@ -33,7 +52,12 @@ enum DragKind {
     Move,
     TrimLeft,
     TrimRight,
-    Rubber,
+    /// Slides the clip's content under its edges.
+    Slide,
+    /// Selects time: over a clip's body or the background.
+    Time,
+    /// Pans the view with the mouse.
+    Pan,
 }
 
 struct ClipDragState {
@@ -42,6 +66,10 @@ struct ClipDragState {
     /// The clip grabbed, whose start snaps to the grid.
     anchor: Option<u64>,
     clips: Vec<(TrackId, ArrangementClip)>,
+    /// Where snapping can catch: other clips' edges, locators and signature markers.
+    objects: Vec<u64>,
+    /// Where a time selection started, and in which lane.
+    time: Option<(f64, LaneKey)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -56,6 +84,34 @@ pub struct ArrangementState {
     pub scroll: Vec2,
     pub track_h: f32,
     pub selection: Vec<(TrackId, ArrClipId)>,
+    /// A time selection across clip and automation lanes, or the insert marker on them.
+    pub time: Option<TimeSel>,
+    pub grid: GridState,
+    /// The loop brace has the arrow keys.
+    pub loop_selected: bool,
+    /// A track header has the keyboard, not the lanes.
+    pub header_selected: bool,
+    pub selected_locator: Option<usize>,
+    pub selected_signature: Option<usize>,
+    pub selected_fade: Option<FadeTarget>,
+    fade_drag: Option<FadeDrag>,
+    /// F is held, which shows fade handles in Automation Mode.
+    pub fades_key: bool,
+    pub show_overview: bool,
+    pub follow: Follow,
+    pub zoom_history: ZoomHistory,
+    /// Waveform Vertical Zoom, for every audio clip in the Arrangement.
+    pub wave_zoom: f32,
+    pub renaming_locator: Option<(usize, String)>,
+    pub editing_signature: Option<(usize, String)>,
+    /// Where Insert Silence will insert, and how many bars the dialog says.
+    pub inserting_silence: Option<(u64, String)>,
+    /// When the scrub area was pressed, where, and whether it's repeating yet.
+    scrub_hold: Option<(f64, f64, bool)>,
+    /// Width of the lanes, for keyboard commands that frame things.
+    lanes_width: f32,
+    /// The lanes' height, for Optimize Height.
+    lanes_height: f32,
     drag: Option<ClipDragState>,
     loop_drag: Option<(LoopDrag, f32, u64, u64)>,
     context: Option<(TrackId, ArrClipId)>,
@@ -70,6 +126,82 @@ impl ArrangementState {
         self.px_per_beat = (self.px_per_beat * factor).clamp(1.0, 240.0);
         self.scroll.x = beat * self.px_per_beat;
     }
+
+    /// Whether something is selected that commands can act on: clips or a span of time.
+    pub fn has_selection(&self) -> bool {
+        !self.selection.is_empty() || self.time.as_ref().is_some_and(|t| !t.is_point())
+    }
+
+    /// The span a command applies to: the time selection, or the clips selected.
+    pub fn selected_span(&self, session: &Session) -> Option<(u64, u64)> {
+        match &self.time {
+            Some(t) if !t.is_point() => Some(t.ticks()),
+            _ => selection::clips_span(session, &self.selection),
+        }
+    }
+
+    /// The tracks a command applies to: the selection's, or the insert marker's.
+    pub fn selected_tracks(&self) -> Vec<TrackId> {
+        match &self.time {
+            Some(t) if !t.lanes.is_empty() => t.tracks(),
+            _ => {
+                let mut out: Vec<TrackId> = self.selection.iter().map(|(t, _)| *t).collect();
+                out.dedup();
+                out
+            }
+        }
+    }
+
+    /// Selects everything in the loop, the shortcut a click on the brace is.
+    pub fn select_loop(&mut self, session: &Session) {
+        self.loop_selected = true;
+        self.header_selected = false;
+        let a = &session.project.arrangement;
+        let (s, e) = (a.loop_start as f64, a.loop_end as f64);
+        self.selection.clear();
+        self.time = Some(TimeSel {
+            start: s,
+            end: e,
+            lanes: session
+                .project
+                .visible_tracks()
+                .iter()
+                .map(|&v| LaneKey {
+                    chain: ChainRef::Track(session.project.tracks[v].id),
+                    slot: None,
+                })
+                .collect(),
+        });
+    }
+
+    /// Frames the selection, keeping the old view for Zoom Back. With no selection, everything.
+    pub fn zoom_to_selection(&mut self, session: &Session, width: f32) {
+        let Some((start, end)) = self.selected_span(session).filter(|(a, b)| b > a) else {
+            let bar = session.project.time_signature.ticks_per_bar();
+            let end = session.project.arrangement_end() + 2 * bar;
+            let (px, scroll) = view::zoom_for(0, end.max(bar), width, 1.0, 240.0);
+            self.zoom_history.push(self.px_per_beat, self.scroll.x);
+            self.px_per_beat = px;
+            self.scroll.x = scroll;
+            return;
+        };
+        self.zoom_history.push(self.px_per_beat, self.scroll.x);
+        let (px, scroll) = view::zoom_for(start, end, width, 1.0, 240.0);
+        self.px_per_beat = px;
+        self.scroll.x = scroll;
+    }
+
+    /// Steps back to the view before the last zoom.
+    pub fn zoom_back(&mut self) {
+        if let Some((px, scroll)) = self.zoom_history.pop() {
+            self.px_per_beat = px;
+            self.scroll.x = scroll;
+        }
+    }
+
+    pub fn lanes_size(&self) -> Vec2 {
+        Vec2::new(self.lanes_width, self.lanes_height)
+    }
 }
 
 impl Default for ArrangementState {
@@ -79,6 +211,25 @@ impl Default for ArrangementState {
             scroll: Vec2::ZERO,
             track_h: 54.0,
             selection: Vec::new(),
+            time: None,
+            grid: GridState::default(),
+            loop_selected: false,
+            header_selected: false,
+            selected_locator: None,
+            selected_signature: None,
+            selected_fade: None,
+            fade_drag: None,
+            fades_key: false,
+            show_overview: true,
+            follow: Follow::default(),
+            zoom_history: ZoomHistory::default(),
+            wave_zoom: 1.0,
+            renaming_locator: None,
+            editing_signature: None,
+            inserting_silence: None,
+            scrub_hold: None,
+            lanes_width: 0.0,
+            lanes_height: 0.0,
             drag: None,
             loop_drag: None,
             context: None,
@@ -123,13 +274,27 @@ impl Rows {
     fn build(session: &Session, state: &UiState) -> Self {
         let track_h = state.arr.track_h;
         let auto = state.arr.auto.mode;
+        let height = |chain: ChainRef| match (chain, session.track_ui(chain)) {
+            (ChainRef::Track(id), Some(ui)) => {
+                let fold = session
+                    .project
+                    .track(id)
+                    .is_some_and(|t| !t.is_group() && ui.folded);
+                if fold {
+                    FOLDED_H
+                } else {
+                    ui.height.unwrap_or(track_h)
+                }
+            }
+            _ => track_h,
+        };
         let mut rows = Vec::new();
         let mut top = 0.0;
         let mut add = |chain: ChainRef, index: Option<usize>, top: &mut f32| {
             let (main_h, extra) = if auto {
-                automation::row_heights(session, chain, track_h)
+                automation::row_heights(session, chain, height(chain))
             } else {
-                (track_h, Vec::new())
+                (height(chain), Vec::new())
             };
             let row = Row {
                 chain,
@@ -183,6 +348,26 @@ impl Rows {
         (i < self.rows.len()).then_some(i)
     }
 
+    /// The lane at a screen height, if there is one: the row's clip lane in Automation Mode too.
+    fn key_at(&self, area: Rect, y: f32, scroll_y: f32) -> Option<LaneKey> {
+        let i = self.row_at(area, y, scroll_y)?;
+        Some(LaneKey {
+            chain: self.rows[i].chain,
+            slot: None,
+        })
+    }
+
+    /// Every clip lane, top to bottom.
+    fn order(&self) -> Vec<LaneKey> {
+        self.rows
+            .iter()
+            .map(|r| LaneKey {
+                chain: r.chain,
+                slot: None,
+            })
+            .collect()
+    }
+
     /// The project index of the track at a screen height.
     fn track_at(&self, area: Rect, y: f32, scroll_y: f32) -> Option<usize> {
         self.rows[self.row_at(area, y, scroll_y)?].index
@@ -203,7 +388,21 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
             0.0
         };
     let lanes_right = full.right() - header_w;
-    let ruler = Rect::from_min_max(full.min, Pos2::new(lanes_right, full.top() + RULER_H));
+    let overview_h = if state.arr.show_overview {
+        OVERVIEW_H
+    } else {
+        0.0
+    };
+    let marker_h = if session.project.arrangement.signatures.is_empty() {
+        0.0
+    } else {
+        ruler::SIGNATURE_H
+    };
+    let ruler_top = full.top() + overview_h;
+    let ruler = Rect::from_min_max(
+        Pos2::new(full.left(), ruler_top),
+        Pos2::new(lanes_right, ruler_top + RULER_H + marker_h),
+    );
     // Return tracks and the Master stay at the bottom, under the scrolling lanes.
     let auto_mode = state.arr.auto.mode;
     let bottom_rows = if auto_mode {
@@ -212,7 +411,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         session.project.returns.len() + 1
     };
     let bottom_h = bottom_rows as f32 * RETURN_ROW_H;
-    let lanes_bottom = full.bottom() - SCROLLBAR - bottom_h;
+    let lanes_bottom = full.bottom() - SCROLLBAR - bottom_h - TIME_RULER_H;
     let lanes = Rect::from_min_max(
         Pos2::new(full.left(), ruler.bottom()),
         Pos2::new(lanes_right, lanes_bottom),
@@ -221,8 +420,10 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         Pos2::new(lanes_right, ruler.bottom()),
         Pos2::new(full.right(), lanes_bottom),
     );
+    state.arr.lanes_width = lanes.width();
+    state.arr.lanes_height = lanes.height();
 
-    wheel(ui, state, full, lanes);
+    wheel(ui, session, state, full, lanes);
     let rows = Rows::build(session, state);
     let content_h = rows.total + ADD_ZONE_H;
     let last = session
@@ -238,17 +439,22 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
 
     let tick = session.engine.shared.tick.load();
     let playing = session.is_playing();
-    follow_playhead(state, lanes, tick, playing);
+    follow_playhead(state, session, lanes, tick, playing);
 
     let axis = TimeAxis {
         left: lanes.left(),
         px_per_beat: state.arr.px_per_beat,
         scroll: state.arr.scroll.x,
     };
-    let grid = timeline::adaptive_grid(axis.px_per_beat, bar);
+    let bars = session.project.bar_map();
+    let grid_spacing = state.arr.grid.ticks(axis.px_per_beat, bar);
 
+    if state.arr.show_overview {
+        let strip = Rect::from_min_max(full.min, Pos2::new(lanes_right, ruler_top));
+        ruler::overview(ui, session, state, strip, lanes.width(), content_beats);
+    }
     paint_lane_backgrounds(ui, state, lanes, &rows);
-    paint_grid(ui, lanes, &axis, grid, bar);
+    paint_grid(ui, lanes, &axis, grid_spacing, &bars);
     if session.project.arrangement.loop_enabled {
         let a = &session.project.arrangement;
         let (x0, x1) = (axis.x(a.loop_start as f64), axis.x(a.loop_end as f64));
@@ -259,14 +465,26 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         );
     }
     let hits = paint_clips(ui, session, state, lanes, &axis, &rows);
-    lane_interaction(ui, session, state, lanes, &axis, grid, &hits, &rows);
+    lane_interaction(
+        ui,
+        session,
+        state,
+        lanes,
+        &axis,
+        grid_spacing,
+        &bars,
+        &hits,
+        &rows,
+    );
     if auto_mode {
-        automation::show_lanes(ui, session, state, lanes, &axis, grid, &rows);
+        automation::show_lanes(ui, session, state, lanes, &axis, grid_spacing, &rows);
     } else {
         // Only moves made in Automation Mode change what its lanes show.
         let _ = session.take_touched_control();
     }
-    paint_ruler(ui, session, state, ruler, &axis, grid, bar);
+    paint_time_selection(ui, state, lanes, &axis, &rows);
+    fades::show(ui, session, state, &axis, &hits, &rows, lanes);
+    ruler::show(ui, session, state, ruler, &axis, grid_spacing, bar);
     mode_buttons(
         ui,
         session,
@@ -303,12 +521,24 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
             session,
             state,
             Rect::from_min_max(
-                Pos2::new(full.left(), lanes.bottom()),
-                Pos2::new(full.right(), lanes.bottom() + bottom_h),
+                Pos2::new(full.left(), lanes.bottom() + TIME_RULER_H),
+                Pos2::new(full.right(), lanes.bottom() + TIME_RULER_H + bottom_h),
             ),
             lanes_right,
         );
     }
+    let grid_text = state.arr.grid.label(axis.px_per_beat, bar);
+    ruler::time_ruler(
+        ui,
+        session,
+        state,
+        Rect::from_min_size(
+            Pos2::new(full.left(), lanes.bottom()),
+            Vec2::new(lanes_right - full.left(), TIME_RULER_H),
+        ),
+        &axis,
+        &grid_text,
+    );
     let add_y = lanes.top() + rows.total - state.arr.scroll.y;
     if add_y < lanes.bottom() {
         let zone = Rect::from_min_max(
@@ -325,14 +555,21 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     scrollbars(
         ui, state, lanes, headers, full, content_w, content_h, max_x, max_y,
     );
+    ruler::editors(ui.ctx(), session, state);
 }
 
-fn wheel(ui: &mut egui::Ui, state: &mut UiState, full: Rect, lanes: Rect) {
+fn wheel(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, full: Rect, lanes: Rect) {
     if !ui.rect_contains_pointer(full) {
         return;
     }
-    let (delta, m, pointer) =
-        ui.input(|i| (i.smooth_scroll_delta, i.modifiers, i.pointer.hover_pos()));
+    let (delta, m, pointer, zoom) = ui.input(|i| {
+        (
+            i.smooth_scroll_delta,
+            i.modifiers,
+            i.pointer.hover_pos(),
+            i.zoom_delta(),
+        )
+    });
     let a = &mut state.arr;
     if m.command && delta.y != 0.0 {
         let axis = TimeAxis {
@@ -343,19 +580,50 @@ fn wheel(ui: &mut egui::Ui, state: &mut UiState, full: Rect, lanes: Rect) {
         let new = (a.px_per_beat * (1.0 + delta.y * 0.004)).clamp(1.0, 240.0);
         a.scroll.x = axis.scroll_after_zoom(pointer.map_or(lanes.left(), |p| p.x), new);
         a.px_per_beat = new;
-    } else if m.alt && delta.y != 0.0 {
-        a.track_h = (a.track_h + delta.y * 0.2).clamp(30.0, 160.0);
+    } else if m.alt && (delta.y != 0.0 || zoom != 1.0) {
+        let dh = delta.y * 0.2 + (zoom - 1.0) * 80.0;
+        let rows = Rows::build(session, state);
+        let targets: Vec<ChainRef> = match state
+            .arr
+            .time
+            .as_ref()
+            .filter(|t| !t.is_point())
+            .map(|t| t.lanes.iter().map(|l| l.chain).collect::<Vec<_>>())
+        {
+            Some(chains) if !chains.is_empty() => chains,
+            _ => pointer
+                .and_then(|p| rows.key_at(lanes, p.y, state.arr.scroll.y))
+                .map(|k| k.chain)
+                .into_iter()
+                .collect(),
+        };
+        let fallback = state.arr.track_h;
+        for chain in targets {
+            session.edit_track_ui(chain, |ui| {
+                let h = ui.height.unwrap_or(fallback) + dh;
+                ui.height = Some(h.clamp(FOLDED_H, MAX_TRACK_H));
+            });
+        }
     } else if m.shift {
         a.scroll.x -= delta.y + delta.x;
+        if delta.y + delta.x != 0.0 {
+            a.follow.pause();
+        }
     } else {
         a.scroll.x -= delta.x;
         a.scroll.y -= delta.y;
+        if delta.x != 0.0 {
+            a.follow.pause();
+        }
     }
 }
 
 /// While playing, turn the page when the playhead leaves the view.
-fn follow_playhead(state: &mut UiState, lanes: Rect, tick: f64, playing: bool) {
-    if !playing || state.arr.drag.is_some() || state.arr.auto.dragging() {
+fn follow_playhead(state: &mut UiState, session: &Session, lanes: Rect, tick: f64, playing: bool) {
+    if session.history.pending.is_some() && !session.is_recording() && playing {
+        state.arr.follow.pause();
+    }
+    if !state.arr.follow.update(playing) || state.arr.drag.is_some() || state.arr.auto.dragging() {
         return;
     }
     let a = &mut state.arr;
@@ -391,13 +659,16 @@ fn paint_lane_backgrounds(ui: &egui::Ui, state: &UiState, lanes: Rect, rows: &Ro
     }
 }
 
-fn paint_grid(ui: &egui::Ui, lanes: Rect, axis: &TimeAxis, grid: u64, bar: u64) {
+fn paint_grid(ui: &egui::Ui, lanes: Rect, axis: &TimeAxis, grid: u64, bars: &BarMap) {
     let p = ui.painter_at(lanes);
-    let first = (axis.tick(lanes.left()).max(0.0) as u64 / grid) * grid;
-    let mut t = first;
-    while axis.x(t as f64) <= lanes.right() {
-        let x = axis.x(t as f64);
-        let c = if t.is_multiple_of(bar) {
+    let mut t = grid::grid_floor(axis.tick(lanes.left()), grid, bars) as f64;
+    // A signature marker restarts the grid, so each line is worked out from the one before.
+    let mut guard = 0;
+    while axis.x(t) <= lanes.right() && guard < 8192 {
+        guard += 1;
+        let x = axis.x(t);
+        let barline = bars.bar_at(t).start == t;
+        let c = if barline {
             pal().grid_line(shade(0x141414))
         } else {
             pal().grid_line(shade(0x202020))
@@ -406,7 +677,13 @@ fn paint_grid(ui: &egui::Ui, lanes: Rect, axis: &TimeAxis, grid: u64, bar: u64) 
             [Pos2::new(x, lanes.top()), Pos2::new(x, lanes.bottom())],
             Stroke::new(1.0, c),
         );
-        t += grid;
+        let mut next = t + grid as f64;
+        let seg = bars.segment_start(t);
+        let next_seg = bars.segment_start(next);
+        if next_seg != seg && next_seg > t {
+            next = next_seg;
+        }
+        t = next;
     }
 }
 
@@ -420,6 +697,9 @@ fn paint_clips(
 ) -> Vec<Hit> {
     let p = ui.painter_at(lanes);
     let mut hits = Vec::new();
+    let edge = session
+        .edge_fades
+        .then(|| crate::session::edge_fade_ticks(session.project.tempo));
     for (i, row) in rows.rows.iter().enumerate() {
         let Some(index) = row.index else {
             continue;
@@ -429,10 +709,11 @@ fn paint_clips(
         if lane.bottom() < lanes.top() || lane.top() > lanes.bottom() {
             continue;
         }
+        let shown = t.effective_fades(edge);
         if t.is_group() {
             paint_group_overview(&p, session, t.id, lane, lanes, axis);
         }
-        for c in &t.arrangement {
+        for (c, f) in t.arrangement.iter().zip(&shown) {
             let (x0, x1) = (axis.x(c.start as f64), axis.x(c.end() as f64));
             if x1 < lanes.left() || x0 > lanes.right() {
                 continue;
@@ -442,7 +723,20 @@ fn paint_clips(
                 Pos2::new(x1.max(x0 + 2.0), lane.bottom() - 1.0),
             );
             let selected = state.arr.selection.contains(&(t.id, c.id));
-            paint_clip(&p, session, c, rect, lanes, axis, selected, t.mute);
+            paint_clip(
+                &p,
+                session,
+                c,
+                rect,
+                lanes,
+                axis,
+                selected,
+                t.mute,
+                state.arr.wave_zoom,
+            );
+            if c.is_audio() && rect.height() >= fades::MIN_HEIGHT {
+                fades::paint_ramps(&p, rect, c, f, axis, lanes);
+            }
             hits.push(Hit {
                 track: t.id,
                 id: c.id,
@@ -471,9 +765,10 @@ fn paint_clip(
     axis: &TimeAxis,
     selected: bool,
     muted: bool,
+    wave_zoom: f32,
 ) {
     let mut color = rgb(c.clip.color);
-    if muted {
+    if muted || !c.clip.active {
         color = theme::darken(color, 0.45);
     }
     let body = if session.content_waiting_for_sample(&c.clip.content) {
@@ -504,9 +799,9 @@ fn paint_clip(
     if content.height() > 6.0 {
         match &c.clip.content {
             ClipContent::Midi { .. } => paint_notes(p, c, content, lanes, axis, color),
-            ClipContent::Audio { file, .. } => {
-                paint_waveform(p, session, c, &file.path, content, lanes, axis, color)
-            }
+            ClipContent::Audio { file, .. } => paint_waveform(
+                p, session, c, &file.path, content, lanes, axis, color, wave_zoom,
+            ),
         }
     }
     p.line_segment(
@@ -626,6 +921,7 @@ fn paint_waveform(
     lanes: Rect,
     axis: &TimeAxis,
     color: Color32,
+    wave_zoom: f32,
 ) {
     if let Some(SampleStatus::Failed(_)) = session.samples.status(path) {
         let galley = p.layout_no_wrap(
@@ -698,12 +994,53 @@ fn paint_waveform(
             };
             p.line_segment(
                 [
-                    Pos2::new(px as f32 + 0.5, mid - hi.clamp(-1.0, 1.0) * half),
-                    Pos2::new(px as f32 + 0.5, mid - lo.clamp(-1.0, 1.0) * half + 1.0),
+                    Pos2::new(
+                        px as f32 + 0.5,
+                        mid - (hi * wave_zoom).clamp(-1.0, 1.0) * half,
+                    ),
+                    Pos2::new(
+                        px as f32 + 0.5,
+                        mid - (lo * wave_zoom).clamp(-1.0, 1.0) * half + 1.0,
+                    ),
                 ],
                 Stroke::new(1.0, shape),
             );
         }
+    }
+}
+
+/// A Shift+Alt drag over a clip's content slides it under its edges.
+fn slides(m: egui::Modifiers) -> bool {
+    m.shift && m.alt
+}
+
+/// Shift, in the title bar with Alt, picks out time within a clip.
+fn selects_in_title(m: egui::Modifiers) -> bool {
+    m.shift && m.alt
+}
+
+/// Pans the view from anywhere in the lanes.
+fn pans(m: egui::Modifiers) -> bool {
+    m.alt && m.command
+}
+
+fn clip_zone(h: &Hit, pos: Pos2, m: egui::Modifiers) -> DragKind {
+    let in_title = pos.y <= h.rect.top() + CLIP_TITLE_H;
+    if !in_title {
+        return if slides(m) {
+            DragKind::Slide
+        } else {
+            DragKind::Time
+        };
+    }
+    if selects_in_title(m) {
+        DragKind::Time
+    } else if h.rect.width() >= EDGE_W * 2.5 && pos.x < h.rect.left() + EDGE_W {
+        DragKind::TrimLeft
+    } else if h.rect.width() >= EDGE_W * 2.5 && pos.x > h.rect.right() - EDGE_W {
+        DragKind::TrimRight
+    } else {
+        DragKind::Move
     }
 }
 
@@ -715,6 +1052,7 @@ fn lane_interaction(
     lanes: Rect,
     axis: &TimeAxis,
     grid: u64,
+    bars: &BarMap,
     hits: &[Hit],
     rows: &Rows,
 ) {
@@ -724,20 +1062,16 @@ fn lane_interaction(
         Sense::click_and_drag(),
     );
     let m = ui.input(|i| i.modifiers);
-    let snapping = !keymap::ignores_grid(m, Platform::current());
+    let snapping = state.arr.grid.snapping(m, Platform::current());
     let hit = |pos: Pos2| hits.iter().rev().find(|h| h.rect.contains(pos));
-    let edge = |h: &Hit, pos: Pos2| {
-        if h.rect.width() >= EDGE_W * 2.5 && pos.x < h.rect.left() + EDGE_W {
-            DragKind::TrimLeft
-        } else if h.rect.width() >= EDGE_W * 2.5 && pos.x > h.rect.right() - EDGE_W {
-            DragKind::TrimRight
-        } else {
-            DragKind::Move
-        }
-    };
     if let Some(pos) = resp.hover_pos() {
-        if let Some(h) = hit(pos) {
-            if edge(h, pos) != DragKind::Move {
+        if pans(m) {
+            ui.ctx().set_cursor_icon(CursorIcon::Grab);
+        } else if let Some(h) = hit(pos) {
+            if matches!(
+                clip_zone(h, pos, m),
+                DragKind::TrimLeft | DragKind::TrimRight
+            ) {
                 ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
             }
         }
@@ -745,36 +1079,66 @@ fn lane_interaction(
 
     let sy = state.arr.scroll.y;
     let pointer = resp.interact_pointer_pos();
+    let tolerance = SNAP_PX as f64 / (axis.px_per_beat as f64 / PPQ as f64);
+    let snap_at = |x: f32, objects: &[u64]| {
+        grid::snap_tick(axis.tick(x), grid, snapping, bars, objects, tolerance)
+    };
+    let lane_order = rows.order();
 
     if resp.double_clicked() {
         if let Some(pos) = pointer {
             match hit(pos) {
                 Some(hit) => open_clip(state, hit.track, hit.id, true),
-                None => create_midi_clip(session, state, lanes, axis, grid, pos, rows),
+                None => create_midi_clip(session, state, lanes, axis, grid, bars, pos, rows),
             }
         }
     } else if resp.clicked() {
         if let Some(pos) = pointer {
+            state.arr.loop_selected = false;
+            state.arr.header_selected = false;
+            state.arr.selected_locator = None;
+            state.arr.selected_signature = None;
+            state.arr.selected_fade = None;
             if let Some(i) = rows.track_at(lanes, pos.y, sy) {
                 let id = session.project.tracks[i].id;
                 state.selected = Some(ChainRef::Track(id));
                 state.selected_tracks = vec![id];
             }
-            match hit(pos) {
-                Some(hit) => {
+            let tick = snap_at(pos.x, &[]) as f64;
+            let clicked_clip = hit(pos).copied();
+            let on_title = clicked_clip.is_some_and(|h| pos.y <= h.rect.top() + CLIP_TITLE_H);
+            match (clicked_clip, on_title) {
+                (Some(hit), true) => {
                     let key = (hit.track, hit.id);
                     if m.shift || m.command {
                         toggle(&mut state.arr.selection, key);
                     } else {
                         state.arr.selection = vec![key];
                     }
+                    let span = selection::clips_span(session, &state.arr.selection);
+                    let lane = rows.key_at(lanes, pos.y, sy);
+                    state.arr.time = span.zip(lane).map(|((s, e), lane)| TimeSel {
+                        start: s as f64,
+                        end: e as f64,
+                        lanes: vec![lane],
+                    });
                     open_clip(state, hit.track, hit.id, false);
                 }
-                None => {
+                _ => {
                     state.arr.selection.clear();
-                    if !session.is_playing() {
-                        let t = timeline::snap(axis.tick(pos.x), grid, snapping).max(0);
-                        session.seek(t as f64);
+                    let lane = rows.key_at(lanes, pos.y, sy);
+                    if let Some(lane) = lane {
+                        let extended = (m.shift)
+                            .then_some(state.arr.time.as_ref())
+                            .flatten()
+                            .map(|t| selection::extended(t, tick, lane, &lane_order));
+                        state.arr.time = Some(extended.unwrap_or(TimeSel::point(tick, lane)));
+                    }
+                    if !m.shift && !session.is_playing() {
+                        session.seek(tick);
+                    }
+                    if let Some(hit) = clicked_clip {
+                        open_clip(state, hit.track, hit.id, false);
                     }
                 }
             }
@@ -794,13 +1158,17 @@ fn lane_interaction(
 
     if resp.drag_started() {
         if let Some(pos) = pointer {
-            state.arr.drag = Some(begin_drag(session, state, hit(pos), &edge, pos));
+            let start = begin_drag(session, state, hit(pos), pos, m, lanes, rows, &snap_at);
+            state.arr.loop_selected = false;
+            state.arr.drag = Some(start);
         }
     }
 
     let mut preview = Vec::new();
     if let (Some(d), Some(pos)) = (&state.arr.drag, pointer) {
-        preview = drag_preview(session, state, d, pos, axis, grid, snapping, lanes, rows);
+        preview = drag_preview(
+            session, state, d, pos, axis, grid, bars, snapping, tolerance, lanes, rows,
+        );
     }
     let p = ui.painter_at(lanes);
     for ghost in &preview {
@@ -813,15 +1181,33 @@ fn lane_interaction(
         );
     }
     if let (Some(d), Some(pos)) = (&state.arr.drag, pointer) {
-        if d.kind == DragKind::Rubber {
-            let r = Rect::from_two_pos(d.origin, pos);
-            p.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(120, 180, 255, 40));
-            p.rect_stroke(r, 0.0, Stroke::new(1.0, pal().select), StrokeKind::Inside);
-            state.arr.selection = hits
-                .iter()
-                .filter(|h| h.rect.intersects(r))
-                .map(|h| (h.track, h.id))
-                .collect();
+        match d.kind {
+            DragKind::Time => {
+                if let Some((anchor, origin)) = d.time {
+                    let tick = snap_at(pos.x, &[]) as f64;
+                    let lane = rows.key_at(lanes, pos.y, sy).unwrap_or(origin);
+                    state.arr.selection.clear();
+                    state.arr.time = Some(TimeSel {
+                        start: anchor.min(tick),
+                        end: anchor.max(tick),
+                        lanes: selection::lanes_between(origin, lane, &lane_order),
+                    });
+                }
+            }
+            DragKind::Pan => {
+                let d = resp.drag_delta();
+                state.arr.scroll -= d;
+                state.arr.follow.pause();
+            }
+            DragKind::Slide => {
+                if let Some((track, base)) = d.clips.first().cloned() {
+                    let delta = ((pos.x - d.origin.x) / axis.px_per_beat) as f64 * PPQ as f64;
+                    let delta = grid::snap_tick(delta.abs(), grid, snapping, bars, &[], 0.0) as i64
+                        * delta.signum() as i64;
+                    session.arr_slide(track, &base, delta);
+                }
+            }
+            _ => {}
         }
     }
     if resp.drag_stopped() {
@@ -844,12 +1230,15 @@ fn lane_interaction(
     });
     let resp = match target.and_then(|r| session.clip_at(r)) {
         Some(c) => {
-            let text = format!("Clip '{}' — drag to move, double-click to edit, right-click for options", c.name);
+            let text = format!(
+                "Clip '{}' — drag the title bar to move, drag its body to select time, double-click to edit, right-click for options",
+                c.name
+            );
             info(resp, text)
         }
         None => info(
-        resp,
-        "Arrangement — click to place the insert marker · drag clips to move (Alt = copy, Cmd = no snap) · drag edges to trim · double-click to edit or add · Cmd+wheel zooms · Alt+wheel sets lane height",
+            resp,
+            "Arrangement — click to place the insert marker · drag selects time · drag clips by their title bar (Alt = copy, Cmd = no snap) · drag edges to trim · double-click to edit or add · Cmd+wheel zooms · Alt+wheel sets lane height",
         ),
     };
     if let Some(note) = target.and_then(|r| session.info_text(InfoTarget::Clip(r))) {
@@ -886,6 +1275,7 @@ fn create_midi_clip(
     lanes: Rect,
     axis: &TimeAxis,
     grid: u64,
+    bars: &BarMap,
     pos: Pos2,
     rows: &Rows,
 ) {
@@ -899,7 +1289,7 @@ fn create_midi_clip(
     let id = t.id;
     let color = session.new_clip_color(id);
     let sig = session.project.time_signature;
-    let start = ((axis.tick(pos.x) / grid as f64).floor().max(0.0) as u64) * grid;
+    let start = grid::grid_floor(axis.tick(pos.x), grid, bars);
     let placed = ArrangementClip::new(Clip::new_midi("MIDI Clip", color, 1, sig), start);
     let clip_id = placed.id;
     session.arr_place(id, placed);
@@ -907,26 +1297,65 @@ fn create_midi_clip(
     open_clip(state, id, clip_id, true);
 }
 
+/// Everything clips can snap to, other than the clips in `moving`.
+fn snap_objects(session: &Session, moving: &[ArrClipId]) -> Vec<u64> {
+    let mut objects = Vec::new();
+    for t in &session.project.tracks {
+        for c in &t.arrangement {
+            if !moving.contains(&c.id) {
+                objects.push(c.start);
+                objects.push(c.end());
+            }
+        }
+    }
+    let a = &session.project.arrangement;
+    objects.extend(a.locators.iter().map(|l| l.tick));
+    objects.extend(a.signatures.iter().map(|m| m.tick));
+    objects
+}
+
+#[allow(clippy::too_many_arguments)]
 fn begin_drag(
     session: &Session,
     state: &mut UiState,
     hit: Option<&Hit>,
-    edge: &dyn Fn(&Hit, Pos2) -> DragKind,
     pos: Pos2,
+    m: egui::Modifiers,
+    lanes: Rect,
+    rows: &Rows,
+    snap_at: &dyn Fn(f32, &[u64]) -> u64,
 ) -> ClipDragState {
-    let Some(h) = hit else {
-        state.arr.selection.clear();
+    let sy = state.arr.scroll.y;
+    let time_drag = |pos: Pos2| ClipDragState {
+        kind: DragKind::Time,
+        origin: pos,
+        anchor: None,
+        clips: Vec::new(),
+        objects: Vec::new(),
+        time: rows
+            .key_at(lanes, pos.y, sy)
+            .map(|k| (snap_at(pos.x, &[]) as f64, k)),
+    };
+    if pans(m) {
         return ClipDragState {
-            kind: DragKind::Rubber,
+            kind: DragKind::Pan,
             origin: pos,
             anchor: None,
             clips: Vec::new(),
+            objects: Vec::new(),
+            time: None,
         };
+    }
+    let Some(h) = hit else {
+        return time_drag(pos);
     };
+    let kind = clip_zone(h, pos, m);
+    if kind == DragKind::Time {
+        return time_drag(pos);
+    }
     if !state.arr.selection.contains(&(h.track, h.id)) {
         state.arr.selection = vec![(h.track, h.id)];
     }
-    let kind = edge(h, pos);
     let find = |t: TrackId, id: ArrClipId| session.project.track(t)?.arr_clip(id).cloned();
     let clips: Vec<(TrackId, ArrangementClip)> = if kind == DragKind::Move {
         state
@@ -945,11 +1374,14 @@ fn begin_drag(
         DragKind::TrimRight => c.end(),
         _ => c.start,
     });
+    let moving: Vec<ArrClipId> = clips.iter().map(|(_, c)| c.id).collect();
     ClipDragState {
         kind,
         origin: pos,
         anchor,
         clips,
+        objects: snap_objects(session, &moving),
+        time: None,
     }
 }
 
@@ -969,15 +1401,20 @@ fn drag_preview(
     pos: Pos2,
     axis: &TimeAxis,
     grid: u64,
+    bars: &BarMap,
     snapping: bool,
+    tolerance: f64,
     lanes: Rect,
     rows: &Rows,
 ) -> Vec<Ghost> {
     let Some(anchor) = d.anchor else {
         return Vec::new();
     };
+    if matches!(d.kind, DragKind::Time | DragKind::Slide | DragKind::Pan) {
+        return Vec::new();
+    }
     let target = anchor as f64 + ((pos.x - d.origin.x) / axis.px_per_beat) as f64 * PPQ as f64;
-    let snapped = timeline::snap(target, grid, snapping).max(0);
+    let snapped = grid::snap_tick(target, grid, snapping, bars, &d.objects, tolerance) as i64;
     let mut dt = snapped - anchor as i64;
     let visible = session.project.visible_tracks();
     let tracks: Vec<&rlive_project::Track> = visible
@@ -1019,7 +1456,7 @@ fn drag_preview(
                 DragKind::Move => clip.start = (c.start as i64 + dt).max(0) as u64,
                 DragKind::TrimLeft => clip.trim_left((c.start as i64 + dt).max(0) as u64),
                 DragKind::TrimRight => clip.trim_right((c.end() as i64 + dt).max(0) as u64),
-                DragKind::Rubber => return None,
+                DragKind::Time | DragKind::Slide | DragKind::Pan => return None,
             }
             let lane = rows.main(lanes, i, state.arr.scroll.y);
             let rect = Rect::from_min_max(
@@ -1044,7 +1481,7 @@ fn finish_drag(
     copy: bool,
 ) {
     match d.kind {
-        DragKind::Rubber => {}
+        DragKind::Time | DragKind::Pan | DragKind::Slide => {}
         DragKind::Move => {
             let moves: Vec<ArrMove> = preview
                 .iter()
@@ -1062,6 +1499,7 @@ fn finish_drag(
                     .all(|(g, (_, c))| g.from == g.to && g.clip.start == c.start);
             if !unchanged {
                 state.arr.selection = session.arr_move(&moves, copy);
+                state.arr.time = None;
             }
         }
         DragKind::TrimLeft | DragKind::TrimRight => {
@@ -1078,28 +1516,105 @@ fn finish_drag(
 }
 
 fn clip_context_menu(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
-    let Some((track, id)) = state.arr.context else {
-        ui.close();
-        return;
-    };
-    if ui.button("Edit").clicked() {
-        open_clip(state, track, id, true);
+    if let Some((track, id)) = state.arr.context {
+        if ui.button("Edit").clicked() {
+            open_clip(state, track, id, true);
+            ui.close();
+        }
+        edit_info_item(
+            ui,
+            session,
+            state,
+            InfoTarget::Clip(ClipRef::Arr { track, id }),
+        );
+        if ui.button("Duplicate").clicked() {
+            let items = state.arr.selection.clone();
+            state.arr.selection = session.arr_duplicate(&items);
+            ui.close();
+        }
+        if ui.button("Delete").clicked() {
+            let items = std::mem::take(&mut state.arr.selection);
+            session.arr_delete(&items);
+            ui.close();
+        }
+        if ui.button("Split").clicked() {
+            let at = session.insert_marker() as u64;
+            session.arr_split(&[track], &[at]);
+            ui.close();
+        }
+        if ui.button("Deactivate / Activate").clicked() {
+            let items = state.arr.selection.clone();
+            session.arr_toggle_active(&items);
+            ui.close();
+        }
+        let hint = if session.arr_can_reverse(&state.arr.selection) {
+            "Arrives with A9"
+        } else {
+            "Only audio clips can be reversed; arrives with A9"
+        };
+        ui.add_enabled(false, egui::Button::new("Reverse Clip(s)"))
+            .on_disabled_hover_text(hint);
+        ui.add_enabled(false, egui::Button::new("Consolidate"))
+            .on_disabled_hover_text("Arrives with A12");
+        if ui.button("Delete Fades").clicked() {
+            let items = state.arr.selection.clone();
+            session.arr_delete_fades(&items);
+            ui.close();
+        }
+        ui.separator();
+    }
+    grid_menu(ui, state);
+}
+
+/// The context menu's grid section.
+fn grid_menu(ui: &mut egui::Ui, state: &mut UiState) {
+    let g = &mut state.arr.grid;
+    ui.menu_button("Adaptive Grid", |ui| {
+        for (label, level) in [
+            ("Narrowest", 2),
+            ("Narrow", 1),
+            ("Medium", 0),
+            ("Wide", -1),
+            ("Widest", -2),
+        ] {
+            if ui
+                .selectable_label(!g.fixed && g.level == level, label)
+                .clicked()
+            {
+                g.fixed = false;
+                g.level = level;
+                ui.close();
+            }
+        }
+    });
+    ui.menu_button("Fixed Grid", |ui| {
+        for (label, ticks) in [
+            ("8 Bars", 8 * 4 * PPQ),
+            ("4 Bars", 4 * 4 * PPQ),
+            ("2 Bars", 2 * 4 * PPQ),
+            ("1 Bar", 4 * PPQ),
+            ("1/2", 2 * PPQ),
+            ("1/4", PPQ),
+            ("1/8", PPQ / 2),
+            ("1/16", PPQ / 4),
+            ("1/32", PPQ / 8),
+        ] {
+            if ui
+                .selectable_label(g.fixed && g.width == ticks, label)
+                .clicked()
+            {
+                g.fixed = true;
+                g.width = ticks;
+                ui.close();
+            }
+        }
+    });
+    if ui.selectable_label(g.triplet, "Triplet Grid").clicked() {
+        g.triplet = !g.triplet;
         ui.close();
     }
-    edit_info_item(
-        ui,
-        session,
-        state,
-        InfoTarget::Clip(ClipRef::Arr { track, id }),
-    );
-    if ui.button("Duplicate").clicked() {
-        let items = state.arr.selection.clone();
-        state.arr.selection = session.arr_duplicate(&items);
-        ui.close();
-    }
-    if ui.button("Delete").clicked() {
-        let items = std::mem::take(&mut state.arr.selection);
-        session.arr_delete(&items);
+    if ui.selectable_label(g.snap, "Snap to Grid").clicked() {
+        g.snap = !g.snap;
         ui.close();
     }
 }
@@ -1172,187 +1687,36 @@ fn place_new(session: &mut Session, state: &mut UiState, track: TrackId, clip: C
     state.selected = Some(ChainRef::Track(track));
 }
 
-/// Locators, as flags along the ruler: hover for the user's notes, right-click to write them.
-fn paint_locators(
-    ui: &mut egui::Ui,
-    session: &mut Session,
-    state: &mut UiState,
-    ruler: Rect,
-    axis: &TimeAxis,
-) {
-    for i in 0..session.project.arrangement.locators.len() {
-        let locator = &session.project.arrangement.locators[i];
-        let x = axis.x(locator.tick as f64);
-        let name = locator.name.clone();
-        if x < ruler.left() || x > ruler.right() {
+/// The time selection and insert marker on the clip lanes.
+fn paint_time_selection(ui: &egui::Ui, state: &UiState, lanes: Rect, axis: &TimeAxis, rows: &Rows) {
+    let Some(sel) = state.arr.time.as_ref() else {
+        return;
+    };
+    if state.arr.auto.mode {
+        return;
+    }
+    let p = ui.painter_at(lanes);
+    for (i, _) in rows.rows.iter().enumerate() {
+        let key = LaneKey {
+            chain: rows.rows[i].chain,
+            slot: None,
+        };
+        if !sel.lanes.contains(&key) {
             continue;
         }
-        let rect = Rect::from_min_size(
-            Pos2::new(x, ruler.top() + LOOP_H),
-            Vec2::new(64.0, ruler.height() - LOOP_H),
-        );
-        let p = ui.painter_at(ruler);
-        p.line_segment(
-            [rect.left_top(), rect.left_bottom()],
-            Stroke::new(1.0, pal().accent),
-        );
-        p.text(
-            Pos2::new(x + 3.0, rect.top()),
-            Align2::LEFT_TOP,
-            &name,
-            theme::font(10.0),
-            pal().accent,
-        );
-        let resp = ui.interact(rect, ui.scope_id().with(("locator", i)), Sense::click());
-        let resp = info(
-            resp,
-            format!("Locator '{name}' — a named place in the Arrangement"),
-        );
-        info_note(
-            &resp,
-            session
-                .info_text(InfoTarget::Locator(i))
-                .unwrap_or_default(),
-        );
-        resp.context_menu(|ui| edit_info_item(ui, session, state, InfoTarget::Locator(i)));
-    }
-}
-
-/// Whether dragging snaps to the grid: holding the bypass key turns that off.
-fn snaps(ui: &egui::Ui) -> bool {
-    !ui.input(|i| keymap::ignores_grid(i.modifiers, Platform::current()))
-}
-
-fn paint_ruler(
-    ui: &mut egui::Ui,
-    session: &mut Session,
-    state: &mut UiState,
-    ruler: Rect,
-    axis: &TimeAxis,
-    grid: u64,
-    bar: u64,
-) {
-    let p = ui.painter_at(ruler);
-    p.rect_filled(ruler, 0.0, shade(0x333333));
-    let step = timeline::ruler_bar_step(axis.px_per_beat, bar) * bar;
-    let first = (axis.tick(ruler.left()).max(0.0) as u64 / step) * step;
-    let mut t = first;
-    while axis.x(t as f64) <= ruler.right() {
-        let x = axis.x(t as f64);
-        p.line_segment(
-            [
-                Pos2::new(x, ruler.top() + LOOP_H),
-                Pos2::new(x, ruler.bottom()),
-            ],
-            Stroke::new(1.0, shade(0x6a6a6a)),
-        );
-        p.text(
-            Pos2::new(x + 3.0, ruler.bottom() - 2.0),
-            Align2::LEFT_BOTTOM,
-            (t / bar + 1).to_string(),
-            theme::font(10.5),
-            pal().text_dim,
-        );
-        t += step;
-    }
-
-    paint_locators(ui, session, state, ruler, axis);
-    let a = session.project.arrangement.clone();
-    let (x0, x1) = (axis.x(a.loop_start as f64), axis.x(a.loop_end as f64));
-    let brace = Rect::from_min_max(
-        Pos2::new(x0, ruler.top() + 1.0),
-        Pos2::new(x1, ruler.top() + LOOP_H),
-    );
-    p.rect_filled(
-        brace,
-        0.0,
-        if a.loop_enabled {
-            shade(0xb0b0b0)
+        let lane = rows.main(lanes, i, state.arr.scroll.y);
+        let (x0, x1) = (axis.x(sel.start), axis.x(sel.end));
+        if sel.is_point() {
+            p.line_segment(
+                [Pos2::new(x0, lane.top()), Pos2::new(x0, lane.bottom())],
+                Stroke::new(1.5, pal().select),
+            );
         } else {
-            shade(0x5a5a5a)
-        },
-    );
-
-    let top = Rect::from_min_max(ruler.min, Pos2::new(ruler.right(), ruler.top() + LOOP_H));
-    let loop_resp = ui.interact(top, ui.scope_id().with("arr_loop"), Sense::click_and_drag());
-    let hover_kind = |x: f32| {
-        if (x - x0).abs() < EDGE_W {
-            Some(LoopDrag::Start)
-        } else if (x - x1).abs() < EDGE_W {
-            Some(LoopDrag::End)
-        } else if x > x0 && x < x1 {
-            Some(LoopDrag::Whole)
-        } else {
-            None
-        }
-    };
-    if let Some(pos) = loop_resp.hover_pos() {
-        if matches!(hover_kind(pos.x), Some(LoopDrag::Start | LoopDrag::End)) {
-            ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+            let r = Rect::from_min_max(Pos2::new(x0, lane.top()), Pos2::new(x1, lane.bottom()));
+            p.rect_filled(r, 0.0, pal().select.gamma_multiply(0.22));
+            p.rect_stroke(r, 0.0, Stroke::new(1.0, pal().select), StrokeKind::Inside);
         }
     }
-    if loop_resp.drag_started() {
-        if let Some(pos) = loop_resp.interact_pointer_pos() {
-            state.arr.loop_drag = hover_kind(pos.x).map(|k| (k, pos.x, a.loop_start, a.loop_end));
-        }
-    }
-    if loop_resp.clicked() {
-        session.set_loop(!a.loop_enabled, a.loop_start, a.loop_end);
-    }
-    if let (Some((kind, origin, s0, e0)), Some(pos)) =
-        (state.arr.loop_drag, loop_resp.interact_pointer_pos())
-    {
-        let snapping = snaps(ui);
-        let dt = ((pos.x - origin) / axis.px_per_beat) as f64 * PPQ as f64;
-        let snapped = |v: u64| timeline::snap(v as f64 + dt, grid, snapping).max(0) as u64;
-        let (s, e) = match kind {
-            LoopDrag::Whole => {
-                let s = snapped(s0);
-                (s, s + (e0 - s0))
-            }
-            LoopDrag::Start => (snapped(s0).min(e0.saturating_sub(grid.max(1))), e0),
-            LoopDrag::End => (s0, snapped(e0).max(s0 + grid.max(1))),
-        };
-        session.set_loop(a.loop_enabled, s, e);
-    }
-    if loop_resp.drag_stopped() {
-        state.arr.loop_drag = None;
-    }
-    info(
-        loop_resp,
-        "Loop brace — click to switch looping on or off, drag to move, drag an end to resize",
-    );
-
-    let lower = Rect::from_min_max(Pos2::new(ruler.left(), ruler.top() + LOOP_H), ruler.max);
-    let seek = ui.interact(
-        lower,
-        ui.scope_id().with("arr_seek"),
-        Sense::click_and_drag(),
-    );
-    if seek.clicked() || seek.dragged() {
-        if let Some(pos) = seek.interact_pointer_pos() {
-            let snapping = snaps(ui);
-            let t = timeline::snap(axis.tick(pos.x), grid, snapping).max(0);
-            session.seek(t as f64);
-        }
-    }
-    info(seek, "Timeline — click to move the song position");
-
-    let marker = axis.x(session.insert_marker());
-    let tri = vec![
-        Pos2::new(marker - 4.0, ruler.bottom() - 7.0),
-        Pos2::new(marker + 4.0, ruler.bottom() - 7.0),
-        Pos2::new(marker, ruler.bottom()),
-    ];
-    p.add(egui::Shape::convex_polygon(
-        tri,
-        shade(0xe0e0e0),
-        Stroke::NONE,
-    ));
-    p.line_segment(
-        [ruler.left_bottom(), ruler.right_bottom()],
-        Stroke::new(1.0, pal().separator),
-    );
 }
 
 fn track_headers(
@@ -1414,6 +1778,68 @@ fn mode_buttons(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, a
     {
         session.set_lock_envelopes(!locked);
     }
+    locator_buttons(ui, session, state, area);
+}
+
+/// Previous, Set and Next, and the Optimize toggles and waveform zoom beside them.
+fn locator_buttons(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, area: Rect) {
+    let row = Rect::from_min_size(
+        area.left_top() + Vec2::new(6.0, 26.0),
+        Vec2::new(area.width() - 12.0, 16.0),
+    );
+    let mut bu = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(row)
+            .layout(Layout::left_to_right(egui::Align::Center)),
+    );
+    bu.spacing_mut().item_spacing.x = 3.0;
+    let size = Vec2::new(18.0, 16.0);
+    if info(
+        widgets::state_button(&mut bu, size, false, pal().accent, "<"),
+        "Previous Locator — jump to the locator before the song position, quantized",
+    )
+    .clicked()
+    {
+        session.prev_locator();
+    }
+    let selected = state.arr.selected_locator;
+    let label = if selected.is_some() { "Del" } else { "Set" };
+    if info(
+        widgets::state_button(&mut bu, Vec2::new(26.0, 16.0), false, pal().accent, label),
+        "Set Locator — add a locator, quantized while playing; deletes the selected locator",
+    )
+    .clicked()
+    {
+        match selected {
+            Some(i) => {
+                session.delete_locator(i);
+                state.arr.selected_locator = None;
+            }
+            None => {
+                let at = state
+                    .arr
+                    .time
+                    .as_ref()
+                    .map_or(session.insert_marker() as u64, |t| t.start as u64);
+                state.arr.selected_locator = Some(session.set_locator(at));
+            }
+        }
+    }
+    if info(
+        widgets::state_button(&mut bu, size, false, pal().accent, ">"),
+        "Next Locator — jump to the locator after the song position, quantized",
+    )
+    .clicked()
+    {
+        session.next_locator();
+    }
+    bu.add_space(6.0);
+    let mut zoom = state.arr.wave_zoom;
+    let r = bu.add(egui::DragValue::new(&mut zoom).range(0.5..=8.0).speed(0.02));
+    if r.changed() {
+        state.arr.wave_zoom = zoom;
+    }
+    info(r, "Waveform Vertical Zoom — enlarges every audio waveform");
 }
 
 /// The rows below the lanes: one for each return track, then the Master.
@@ -1632,17 +2058,15 @@ fn track_header(
         );
         super::in_out::header_section(ui, session, state, id, area);
     }
-    let fold_w = if kind == TrackKind::Group {
+    let fold_w = 16.0;
+    if kind == TrackKind::Group {
         icons::fold(
             &p,
             Rect::from_min_size(inner.min, Vec2::splat(16.0)),
             !folded,
             pal().text_dim,
         );
-        16.0
-    } else {
-        0.0
-    };
+    }
     let top = Rect::from_min_size(
         inner.min + Vec2::new(fold_w, 0.0),
         Vec2::new(inner.width() - fold_w, 16.0),
@@ -1744,13 +2168,23 @@ fn track_header(
             }
         }
     }
-    let on_fold = kind == TrackKind::Group
-        && resp
-            .interact_pointer_pos()
-            .is_some_and(|pos| Rect::from_min_size(inner.min, Vec2::splat(16.0)).contains(pos));
+    let fold_rect = Rect::from_min_size(inner.min, Vec2::splat(16.0));
+    if kind != TrackKind::Group {
+        icons::fold(&p, fold_rect, !folded, pal().text_faint);
+    }
+    let on_fold = resp
+        .interact_pointer_pos()
+        .is_some_and(|pos| fold_rect.contains(pos));
     if resp.clicked() && on_fold {
-        session.set_folded(id, !folded);
+        if kind == TrackKind::Group {
+            session.set_folded(id, !folded);
+        } else {
+            set_track_folded(session, id, !folded, cu.input(|i| i.modifiers.alt));
+        }
     } else if resp.clicked() {
+        state.arr.header_selected = true;
+        state.arr.selection.clear();
+        state.arr.time = None;
         let m = cu.input(|i| i.modifiers);
         if m.shift || m.command {
             match state.selected_tracks.iter().position(|t| *t == id) {
@@ -1777,6 +2211,57 @@ fn track_header(
         session.info_text(InfoTarget::Track(id)).unwrap_or_default(),
     );
     resp.context_menu(|ui| session_view::track_menu(ui, session, state, id, &name));
+
+    // The split line below a track: drag it to resize; Alt resizes them all.
+    if rect.height() >= FOLDED_H {
+        let split = Rect::from_min_max(
+            Pos2::new(rect.left(), rect.bottom() - 3.0),
+            Pos2::new(rect.right(), rect.bottom() + 1.0),
+        );
+        let drag = cu.interact(split, cu.scope_id().with(("split", id)), Sense::drag());
+        if drag.hovered() || drag.dragged() {
+            cu.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+        }
+        if drag.dragged() {
+            let dh = drag.drag_delta().y;
+            let all = cu.input(|i| i.modifiers.alt);
+            let fallback = state.arr.track_h;
+            if all {
+                let ids: Vec<TrackId> = session.project.tracks.iter().map(|t| t.id).collect();
+                for t in ids {
+                    resize_track(session, t, dh, fallback);
+                }
+            } else {
+                resize_track(session, id, dh, fallback);
+            }
+        }
+    }
+}
+
+fn resize_track(session: &mut Session, id: TrackId, dh: f32, fallback: f32) {
+    session.edit_track_ui(ChainRef::Track(id), |ui| {
+        let h = ui.height.unwrap_or(fallback) + dh;
+        ui.height = Some(h.clamp(FOLDED_H, MAX_TRACK_H));
+        ui.folded = false;
+    });
+}
+
+/// Folds a track (not a group, whose folding hides its members), or all of them with Alt.
+fn set_track_folded(session: &mut Session, id: TrackId, folded: bool, all: bool) {
+    let ids: Vec<TrackId> = if all {
+        session
+            .project
+            .tracks
+            .iter()
+            .filter(|t| !t.is_group())
+            .map(|t| t.id)
+            .collect()
+    } else {
+        vec![id]
+    };
+    for t in ids {
+        session.edit_track_ui(ChainRef::Track(t), |ui| ui.folded = folded);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1805,6 +2290,7 @@ fn scrollbars(
         ui.painter().rect_filled(thumb, 3.0, thumb_color(&resp));
         if resp.dragged() {
             state.arr.scroll.x += resp.drag_delta().x / (track.width() - w).max(1.0) * max_x;
+            state.arr.follow.pause();
         }
     }
     if max_y > 0.0 {

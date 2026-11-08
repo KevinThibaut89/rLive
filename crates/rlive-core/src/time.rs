@@ -533,6 +533,11 @@ impl BarMap {
         self.segs[self.index_at(tick)].signature
     }
 
+    /// Where the signature in force at `tick` began. The grid counts from here.
+    pub fn segment_start(&self, tick: f64) -> f64 {
+        self.segs[self.index_at(tick)].tick
+    }
+
     /// The nominal bar length at `tick`. [`bar_at`](Self::bar_at) has the real one, which may be
     /// cut short.
     pub fn ticks_per_bar_at(&self, tick: f64) -> u64 {
@@ -568,6 +573,18 @@ impl BarMap {
         let n = ((tick - seg.tick - 1e-6) / quantum).ceil().max(0.0);
         let boundary = seg.tick + n * quantum;
         self.next_marker(i).map_or(boundary, |m| boundary.min(m))
+    }
+
+    /// The launch point at or before `tick`: where a click there quantizes to.
+    pub fn prev_boundary(&self, tick: f64, q: Quantize) -> f64 {
+        let i = self.index_at(tick);
+        let seg = &self.segs[i];
+        let quantum = q.ticks(seg.signature) as f64;
+        if quantum <= 0.0 {
+            return tick;
+        }
+        let n = ((tick - seg.tick + 1e-6) / quantum).floor().max(0.0);
+        seg.tick + n * quantum
     }
 
     /// The first beat at or after `tick`.

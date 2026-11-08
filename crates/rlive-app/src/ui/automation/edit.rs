@@ -1,9 +1,10 @@
 //! The Edit menu inside a time selection of the automation lanes.
 
+use super::super::arrangement::TimeSel;
 use super::super::commands::edit::Edit;
 use super::super::commands::ClipBoard;
 use super::super::UiState;
-use super::{lane_target, LaneKey, TimeSel};
+use super::{lane_target, LaneKey};
 use crate::session::Session;
 use rlive_core::param::EnvTarget;
 use rlive_project::envelope_edit::{self, RangeClip};
@@ -17,10 +18,9 @@ pub struct EnvelopeClipboard {
 
 /// The lanes a command acts on and where its time span starts.
 fn targets(session: &Session, state: &UiState) -> Vec<(LaneKey, EnvTarget)> {
-    let auto = &state.arr.auto;
-    let keys: Vec<LaneKey> = match &auto.sel {
+    let keys: Vec<LaneKey> = match state.arr.time.as_ref().filter(|s| !s.is_point()) {
         Some(sel) => sel.lanes.clone(),
-        None => auto.focus.into_iter().collect(),
+        None => state.arr.auto.focus.into_iter().collect(),
     };
     keys.into_iter()
         .filter_map(|k| Some((k, lane_target(session, k)?)))
@@ -85,7 +85,7 @@ fn paste(session: &mut Session, state: &UiState, clip: &EnvelopeClipboard, at: f
 
 /// Runs an Edit command in the automation lanes.
 pub fn edit_selection(session: &mut Session, state: &mut UiState, c: Edit) {
-    let sel = state.arr.auto.sel.clone();
+    let sel = state.arr.time.clone().filter(|s| !s.is_point());
     match c {
         Edit::Copy | Edit::Cut => {
             let Some(sel) = sel else { return };
@@ -110,7 +110,7 @@ pub fn edit_selection(session: &mut Session, state: &mut UiState, c: Edit) {
             if let Some(clip) = copy(session, state, &sel) {
                 paste(session, state, &clip, sel.end);
                 let len = sel.end - sel.start;
-                if let Some(s) = state.arr.auto.sel.as_mut() {
+                if let Some(s) = state.arr.time.as_mut() {
                     s.start += len;
                     s.end += len;
                 }
@@ -119,7 +119,7 @@ pub fn edit_selection(session: &mut Session, state: &mut UiState, c: Edit) {
         Edit::Delete => {
             if let Some(sel) = sel {
                 delete(session, state, &sel);
-                state.arr.auto.sel = None;
+                state.arr.time = None;
             }
         }
         _ => {}

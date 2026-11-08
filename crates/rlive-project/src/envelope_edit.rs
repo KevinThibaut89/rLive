@@ -217,6 +217,69 @@ pub fn delete_range(
     out
 }
 
+/// Takes `[start, end)` out of the timeline: what follows moves up to `start`, and the envelope
+/// steps from what it was at `start` to what it was at `end`.
+pub fn delete_time(
+    points: &[Breakpoint],
+    start: f64,
+    end: f64,
+    range: ParamRange,
+) -> Vec<Breakpoint> {
+    let (cut_points, inner) = with_edges(points, start, end, range);
+    if cut_points.is_empty() || inner.is_empty() {
+        return cut_points;
+    }
+    let shift = end - start;
+    let mut out: Vec<Breakpoint> = Vec::with_capacity(cut_points.len());
+    for (i, p) in cut_points.iter().enumerate() {
+        if i < inner.start || i >= inner.end {
+            out.push(Breakpoint {
+                time: if p.time >= end {
+                    p.time - shift
+                } else {
+                    p.time
+                },
+                ..*p
+            });
+        } else if i == inner.start {
+            out.push(*p);
+        } else if i == inner.end - 1 {
+            out.push(Breakpoint { time: start, ..*p });
+        }
+    }
+    out.sort_by(|a, b| a.time.total_cmp(&b.time));
+    // A step between equal values is no step at all.
+    out.dedup_by(|b, a| a.time == b.time && a.value == b.value);
+    out
+}
+
+/// Opens up `len` empty ticks at `at`: the envelope holds its value across them.
+pub fn insert_time(points: &[Breakpoint], at: f64, len: f64, range: ParamRange) -> Vec<Breakpoint> {
+    let mut out = points.to_vec();
+    if out.is_empty() {
+        return out;
+    }
+    let i = cut(&mut out, at, range);
+    if out[i].time != at {
+        // The envelope has nothing of its own at or after `at`.
+        for p in &mut out[i..] {
+            p.time += len;
+        }
+        return out;
+    }
+    let hold = Breakpoint {
+        time: at + len,
+        curve: out[i].curve,
+        ..out[i]
+    };
+    out[i].curve = 0.0;
+    for p in &mut out[i + 1..] {
+        p.time += len;
+    }
+    out.insert(i + 1, hold);
+    out
+}
+
 /// A stretch of envelope on the clipboard: `points` have times from its start and knob positions
 /// for values, so it can go onto a different parameter.
 #[derive(Debug, Clone, PartialEq)]

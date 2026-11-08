@@ -423,6 +423,7 @@ impl Session {
             if let Some(t) = self.project.track_mut(track) {
                 t.remove_arr_clip(id);
                 t.place_clip(placed);
+                t.settle_fades();
             }
             self.sync_lane(track);
             self.mark_edit("Record");

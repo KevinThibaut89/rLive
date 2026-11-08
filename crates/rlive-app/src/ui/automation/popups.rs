@@ -109,7 +109,7 @@ pub(super) fn lane_menu(
     };
     let (hit, tick, pos) = (menu.hit, menu.tick, menu.pos);
     let range = view.geom.range;
-    let span = state.arr.auto.in_sel(view.key);
+    let span = super::in_sel(&state.arr.time, view.key);
     if matches!(hit, MenuHit::Point(_) | MenuHit::Segment(_)) && ui.button("Edit Value").clicked() {
         let (anchor, group) = match hit {
             MenuHit::Point(i) => {
@@ -185,9 +185,9 @@ pub(super) fn lane_menu(
         }
     });
     ui.separator();
-    let snap = state.arr.auto.snap;
+    let snap = state.arr.grid.snap;
     if ui.selectable_label(snap, "Snap to Grid").clicked() {
-        state.arr.auto.snap = !snap;
+        state.arr.grid.snap = !snap;
         ui.close();
     }
     if !view.points.is_empty() && ui.button("Clear Envelope").clicked() {
@@ -204,7 +204,7 @@ fn delete_at_hit(
     hit: MenuHit,
 ) {
     let MenuHit::Point(i) = hit else { return };
-    let mut group = selection_points(view, state.arr.auto.in_sel(view.key));
+    let mut group = selection_points(view, super::in_sel(&state.arr.time, view.key));
     if !group.contains(&i) {
         group = vec![i];
     }

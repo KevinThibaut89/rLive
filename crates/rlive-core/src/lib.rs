@@ -6,6 +6,7 @@
 pub mod crossfade;
 pub mod device;
 pub mod envelope;
+pub mod fade;
 pub mod ids;
 pub mod midi;
 pub mod mpe;
@@ -19,6 +20,7 @@ pub mod warp;
 
 pub use crossfade::CrossfadeCurve;
 pub use device::{DeviceDesc, Item, Ports, SampleSlot, ScopeKind, Section, Status};
+pub use fade::{fade_gain, EdgeFades};
 pub use ids::{ArrClipId, ChainId, DeviceId, GrooveId, TrackId};
 pub use midi::{
     ExprKind, MidiEvent, MidiMessage, NoteId, NoteIds, NoteSpace, MPE_BEND_RANGE, SLIDE_CC,
