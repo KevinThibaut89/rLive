@@ -7,26 +7,34 @@ use rlive_core::{
 use rlive_plugin_host::{instantiate, instantiate_with, scanner, PluginBuses};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::time::Duration;
 
-/// Build the fixture and wrap it in a `.vst3` bundle directory.
+/// Build the fixture and wrap it in a `.vst3` bundle directory. The fixture is built once per
+/// test run and each caller gets its own bundle, so parallel tests can't race on it.
 fn fixture() -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let target = root.join("target/test-plugins");
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let status = Command::new(cargo)
-        .args(["build", "-q", "-p", "rlive-test-vst3", "--target-dir"])
-        .arg(&target)
-        .current_dir(&root)
-        .status()
-        .expect("run cargo");
-    assert!(status.success(), "building rlive-test-vst3 failed");
-    let lib = target.join("debug").join(format!(
-        "{}rlive_test_vst3.{}",
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_EXTENSION
-    ));
-    let dir = std::env::temp_dir().join(format!("rlive-vst3-{}", std::process::id()));
+    static LIB: OnceLock<PathBuf> = OnceLock::new();
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let lib = LIB.get_or_init(|| {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let target = root.join("target/test-plugins");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let status = Command::new(cargo)
+            .args(["build", "-q", "-p", "rlive-test-vst3", "--target-dir"])
+            .arg(&target)
+            .current_dir(&root)
+            .status()
+            .expect("run cargo");
+        assert!(status.success(), "building rlive-test-vst3 failed");
+        target.join("debug").join(format!(
+            "{}rlive_test_vst3.{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_EXTENSION
+        ))
+    });
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("rlive-vst3-{}-{n}", std::process::id()));
     let bundle = dir.join("rlive-test.vst3");
     let (sub, name) = if cfg!(target_os = "macos") {
         ("MacOS", "rlive-test".to_string())
@@ -39,7 +47,7 @@ fn fixture() -> PathBuf {
     };
     let bin_dir = bundle.join("Contents").join(sub);
     std::fs::create_dir_all(&bin_dir).unwrap();
-    std::fs::copy(&lib, bin_dir.join(name)).unwrap();
+    std::fs::copy(lib, bin_dir.join(name)).unwrap();
     bundle
 }
 
