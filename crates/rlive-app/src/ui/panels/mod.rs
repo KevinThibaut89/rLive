@@ -18,7 +18,10 @@ mod midi_monitor;
 mod multiband_display;
 mod plot;
 mod roar_matrix;
+mod sample_ui;
+mod sampler_panels;
 mod scale_matrix;
+mod simpler_panels;
 mod velocity_curve;
 
 use super::devices::{Action, ActionQueue};
@@ -84,6 +87,32 @@ impl<'a> PanelCtx<'a> {
         self.queue
             .push(self.chain, Action::Param(self.device.id, id.0, value));
     }
+
+    /// Change the device's own saved state.
+    pub fn set_state(&mut self, text: String) {
+        self.queue
+            .push(self.chain, Action::DeviceState(self.device.id, text));
+    }
+
+    /// Open the file dialog to load a sample into a slot of this device.
+    pub fn load_sample(&mut self, slot: usize) {
+        self.queue
+            .push(self.chain, Action::LoadSample(self.device.id, slot));
+    }
+
+    /// Run a sample-player command.
+    pub fn sampling(&mut self, command: crate::session::SamplingCommand) {
+        self.queue
+            .push(self.chain, Action::Sampling(self.device.id, command));
+    }
+
+    /// The device's saved state.
+    pub fn state_text(&self) -> Option<&'a str> {
+        match &self.device.kind {
+            rlive_project::DeviceKind::Builtin { state, .. } => state.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 /// A custom panel: one row of the table, usually defined next to its drawing code.
@@ -119,6 +148,12 @@ pub const PANELS: &[PanelDef] = &[
     roar_matrix::PANEL,
     echo_tunnel::PANEL,
     looper_transport::PANEL,
+    simpler_panels::WAVE,
+    simpler_panels::DRUM_WAVE,
+    simpler_panels::DRUM_XY,
+    simpler_panels::IMPULSE,
+    sampler_panels::TABS,
+    sampler_panels::ZONES,
 ];
 
 /// What a panel takes up when the table has no entry for it.

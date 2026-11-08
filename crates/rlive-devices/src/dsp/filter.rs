@@ -1,7 +1,7 @@
-//! Filter library: five circuits, each with low-pass, band-pass, high-pass, notch and a morph,
+//! Filter library: seven circuits, each with low-pass, band-pass, high-pass, notch and a morph,
 //! at 12 or 24 dB per octave, with drive.
 //!
-//! All five are zero-delay-feedback filters (trapezoidal integration), so they keep their
+//! All of them are zero-delay-feedback filters (trapezoidal integration), so they keep their
 //! tuning near Nyquist and stay stable under fast modulation. These are circuit-inspired models
 //! of our own, not copies of anyone's filters.
 //!
@@ -12,6 +12,8 @@
 //! | [`Ms2`](Circuit::Ms2) | Two-pole, Sallen-Key response | Damping that rises with level (soft clipped resonance) |
 //! | [`Dfm`](Circuit::Dfm) | Four-pole ladder, linear stages | A saturator in the feedback path only: gritty resonance |
 //! | [`Prd`](Circuit::Prd) | Four-pole ladder | Mostly the stages, so resonance is loud |
+//! | [`Osr`](Circuit::Osr) | State-variable | Damping that jumps past a level, like a hard-clipping diode |
+//! | [`Smp`](Circuit::Smp) | Two two-poles in series | The first section as the MS2, the second not at all |
 //!
 //! The non-linear circuits are solved by linearising around the previous state and then solving
 //! the feedback exactly, which is a fixed amount of work per sample.
@@ -28,10 +30,12 @@ pub enum Circuit {
     Ms2,
     Dfm,
     Prd,
+    Osr,
+    Smp,
 }
 
 impl Circuit {
-    pub const LABELS: [&'static str; 5] = ["SVF", "Ladder", "MS2", "DFM", "PRD"];
+    pub const LABELS: [&'static str; 7] = ["SVF", "Ladder", "MS2", "DFM", "PRD", "OSR", "SMP"];
 
     pub fn from_index(i: f64) -> Self {
         match i.round() as i32 {
@@ -39,6 +43,8 @@ impl Circuit {
             2 => Self::Ms2,
             3 => Self::Dfm,
             4 => Self::Prd,
+            5 => Self::Osr,
+            6 => Self::Smp,
             _ => Self::Svf,
         }
     }
@@ -114,6 +120,10 @@ const OUTPUT_LIMIT: f32 = 32.0;
 
 // How far the internal level sits below full scale in the saturating circuits.
 const NONLINEAR_HEADROOM: f32 = 0.5;
+
+// Where the OSR circuit's clipping diode starts conducting, and how quickly it finishes.
+const OSR_KNEE: f32 = 0.7;
+const OSR_KNEE_WIDTH: f32 = 0.15;
 
 // -------------------------------------------------------------------- two-pole section
 
@@ -289,6 +299,18 @@ fn tuning(settings: &FilterSettings, sample_rate: f32) -> Tuning {
         (Circuit::Ladder, _) => (4.2 * res, 0.0, 0.5),
         (Circuit::Dfm, _) => (4.4 * res, 0.0, 0.25),
         (Circuit::Prd, _) => (4.1 * res, 0.0, 0.0),
+        (Circuit::Osr, FilterSlope::Db12) => (2.0 - 2.05 * res, 2.0, 0.0),
+        (Circuit::Osr, FilterSlope::Db24) => (
+            BUTTERWORTH_HIGH_Q - (BUTTERWORTH_HIGH_Q + 0.08) * res,
+            BUTTERWORTH_HIGH_Q,
+            0.0,
+        ),
+        (Circuit::Smp, FilterSlope::Db12) => (2.0 - 2.15 * res, 2.0, 0.0),
+        (Circuit::Smp, FilterSlope::Db24) => (
+            BUTTERWORTH_HIGH_Q - (BUTTERWORTH_HIGH_Q + 0.12) * res,
+            BUTTERWORTH_HIGH_Q,
+            0.0,
+        ),
     };
     // Drive saturates harder going in. Half of it, in decibels, is taken back at the output.
     let (gain_in, gain_out) = match settings.circuit {
@@ -435,6 +457,47 @@ impl Filter {
                     }
                 }
             }
+            Circuit::Osr => {
+                let x = Self::driven(x, gain_in, self.drive_active);
+                // Below the knee resonance is untouched; past it the diode cuts it off quickly.
+                let level = self.second_state_or_first().abs();
+                let open = lerp(
+                    k,
+                    k_open,
+                    ((level - OSR_KNEE) / OSR_KNEE_WIDTH).clamp(0.0, 1.0),
+                );
+                match slope {
+                    FilterSlope::Db12 => {
+                        let [lp, bp, hp] = self.first.tick(x, g, open);
+                        mix_outputs(weights, [lp, bp * k_open, hp, lp + hp])
+                    }
+                    FilterSlope::Db24 => {
+                        let [lp, bp, hp] = self.first.tick(x, g, k_low);
+                        let y = mix_outputs(weights, [lp, bp * k_low, hp, lp + hp]);
+                        let [lp, bp, hp] = self.second.tick(y, g, open);
+                        mix_outputs(weights, [lp, bp * k_open, hp, lp + hp])
+                    }
+                }
+            }
+            Circuit::Smp => {
+                let x = Self::driven(x, gain_in, self.drive_active);
+                match slope {
+                    FilterSlope::Db12 => {
+                        let open = k_open - (k_open - k) * tanh_ratio(self.first.ic1);
+                        let [lp, bp, hp] = self.first.tick(x, g, open);
+                        mix_outputs(weights, [lp, bp * k_open, hp, lp + hp])
+                    }
+                    FilterSlope::Db24 => {
+                        // Soft-limited in the first section, then a free-running second one, which
+                        // is what gives it the character of both the MS2 and the PRD.
+                        let open = k_open - (k_open - k) * tanh_ratio(self.first.ic1);
+                        let [lp, bp, hp] = self.first.tick(x, g, k_low.min(open + k_low * 0.5));
+                        let y = mix_outputs(weights, [lp, bp * k_low, hp, lp + hp]);
+                        let [lp, bp, hp] = self.second.tick(y, g, k);
+                        mix_outputs(weights, [lp, bp * k_open, hp, lp + hp])
+                    }
+                }
+            }
             Circuit::Ladder | Circuit::Dfm | Circuit::Prd => {
                 let sat = match self.settings.circuit {
                     Circuit::Ladder => LadderSat::StagesAndFeedback,
@@ -531,7 +594,7 @@ impl FilterSettings {
                 FilterSlope::Db12 => two_pole(t.k, t.k),
                 FilterSlope::Db24 => two_pole(t.k_low, t.k_low).mul(two_pole(t.k, t.k)),
             },
-            Circuit::Ms2 => match self.slope {
+            Circuit::Ms2 | Circuit::Osr | Circuit::Smp => match self.slope {
                 FilterSlope::Db12 => two_pole(t.k, t.k_open),
                 FilterSlope::Db24 => two_pole(t.k_low, t.k_low).mul(two_pole(t.k, t.k_open)),
             },

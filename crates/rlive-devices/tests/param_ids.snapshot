@@ -66,6 +66,194 @@ rlive.sampler	5	One-shot
 rlive.sampler	6	Start
 rlive.sampler	7	Velocity
 rlive.sampler	8	Pan
+rlive.sampler	9	Reverse
+rlive.sampler	10	Snap
+rlive.sampler	11	Interpolation
+rlive.sampler	12	RAM Mode
+rlive.sampler	13	Constant Power Fade
+rlive.sampler	14	Selected Layer
+rlive.sampler	15	Sample Selector
+rlive.sampler	16	Key Zone Shift
+rlive.sampler	17	Decay
+rlive.sampler	18	Sustain
+rlive.sampler	19	Initial
+rlive.sampler	20	Peak
+rlive.sampler	21	Attack Slope
+rlive.sampler	22	Decay Slope
+rlive.sampler	23	Release Slope
+rlive.sampler	24	Time < Vel
+rlive.sampler	25	Loop
+rlive.sampler	26	Loop Time
+rlive.sampler	27	Repeat
+rlive.sampler	28	Global Time
+rlive.sampler	29	Time < Key
+rlive.sampler	30	Pan < Rnd
+rlive.sampler	31	Voices
+rlive.sampler	32	Retrigger
+rlive.sampler	33	Detune
+rlive.sampler	34	Spread
+rlive.sampler	35	Glide
+rlive.sampler	36	Glide Time
+rlive.sampler	37	Pitch Env
+rlive.sampler	38	Pitch Env Amount
+rlive.sampler	39	Pitch Env Initial
+rlive.sampler	40	Pitch Env Peak
+rlive.sampler	41	Pitch Env Sustain
+rlive.sampler	42	Pitch Env End
+rlive.sampler	43	Pitch Env Attack
+rlive.sampler	44	Pitch Env Decay
+rlive.sampler	45	Pitch Env Release
+rlive.sampler	46	Pitch Env A Slope
+rlive.sampler	47	Pitch Env D Slope
+rlive.sampler	48	Pitch Env R Slope
+rlive.sampler	49	Pitch Env Loop
+rlive.sampler	50	Pitch Env Loop Time
+rlive.sampler	51	Pitch Env Repeat
+rlive.sampler	52	Pitch Env Time < Vel
+rlive.sampler	53	Osc
+rlive.sampler	54	Osc Type
+rlive.sampler	55	Osc Mode
+rlive.sampler	56	Osc Volume
+rlive.sampler	57	Osc Vol < Vel
+rlive.sampler	58	Osc Fixed
+rlive.sampler	59	Osc Freq
+rlive.sampler	60	Osc Multi
+rlive.sampler	61	Osc Coarse
+rlive.sampler	62	Osc Fine
+rlive.sampler	63	Osc Env Initial
+rlive.sampler	64	Osc Env Peak
+rlive.sampler	65	Osc Env Sustain
+rlive.sampler	66	Osc Env End
+rlive.sampler	67	Osc Env Attack
+rlive.sampler	68	Osc Env Decay
+rlive.sampler	69	Osc Env Release
+rlive.sampler	70	Osc Env A Slope
+rlive.sampler	71	Osc Env D Slope
+rlive.sampler	72	Osc Env R Slope
+rlive.sampler	73	Osc Env Loop
+rlive.sampler	74	Osc Env Loop Time
+rlive.sampler	75	Osc Env Repeat
+rlive.sampler	76	Osc Env Time < Vel
+rlive.sampler	77	Filter
+rlive.sampler	78	Filter Type
+rlive.sampler	79	Circuit
+rlive.sampler	80	Slope
+rlive.sampler	81	Frequency
+rlive.sampler	82	Resonance
+rlive.sampler	83	Drive
+rlive.sampler	84	Morph
+rlive.sampler	85	Filter Env
+rlive.sampler	86	Filter Env Amount
+rlive.sampler	87	Filter Env Initial
+rlive.sampler	88	Filter Env Peak
+rlive.sampler	89	Filter Env Sustain
+rlive.sampler	90	Filter Env End
+rlive.sampler	91	Filter Env Attack
+rlive.sampler	92	Filter Env Decay
+rlive.sampler	93	Filter Env Release
+rlive.sampler	94	Filter Env A Slope
+rlive.sampler	95	Filter Env D Slope
+rlive.sampler	96	Filter Env R Slope
+rlive.sampler	97	Filter Env Loop
+rlive.sampler	98	Filter Env Loop Time
+rlive.sampler	99	Filter Env Repeat
+rlive.sampler	100	Filter Env Time < Vel
+rlive.sampler	101	Shaper
+rlive.sampler	102	Shaper Type
+rlive.sampler	103	Shaper Amount
+rlive.sampler	104	Shaper Order
+rlive.sampler	105	Aux Env Initial
+rlive.sampler	106	Aux Env Peak
+rlive.sampler	107	Aux Env Sustain
+rlive.sampler	108	Aux Env End
+rlive.sampler	109	Aux Env Attack
+rlive.sampler	110	Aux Env Decay
+rlive.sampler	111	Aux Env Release
+rlive.sampler	112	Aux Env A Slope
+rlive.sampler	113	Aux Env D Slope
+rlive.sampler	114	Aux Env R Slope
+rlive.sampler	115	Aux Env Loop
+rlive.sampler	116	Aux Env Loop Time
+rlive.sampler	117	Aux Env Repeat
+rlive.sampler	118	Aux Env Time < Vel
+rlive.sampler	119	Aux Dest A
+rlive.sampler	120	Aux Dest B
+rlive.sampler	121	Aux Amt A
+rlive.sampler	122	Aux Amt B
+rlive.sampler	123	LFO 1
+rlive.sampler	124	LFO 1 Type
+rlive.sampler	125	LFO 1 Rate
+rlive.sampler	126	LFO 1 Freq
+rlive.sampler	127	LFO 1 Beats
+rlive.sampler	128	LFO 1 Attack
+rlive.sampler	129	LFO 1 Retrig
+rlive.sampler	130	LFO 1 Offset
+rlive.sampler	131	LFO 1 Key
+rlive.sampler	132	LFO 1 Vol
+rlive.sampler	133	LFO 1 Pan
+rlive.sampler	134	LFO 1 Filter
+rlive.sampler	135	LFO 1 Pitch
+rlive.sampler	136	LFO 2
+rlive.sampler	137	LFO 2 Type
+rlive.sampler	138	LFO 2 Rate
+rlive.sampler	139	LFO 2 Freq
+rlive.sampler	140	LFO 2 Beats
+rlive.sampler	141	LFO 2 Attack
+rlive.sampler	142	LFO 2 Retrig
+rlive.sampler	143	LFO 2 Offset
+rlive.sampler	144	LFO 2 Key
+rlive.sampler	145	LFO 2 Stereo
+rlive.sampler	146	LFO 2 Phase
+rlive.sampler	147	LFO 2 Spin
+rlive.sampler	148	LFO 2 Dest A
+rlive.sampler	149	LFO 2 Dest B
+rlive.sampler	150	LFO 2 Amt A
+rlive.sampler	151	LFO 2 Amt B
+rlive.sampler	152	LFO 3
+rlive.sampler	153	LFO 3 Type
+rlive.sampler	154	LFO 3 Rate
+rlive.sampler	155	LFO 3 Freq
+rlive.sampler	156	LFO 3 Beats
+rlive.sampler	157	LFO 3 Attack
+rlive.sampler	158	LFO 3 Retrig
+rlive.sampler	159	LFO 3 Offset
+rlive.sampler	160	LFO 3 Key
+rlive.sampler	161	LFO 3 Stereo
+rlive.sampler	162	LFO 3 Phase
+rlive.sampler	163	LFO 3 Spin
+rlive.sampler	164	LFO 3 Dest A
+rlive.sampler	165	LFO 3 Dest B
+rlive.sampler	166	LFO 3 Amt A
+rlive.sampler	167	LFO 3 Amt B
+rlive.sampler	168	Key Dest A
+rlive.sampler	169	Key Dest B
+rlive.sampler	170	Key Amt A
+rlive.sampler	171	Key Amt B
+rlive.sampler	172	Velocity Dest A
+rlive.sampler	173	Velocity Dest B
+rlive.sampler	174	Velocity Amt A
+rlive.sampler	175	Velocity Amt B
+rlive.sampler	176	Release Vel Dest A
+rlive.sampler	177	Release Vel Dest B
+rlive.sampler	178	Release Vel Amt A
+rlive.sampler	179	Release Vel Amt B
+rlive.sampler	180	Aftertouch Dest A
+rlive.sampler	181	Aftertouch Dest B
+rlive.sampler	182	Aftertouch Amt A
+rlive.sampler	183	Aftertouch Amt B
+rlive.sampler	184	Mod Wheel Dest A
+rlive.sampler	185	Mod Wheel Dest B
+rlive.sampler	186	Mod Wheel Amt A
+rlive.sampler	187	Mod Wheel Amt B
+rlive.sampler	188	Foot Controller Dest A
+rlive.sampler	189	Foot Controller Dest B
+rlive.sampler	190	Foot Controller Amt A
+rlive.sampler	191	Foot Controller Amt B
+rlive.sampler	192	Pitch Bend Dest A
+rlive.sampler	193	Pitch Bend Dest B
+rlive.sampler	194	Pitch Bend Amt A
+rlive.sampler	195	Pitch Bend Amt B
+rlive.sampler	196	Pitch Bend Range
 rlive.eq3	0	Low
 rlive.eq3	1	Low Freq
 rlive.eq3	2	Mid
@@ -1218,3 +1406,302 @@ rlive.looper	16	x2
 rlive.looper	17	/2
 rlive.looper	18	Octave Up
 rlive.looper	19	Octave Down
+rlive.simpler	0	Mode
+rlive.simpler	1	Sample Start
+rlive.simpler	2	Sample End
+rlive.simpler	3	Start
+rlive.simpler	4	Length
+rlive.simpler	5	Loop
+rlive.simpler	6	Loop Length
+rlive.simpler	7	Snap
+rlive.simpler	8	Fade
+rlive.simpler	9	Gain
+rlive.simpler	10	Voices
+rlive.simpler	11	Retrig
+rlive.simpler	12	Trigger/Gate
+rlive.simpler	13	Fade In
+rlive.simpler	14	Fade Out
+rlive.simpler	15	Slice By
+rlive.simpler	16	Sensitivity
+rlive.simpler	17	Division
+rlive.simpler	18	Regions
+rlive.simpler	19	Playback
+rlive.simpler	20	Warp
+rlive.simpler	21	Warp Mode
+rlive.simpler	22	Warp As
+rlive.simpler	23	Preserve
+rlive.simpler	24	Transient Loop
+rlive.simpler	25	Transient Envelope
+rlive.simpler	26	Filter
+rlive.simpler	27	Filter Type
+rlive.simpler	28	Circuit
+rlive.simpler	29	Slope
+rlive.simpler	30	Frequency
+rlive.simpler	31	Resonance
+rlive.simpler	32	Drive
+rlive.simpler	33	Morph
+rlive.simpler	34	Filter < Vel
+rlive.simpler	35	Filter < Key
+rlive.simpler	36	Filter Env Amount
+rlive.simpler	37	Attack
+rlive.simpler	38	Decay
+rlive.simpler	39	Sustain
+rlive.simpler	40	Release
+rlive.simpler	41	Loop Mode
+rlive.simpler	42	Time
+rlive.simpler	43	Rate
+rlive.simpler	44	Filter Attack
+rlive.simpler	45	Filter Decay
+rlive.simpler	46	Filter Sustain
+rlive.simpler	47	Filter Release
+rlive.simpler	48	Pitch Attack
+rlive.simpler	49	Pitch Decay
+rlive.simpler	50	Pitch Sustain
+rlive.simpler	51	Pitch Release
+rlive.simpler	52	Pitch Env Amount
+rlive.simpler	53	LFO
+rlive.simpler	54	LFO Type
+rlive.simpler	55	LFO Rate Mode
+rlive.simpler	56	LFO Freq
+rlive.simpler	57	LFO Beats
+rlive.simpler	58	LFO Attack
+rlive.simpler	59	LFO Retrigger
+rlive.simpler	60	LFO Offset
+rlive.simpler	61	LFO Key
+rlive.simpler	62	LFO > Volume
+rlive.simpler	63	LFO > Pitch
+rlive.simpler	64	LFO > Pan
+rlive.simpler	65	LFO > Filter
+rlive.simpler	66	Pan
+rlive.simpler	67	Random > Pan
+rlive.simpler	68	Spread
+rlive.simpler	69	Volume
+rlive.simpler	70	Velocity > Volume
+rlive.simpler	71	Transpose
+rlive.simpler	72	Detune
+rlive.simpler	73	Glide Mode
+rlive.simpler	74	Glide Time
+rlive.simpler	75	Constant Power Fade
+rlive.simpler	76	Reverse
+rlive.drum_sampler	0	Sample Start
+rlive.drum_sampler	1	Sample Length
+rlive.drum_sampler	2	Sample Gain
+rlive.drum_sampler	3	Attack
+rlive.drum_sampler	4	Hold
+rlive.drum_sampler	5	Decay
+rlive.drum_sampler	6	Transpose
+rlive.drum_sampler	7	Detune
+rlive.drum_sampler	8	Envelope Mode
+rlive.drum_sampler	9	Playback Effect
+rlive.drum_sampler	10	Playback Effect Type
+rlive.drum_sampler	11	Effect 1
+rlive.drum_sampler	12	Effect 2
+rlive.drum_sampler	13	Filter
+rlive.drum_sampler	14	Filter Type
+rlive.drum_sampler	15	Filter Frequency
+rlive.drum_sampler	16	Resonance
+rlive.drum_sampler	17	Peak Filter Gain
+rlive.drum_sampler	18	Volume
+rlive.drum_sampler	19	Pan
+rlive.drum_sampler	20	Velocity to Volume
+rlive.drum_sampler	21	Modulation Source
+rlive.drum_sampler	22	Modulation Destination
+rlive.drum_sampler	23	Modulation Amount
+rlive.drum_sampler	24	Per-Note Pitch Bend
+rlive.drum_sampler	25	Envelope Follows Pitch
+rlive.impulse	0	1 Start
+rlive.impulse	1	1 Transpose
+rlive.impulse	2	1 Transpose < Vel
+rlive.impulse	3	1 Transpose < Rnd
+rlive.impulse	4	1 Stretch
+rlive.impulse	5	1 Stretch Mode
+rlive.impulse	6	1 Stretch < Vel
+rlive.impulse	7	1 Filter
+rlive.impulse	8	1 Filter Type
+rlive.impulse	9	1 Frequency
+rlive.impulse	10	1 Resonance
+rlive.impulse	11	1 Frequency < Vel
+rlive.impulse	12	1 Frequency < Rnd
+rlive.impulse	13	1 Saturator
+rlive.impulse	14	1 Drive
+rlive.impulse	15	1 Decay
+rlive.impulse	16	1 Decay Mode
+rlive.impulse	17	1 Pan
+rlive.impulse	18	1 Pan < Vel
+rlive.impulse	19	1 Pan < Rnd
+rlive.impulse	20	1 Volume
+rlive.impulse	21	1 Volume < Vel
+rlive.impulse	22	1 Mute
+rlive.impulse	23	1 Solo
+rlive.impulse	24	2 Start
+rlive.impulse	25	2 Transpose
+rlive.impulse	26	2 Transpose < Vel
+rlive.impulse	27	2 Transpose < Rnd
+rlive.impulse	28	2 Stretch
+rlive.impulse	29	2 Stretch Mode
+rlive.impulse	30	2 Stretch < Vel
+rlive.impulse	31	2 Filter
+rlive.impulse	32	2 Filter Type
+rlive.impulse	33	2 Frequency
+rlive.impulse	34	2 Resonance
+rlive.impulse	35	2 Frequency < Vel
+rlive.impulse	36	2 Frequency < Rnd
+rlive.impulse	37	2 Saturator
+rlive.impulse	38	2 Drive
+rlive.impulse	39	2 Decay
+rlive.impulse	40	2 Decay Mode
+rlive.impulse	41	2 Pan
+rlive.impulse	42	2 Pan < Vel
+rlive.impulse	43	2 Pan < Rnd
+rlive.impulse	44	2 Volume
+rlive.impulse	45	2 Volume < Vel
+rlive.impulse	46	2 Mute
+rlive.impulse	47	2 Solo
+rlive.impulse	48	3 Start
+rlive.impulse	49	3 Transpose
+rlive.impulse	50	3 Transpose < Vel
+rlive.impulse	51	3 Transpose < Rnd
+rlive.impulse	52	3 Stretch
+rlive.impulse	53	3 Stretch Mode
+rlive.impulse	54	3 Stretch < Vel
+rlive.impulse	55	3 Filter
+rlive.impulse	56	3 Filter Type
+rlive.impulse	57	3 Frequency
+rlive.impulse	58	3 Resonance
+rlive.impulse	59	3 Frequency < Vel
+rlive.impulse	60	3 Frequency < Rnd
+rlive.impulse	61	3 Saturator
+rlive.impulse	62	3 Drive
+rlive.impulse	63	3 Decay
+rlive.impulse	64	3 Decay Mode
+rlive.impulse	65	3 Pan
+rlive.impulse	66	3 Pan < Vel
+rlive.impulse	67	3 Pan < Rnd
+rlive.impulse	68	3 Volume
+rlive.impulse	69	3 Volume < Vel
+rlive.impulse	70	3 Mute
+rlive.impulse	71	3 Solo
+rlive.impulse	72	4 Start
+rlive.impulse	73	4 Transpose
+rlive.impulse	74	4 Transpose < Vel
+rlive.impulse	75	4 Transpose < Rnd
+rlive.impulse	76	4 Stretch
+rlive.impulse	77	4 Stretch Mode
+rlive.impulse	78	4 Stretch < Vel
+rlive.impulse	79	4 Filter
+rlive.impulse	80	4 Filter Type
+rlive.impulse	81	4 Frequency
+rlive.impulse	82	4 Resonance
+rlive.impulse	83	4 Frequency < Vel
+rlive.impulse	84	4 Frequency < Rnd
+rlive.impulse	85	4 Saturator
+rlive.impulse	86	4 Drive
+rlive.impulse	87	4 Decay
+rlive.impulse	88	4 Decay Mode
+rlive.impulse	89	4 Pan
+rlive.impulse	90	4 Pan < Vel
+rlive.impulse	91	4 Pan < Rnd
+rlive.impulse	92	4 Volume
+rlive.impulse	93	4 Volume < Vel
+rlive.impulse	94	4 Mute
+rlive.impulse	95	4 Solo
+rlive.impulse	96	5 Start
+rlive.impulse	97	5 Transpose
+rlive.impulse	98	5 Transpose < Vel
+rlive.impulse	99	5 Transpose < Rnd
+rlive.impulse	100	5 Stretch
+rlive.impulse	101	5 Stretch Mode
+rlive.impulse	102	5 Stretch < Vel
+rlive.impulse	103	5 Filter
+rlive.impulse	104	5 Filter Type
+rlive.impulse	105	5 Frequency
+rlive.impulse	106	5 Resonance
+rlive.impulse	107	5 Frequency < Vel
+rlive.impulse	108	5 Frequency < Rnd
+rlive.impulse	109	5 Saturator
+rlive.impulse	110	5 Drive
+rlive.impulse	111	5 Decay
+rlive.impulse	112	5 Decay Mode
+rlive.impulse	113	5 Pan
+rlive.impulse	114	5 Pan < Vel
+rlive.impulse	115	5 Pan < Rnd
+rlive.impulse	116	5 Volume
+rlive.impulse	117	5 Volume < Vel
+rlive.impulse	118	5 Mute
+rlive.impulse	119	5 Solo
+rlive.impulse	120	6 Start
+rlive.impulse	121	6 Transpose
+rlive.impulse	122	6 Transpose < Vel
+rlive.impulse	123	6 Transpose < Rnd
+rlive.impulse	124	6 Stretch
+rlive.impulse	125	6 Stretch Mode
+rlive.impulse	126	6 Stretch < Vel
+rlive.impulse	127	6 Filter
+rlive.impulse	128	6 Filter Type
+rlive.impulse	129	6 Frequency
+rlive.impulse	130	6 Resonance
+rlive.impulse	131	6 Frequency < Vel
+rlive.impulse	132	6 Frequency < Rnd
+rlive.impulse	133	6 Saturator
+rlive.impulse	134	6 Drive
+rlive.impulse	135	6 Decay
+rlive.impulse	136	6 Decay Mode
+rlive.impulse	137	6 Pan
+rlive.impulse	138	6 Pan < Vel
+rlive.impulse	139	6 Pan < Rnd
+rlive.impulse	140	6 Volume
+rlive.impulse	141	6 Volume < Vel
+rlive.impulse	142	6 Mute
+rlive.impulse	143	6 Solo
+rlive.impulse	144	7 Start
+rlive.impulse	145	7 Transpose
+rlive.impulse	146	7 Transpose < Vel
+rlive.impulse	147	7 Transpose < Rnd
+rlive.impulse	148	7 Stretch
+rlive.impulse	149	7 Stretch Mode
+rlive.impulse	150	7 Stretch < Vel
+rlive.impulse	151	7 Filter
+rlive.impulse	152	7 Filter Type
+rlive.impulse	153	7 Frequency
+rlive.impulse	154	7 Resonance
+rlive.impulse	155	7 Frequency < Vel
+rlive.impulse	156	7 Frequency < Rnd
+rlive.impulse	157	7 Saturator
+rlive.impulse	158	7 Drive
+rlive.impulse	159	7 Decay
+rlive.impulse	160	7 Decay Mode
+rlive.impulse	161	7 Pan
+rlive.impulse	162	7 Pan < Vel
+rlive.impulse	163	7 Pan < Rnd
+rlive.impulse	164	7 Volume
+rlive.impulse	165	7 Volume < Vel
+rlive.impulse	166	7 Mute
+rlive.impulse	167	7 Solo
+rlive.impulse	168	8 Start
+rlive.impulse	169	8 Transpose
+rlive.impulse	170	8 Transpose < Vel
+rlive.impulse	171	8 Transpose < Rnd
+rlive.impulse	172	8 Stretch
+rlive.impulse	173	8 Stretch Mode
+rlive.impulse	174	8 Stretch < Vel
+rlive.impulse	175	8 Filter
+rlive.impulse	176	8 Filter Type
+rlive.impulse	177	8 Frequency
+rlive.impulse	178	8 Resonance
+rlive.impulse	179	8 Frequency < Vel
+rlive.impulse	180	8 Frequency < Rnd
+rlive.impulse	181	8 Saturator
+rlive.impulse	182	8 Drive
+rlive.impulse	183	8 Decay
+rlive.impulse	184	8 Decay Mode
+rlive.impulse	185	8 Pan
+rlive.impulse	186	8 Pan < Vel
+rlive.impulse	187	8 Pan < Rnd
+rlive.impulse	188	8 Volume
+rlive.impulse	189	8 Volume < Vel
+rlive.impulse	190	8 Mute
+rlive.impulse	191	8 Solo
+rlive.impulse	192	Volume
+rlive.impulse	193	Transpose
+rlive.impulse	194	Time
+rlive.impulse	195	Link 7+8

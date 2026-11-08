@@ -14,9 +14,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// The device a dropped sample is loaded into. Live uses Simpler; until Simpler is a real device
-/// (milestone B10) this is the Sampler, which plays a sample the same way from a pad's note.
-const PAD_SAMPLER: &str = "rlive.sampler";
+/// The device a dropped sample is loaded into (p. 502).
+const PAD_SAMPLER: &str = "rlive.simpler";
+const PAD_SAMPLER_NAME: &str = "Simpler";
+/// Pads built before Simpler existed hold a Sampler. Their source is kept when a sample lands.
+const EARLIER_PAD_SAMPLER: &str = "rlive.sampler";
 
 /// Something dropped on a pad.
 #[derive(Debug, Clone)]
@@ -157,7 +159,7 @@ impl Session {
     }
 
     /// A new chain playing from this pad.
-    fn new_pad_chain(
+    pub(super) fn new_pad_chain(
         &mut self,
         chain: ChainRef,
         rack: DeviceId,
@@ -278,7 +280,7 @@ impl Session {
         let sampler = match reusable {
             Some(id) => id,
             None => {
-                let device = Device::builtin(PAD_SAMPLER, "Sampler");
+                let device = Device::builtin(PAD_SAMPLER, PAD_SAMPLER_NAME);
                 let id = device.id;
                 self.replace_source(at, device);
                 id
@@ -334,7 +336,7 @@ impl Session {
             let Some(place) = at.child(inner, c) else {
                 continue;
             };
-            let device = Device::builtin(PAD_SAMPLER, "Sampler");
+            let device = Device::builtin(PAD_SAMPLER, PAD_SAMPLER_NAME);
             let sampler = device.id;
             self.add_device(place, None, device);
             self.set_device_sample(place, sampler, path.clone());
@@ -426,7 +428,11 @@ fn stem(path: &Path) -> String {
 }
 
 fn is_sampler(d: &Device) -> bool {
-    matches!(&d.kind, DeviceKind::Builtin { type_id, .. } if type_id == PAD_SAMPLER)
+    matches!(
+        &d.kind,
+        DeviceKind::Builtin { type_id, .. }
+            if type_id == PAD_SAMPLER || type_id == EARLIER_PAD_SAMPLER
+    )
 }
 
 /// A copy of a chain with ids of its own, its macros and sends following along.

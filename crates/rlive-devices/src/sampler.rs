@@ -1,7 +1,17 @@
 //! "Sampler" — plays a WAV file chromatically or as a one-shot drum hit.
+//!
+//! The original playback here is fixed by the project golden and must not change. Everything
+//! from Live's manual beyond it (zones, loops, modulation, ...) lives in
+//! [`MultiEngine`](crate::devices::b10::multi::MultiEngine), behind parameters appended after the
+//! original ones. New notes go there as soon as any of those parameters leaves its default, or a
+//! zone map is loaded; with everything at its default this file is the whole device.
 
+use crate::devices::b10::common::{ANALYSIS_SLOTS, STATE_SLOT};
+use crate::devices::b10::multi::{MultiEngine, MAX_LAYERS};
+use crate::devices::b10::multi_params as ext;
+use crate::dsp::tempo::BeatClock;
 use crate::dsp::Adsr;
-use crate::SampleBuffer;
+use crate::{DeviceInit, SampleBuffer};
 use rlive_core::{
     db_to_gain, BlockStep, MidiMessage, ModMode, ParamInfo, ProcessContext, Processor, Resource,
     Tail,
@@ -25,7 +35,7 @@ pub mod p {
 }
 
 pub fn params() -> Vec<ParamInfo> {
-    vec![
+    let mut all = vec![
         ParamInfo::continuous(p::ROOT, "Root Key", 0.0, 127.0, 60.0, ""),
         ParamInfo::continuous(p::TUNE, "Transpose", -48.0, 48.0, 0.0, "st"),
         ParamInfo::continuous(p::VOLUME, "Volume", -48.0, 12.0, -3.0, "dB")
@@ -36,7 +46,9 @@ pub fn params() -> Vec<ParamInfo> {
         ParamInfo::continuous(p::START, "Start", 0.0, 1.0, 0.0, ""),
         ParamInfo::continuous(p::VELOCITY, "Velocity", 0.0, 1.0, 0.8, ""),
         ParamInfo::continuous(p::PAN, "Pan", -1.0, 1.0, 0.0, ""),
-    ]
+    ];
+    all.extend(ext::ext_params());
+    all
 }
 
 #[derive(Clone, Copy, Default)]
@@ -57,17 +69,55 @@ pub struct Sampler {
     sr: f64,
     voices: [Voice; VOICES],
     clock: u64,
+    /// Everything beyond the original playback. Silent until a note starts in it.
+    ext: Box<MultiEngine>,
+    /// The defaults of the appended parameters, to tell when any of them has moved.
+    defaults: Vec<f64>,
+    /// Whether an appended parameter is off its default. A cached [`Self::defaults`] check.
+    extended: bool,
 }
 
 impl Sampler {
     pub fn new(sample: Option<Arc<SampleBuffer>>) -> Self {
+        let init = DeviceInit {
+            samples: vec![sample],
+            state: None,
+        };
+        Self::with_init(&init)
+    }
+
+    /// A Sampler from its saved state: the zone map, and a sample for each slot.
+    pub fn with_init(init: &DeviceInit) -> Self {
+        let values: Vec<f64> = params().iter().map(|p| p.default).collect();
         Self {
-            values: params().iter().map(|p| p.default).collect(),
-            sample,
+            defaults: values.clone(),
+            values,
+            sample: init.samples.first().cloned().flatten(),
             sr: 48_000.0,
             voices: [Voice::default(); VOICES],
             clock: 0,
+            ext: Box::new(MultiEngine::new(init.state.as_deref(), &init.samples)),
+            extended: false,
         }
+    }
+
+    /// Whether new notes play in the extended engine: an appended parameter has moved, or a
+    /// zone map is loaded. (RAM Mode and the selected layer change nothing audible.)
+    fn plays_extended(&self) -> bool {
+        self.extended || self.ext.has_zones()
+    }
+
+    fn recheck_extended(&mut self) {
+        self.extended = (ext::REVERSE as usize..self.values.len()).any(|id| {
+            id != ext::LAYER_SELECT as usize
+                && id != ext::RAM_MODE as usize
+                && self.values[id] != self.defaults[id]
+        });
+    }
+
+    /// The extended engine, for tests and tools.
+    pub fn engine(&self) -> &MultiEngine {
+        &self.ext
     }
 
     fn v(&self, id: u32) -> f64 {
@@ -160,33 +210,56 @@ impl Sampler {
 impl Processor for Sampler {
     fn activate(&mut self, sample_rate: f64, _max_block: usize) {
         self.sr = sample_rate;
+        self.ext.activate(sample_rate);
     }
 
     fn process(&mut self, ctx: &mut ProcessContext) {
+        self.ext.set_clock(BeatClock::from_transport(ctx.transport));
         ctx.for_each_step(|step| match step {
             BlockStep::Param { id, value } => self.set_param(id, value),
-            BlockStep::Audio(audio) => self.render(audio.left, audio.right),
-            BlockStep::Midi(MidiMessage::NoteOn {
-                channel,
-                key,
-                velocity,
-                ..
-            }) => self.note_on(channel, key, velocity),
-            BlockStep::Midi(MidiMessage::NoteOff { channel, key, .. }) => {
-                self.note_off(channel, key)
+            BlockStep::Audio(audio) => {
+                self.render(audio.left, audio.right);
+                self.ext.render(
+                    &self.values,
+                    self.sample.as_deref(),
+                    audio.left,
+                    audio.right,
+                );
             }
-            BlockStep::Midi(MidiMessage::AllNotesOff) => {
-                for v in self.voices.iter_mut() {
-                    v.env.gate_off();
+            BlockStep::Midi(message) => {
+                let extended = self.plays_extended();
+                self.ext
+                    .midi(message, &self.values, self.sample.as_deref(), extended);
+                match message {
+                    MidiMessage::NoteOn {
+                        channel,
+                        key,
+                        velocity,
+                        ..
+                    } if !extended => self.note_on(channel, key, velocity),
+                    MidiMessage::NoteOff { channel, key, .. } => self.note_off(channel, key),
+                    MidiMessage::AllNotesOff => {
+                        for v in self.voices.iter_mut() {
+                            v.env.gate_off();
+                        }
+                    }
+                    _ => {}
                 }
             }
-            BlockStep::Midi(_) => {}
         });
+        if ctx.view.is_active() {
+            let selected = self.values[ext::LAYER_SELECT as usize].round() as usize;
+            self.ext.publish(ctx.view, selected);
+        }
     }
 
     fn set_param(&mut self, id: u32, value: f64) {
         if let Some(v) = self.values.get_mut(id as usize) {
             *v = value;
+            self.ext.param_changed();
+            if id >= ext::REVERSE {
+                self.recheck_extended();
+            }
         }
     }
 
@@ -194,6 +267,7 @@ impl Processor for Sampler {
         for v in self.voices.iter_mut() {
             v.active = false;
         }
+        self.ext.reset();
     }
 
     fn tail(&self) -> Tail {
@@ -201,6 +275,12 @@ impl Processor for Sampler {
     }
 
     fn set_resource(&mut self, slot: u32, resource: Resource) -> Option<Resource> {
+        if slot == STATE_SLOT
+            || slot >= ANALYSIS_SLOTS
+            || (slot > SAMPLE_SLOT && (slot as usize) < MAX_LAYERS)
+        {
+            return self.ext.set_resource(slot, resource);
+        }
         if slot != SAMPLE_SLOT {
             return Some(resource);
         }

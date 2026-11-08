@@ -45,6 +45,7 @@ impl Session {
             Ok(sample) => {
                 self.record_fingerprint(&path);
                 self.swap_in_sample(&path, &sample);
+                self.send_sample_analyses(&path, &sample);
                 for p in self.take_pending_samples(&path) {
                     if self.write_device_sample(p.chain, p.device, p.slot, p.file) {
                         self.mark_edit("Change Sample");

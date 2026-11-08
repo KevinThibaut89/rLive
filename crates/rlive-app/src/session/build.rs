@@ -50,6 +50,8 @@ pub struct DeviceRuntime {
     /// The device's latency in frames, shared with the engine.
     pub latency: Arc<AtomicU32>,
     /// How many samples it can hold; any shows the sample row in the device view.
+    /// How many sample rows the device card shows. Devices with several slots load theirs from
+    /// their own panel.
     pub sample_slots: usize,
     /// Where parameters that the project has no value for started out, so undo can put them
     /// back. A plugin's values come from its own state, not its defaults.
@@ -338,6 +340,9 @@ impl Builder<'_> {
                     let mut error = None;
                     let desc = (info.desc)();
                     let sample_slots = desc.samples.len();
+                    // A device with many slots loads them from its own panel; only the slots
+                    // named "Sample" get a row on the card.
+                    let sample_rows = desc.samples.iter().filter(|s| s.name == "Sample").count();
                     let loaded = (0..sample_slots)
                         .map(|slot| {
                             let file = samples.get(slot).and_then(Option::as_ref)?;
@@ -376,7 +381,7 @@ impl Builder<'_> {
                             error,
                             role: info.role,
                             latency,
-                            sample_slots,
+                            sample_slots: sample_rows,
                             unmoved: HashMap::new(),
                             layout: desc.layout,
                             view: view.clone(),

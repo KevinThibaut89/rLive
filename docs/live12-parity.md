@@ -773,7 +773,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[~]` Drum Rack chain controls: Receive note, Play note, Choke (16 groups), Preview; All Notes disables Play and Choke. L
 - `[x]` Up to 6 return chains; post-fader sends; return output to Rack or Set returns. M
 - `[~]` Pad View: 128 notes, scroll by 16 or row; drag anything to a pad. L
-- `[ ]` Sample drop creates Simpler, replaces only source; multi-drop maps chromatically; modifier layers to nested Rack. M. Depends on Simpler. (Built with the Sampler, `rlive.sampler`, until B10's Simpler; multi-drop needs a browser multi-selection)
+- `[~]` Sample drop creates Simpler, replaces only source; multi-drop maps chromatically; modifier layers to nested Rack. M. Depends on Simpler. (Multi-drop needs a browser multi-selection, so it isn't reachable from the UI yet)
 - `[~]` Pad swap and layer; shared Receive notes create Multi pad with reduced controls. M
 - `[ ]` D toggles Hot-Swap target to last pad. S
 - `[ ]` Control surface pads follow scroll. M. [H]
@@ -1001,10 +1001,10 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 - `[ ]` Poly/Mono/Stereo/Unison up to 32 voices; per-voice Drift randomisation.
 
 **Drum Sampler (730-735)** [M] {ML?: similar swap}
-- `[ ]` Not stated. One-shot playback for Drum Rack pads.
-- `[ ]` Start, length, gain; AHD with infinite hold; Trigger/Gate; transpose and detune.
-- `[ ]` 9 playback effects on an XY pad: Stretch, Loop, Pitch Env, Punch, 8-Bit, FM, Ring Mod, Sub Osc, Noise.
-- `[ ]` 4 filter types; velocity or slide to filter, envelope stages, FX1/FX2.
+- `[x]` Not stated. One-shot playback for Drum Rack pads.
+- `[x]` Start, length, gain; AHD with infinite hold; Trigger/Gate; transpose and detune.
+- `[~]` 9 playback effects on an XY pad: Stretch, Loop, Pitch Env, Punch, 8-Bit, FM, Ring Mod, Sub Osc, Noise.
+- `[x]` 4 filter types; velocity or slide to filter, envelope stages, FX1/FX2.
 - `[ ]` Similar-sample swapping and reference; hot-swap; Envelope Follows Pitch; convert to Simpler; Save as Default Pad.
 - `[ ]` Depends on Drum Rack, browser.
 
@@ -1019,10 +1019,10 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 - `[ ]` Depends on delay compensation, routing, plug-in host.
 
 **Impulse (743-745)** [M]
-- `[ ]` Not stated. 8-slot drum sampler.
+- `[x]` Not stated. 8-slot drum sampler.
 - `[ ]` Per slot: start, transpose, Mode A/B stretch, filter, saturator, Trigger/Gate decay, pan, volume, velocity/random mods; play/solo/mute/hot-swap.
-- `[ ]` Parameters latch at note-on. Slot 7/8 mutual cut.
-- `[ ]` Global volume, transpose, Time; individual slot outputs.
+- `[x]` Parameters latch at note-on. Slot 7/8 mutual cut.
+- `[x]` Global volume, transpose, Time; individual slot outputs.
 
 **Meld (745-755)** [XL] {PM: some filters}
 - `[ ]` Not stated. Two macro-oscillator engines, each with filter, envelopes, LFOs and matrix.
@@ -1044,20 +1044,20 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 **Sampler (773-791)** [XL] {SAMPLES; CONTENT: presets}
 - `[ ]` Editions: REX import is Standard and Suite only; p. 774 implies not every edition includes Sampler.
 - `[ ]` Multisample playback built for multi-GB libraries.
-- `[ ]` Zone Editor: key, velocity, sample-select zones with lin/power fades, layer list with sort, distribute, normalize, Auto Select.
-- `[ ]` Round Robin: Forward, Backward, Other, Random, reset interval.
-- `[ ]` Sample tab: root, detune, volume, pan, start/end, sustain and release loops incl. back-and-forth, crossfade, loop detune, zero-cross snap, global reverse, interpolation quality, RAM mode.
-- `[ ]` Modulation oscillator FM/AM (21 waves, envelope); pitch envelope, Spread, key zone shift, Glide/Portamento.
-- `[ ]` Filter plus shaper with order switch; volume envelope; aux envelope (29 destinations); 3 LFOs (2 and 3 stereo Phase/Spin).
-- `[ ]` 7 MIDI sources to 2 destinations.
+- `[~]` Zone Editor: key, velocity, sample-select zones with lin/power fades, layer list with sort, distribute, normalize, Auto Select.
+- `[x]` Round Robin: Forward, Backward, Other, Random, reset interval.
+- `[~]` Sample tab: root, detune, volume, pan, start/end, sustain and release loops incl. back-and-forth, crossfade, loop detune, zero-cross snap, global reverse, interpolation quality, RAM mode. (RAM Mode is a no-op: samples are always in RAM.)
+- `[x]` Modulation oscillator FM/AM (21 waves, envelope); pitch envelope, Spread, key zone shift, Glide/Portamento.
+- `[x]` Filter plus shaper with order switch; volume envelope; aux envelope (29 destinations); 3 LFOs (2 and 3 stereo Phase/Spin).
+- `[x]` 7 MIDI sources to 2 destinations.
 - `[ ]` Imports REX, ACID, Soundtrack Loops to presets or Racks; convert to Simpler.
 
 **Simpler (791-802)** [L] {PM: Complex warp modes}
-- `[ ]` Not stated. Single-sample player with synth voice and clip-style warping.
-- `[ ]` Classic (region, loop, snap, fade, ADSR); One-Shot (mono, Trigger/Gate, fades).
-- `[ ]` Slicing: Transient, Beat, Region, Manual up to 64, Mono/Poly/Thru.
+- `[x]` Not stated. Single-sample player with synth voice and clip-style warping.
+- `[x]` Classic (region, loop, snap, fade, ADSR); One-Shot (mono, Trigger/Gate, fades).
+- `[x]` Slicing: Transient, Beat, Region, Manual up to 64, Mono/Poly/Thru.
 - `[ ]` Warp with Warp As, halve/double; clip drag preserves Warp Markers.
-- `[ ]` Filter, 3 ADSRs, amp loop modes, per-voice LFO, Spread, glide.
+- `[x]` Filter, 3 ADSRs, amp loop modes, per-voice LFO, Spread, glide.
 - `[ ]` Non-destructive Crop and Reverse; Slice to Drum Rack or new MIDI track; convert to Sampler; expanded view.
 - `[ ]` Depends on warp engine, transient detection, Drum Rack.
 

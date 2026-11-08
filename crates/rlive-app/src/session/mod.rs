@@ -21,6 +21,7 @@ mod racks;
 mod recording;
 mod routing;
 mod samples;
+mod sampling;
 mod takes;
 mod timing;
 mod tracks;
@@ -69,6 +70,7 @@ pub use io::{can_arm, AudioHardware, CrossfaderField, CrossfaderKeys, RouteChoic
 pub use rack_edit::PadDrop;
 pub use racks::{ExtractNotes, MacroDisplay, ZoneKind};
 pub use rlive_audio_io::SampleCache;
+pub use sampling::SamplingCommand;
 pub use warping::{ShortSampleMode, WarpDefaults, WarpView, LONG_SAMPLE_SECONDS};
 
 use crate::recording::capture_midi::CaptureBuffer;

@@ -43,6 +43,10 @@ pub(crate) enum Action {
     Reveal(DeviceId, Vec<(DeviceId, ChainId)>),
     /// Something done to the rack `DeviceId`.
     Rack(DeviceId, RackAction),
+    /// A device's own saved state, written by its panel.
+    DeviceState(DeviceId, String),
+    /// A conversion or sample command from a sample player's panel.
+    Sampling(DeviceId, crate::session::SamplingCommand),
 }
 
 /// The actions of one frame, in the order they happened.
@@ -78,6 +82,8 @@ fn apply(
         Action::Bypass(id, b) => session.set_bypass(chain, id, b),
         Action::Fold(id, expanded) => session.set_device_expanded(chain, id, expanded),
         Action::Param(id, p, v) => session.set_param(chain, id, p, v),
+        Action::DeviceState(id, text) => session.set_device_state(chain, id, text),
+        Action::Sampling(id, command) => session.sampling_command(chain, id, command),
         Action::ReEnable(id, p) => {
             if let Some(cell) = session.device_cell(chain, id, p) {
                 session.re_enable_cell(chain, cell);

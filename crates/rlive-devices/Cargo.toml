@@ -10,6 +10,9 @@ rlive-core.workspace = true
 hound.workspace = true
 thiserror.workspace = true
 realfft.workspace = true
+rlive-stretch.workspace = true
+ron.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 rlive-testkit.workspace = true

@@ -157,6 +157,9 @@ const EXISTING: &[(&str, &str)] = &[
     ("rlive.grain_delay", "Grain Delay"),
     ("rlive.shifter", "Shifter"),
     ("rlive.looper", "Looper"),
+    ("rlive.simpler", "Simpler"),
+    ("rlive.drum_sampler", "Drum Sampler"),
+    ("rlive.impulse", "Impulse"),
 ];
 
 #[test]
@@ -238,7 +241,13 @@ fn a_declared_layout_only_names_the_devices_own_parameters() {
 fn a_sample_slot_is_declared_only_where_samples_load() {
     for b in builtins() {
         let slots = (b.desc)().samples.len();
-        assert_eq!(slots, usize::from(b.id == "rlive.sampler"), "{}", b.id);
+        let expected = match b.id {
+            "rlive.sampler" => devices::b10::multi::MAX_LAYERS,
+            "rlive.impulse" => 8,
+            "rlive.simpler" | "rlive.drum_sampler" => 1,
+            _ => 0,
+        };
+        assert_eq!(slots, expected, "{}", b.id);
     }
 }
 
@@ -519,7 +528,8 @@ fn a_resource_the_sampler_cant_use_comes_straight_back() {
     let wrong_type: rlive_core::Resource = Arc::new(7u32);
     assert!(s.set_resource(0, wrong_type).is_some());
     let wrong_slot: rlive_core::Resource = dc_sample(0.5, SR);
-    assert!(s.set_resource(1, wrong_slot).is_some());
+    let past_the_slots = devices::b10::multi::MAX_LAYERS as u32;
+    assert!(s.set_resource(past_the_slots, wrong_slot).is_some());
     let right: rlive_core::Resource = dc_sample(0.5, SR);
     assert!(s.set_resource(0, right).is_none(), "no previous sample");
 }

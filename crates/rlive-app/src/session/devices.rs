@@ -62,7 +62,7 @@ impl From<ChainRef> for TrackRef {
 impl Session {
     // ------------------------------------------------------------- devices
 
-    fn chain(&self, chain: ChainRef) -> Option<&Vec<Device>> {
+    pub(super) fn chain(&self, chain: ChainRef) -> Option<&Vec<Device>> {
         match chain {
             ChainRef::Track(t) => self.project.track(t).map(|t| &t.devices),
             ChainRef::Master => Some(&self.project.master.devices),
@@ -534,8 +534,9 @@ impl Session {
                 target: chain.into(),
                 device: id,
                 slot: slot as u32,
-                resource: sample,
+                resource: sample.clone(),
             }]);
+            self.send_sample_analysis(chain, id, slot, &sample);
         }
         true
     }

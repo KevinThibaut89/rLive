@@ -2655,7 +2655,10 @@ dependencies = [
  "hound",
  "realfft",
  "rlive-core",
+ "rlive-stretch",
  "rlive-testkit",
+ "ron",
+ "serde",
  "thiserror 2.0.21",
 ]
 
