@@ -6,6 +6,8 @@
 pub mod device;
 pub mod ids;
 pub mod midi;
+pub mod mpe;
+
 pub mod param;
 pub mod processor;
 pub mod sample;
@@ -15,7 +17,10 @@ pub mod warp;
 
 pub use device::{DeviceDesc, Item, Ports, SampleSlot, ScopeKind, Section, Status};
 pub use ids::{ArrClipId, ChainId, DeviceId, GrooveId, TrackId};
-pub use midi::{MidiEvent, MidiMessage};
+pub use midi::{
+    ExprKind, MidiEvent, MidiMessage, NoteId, NoteIds, NoteSpace, MPE_BEND_RANGE, SLIDE_CC,
+};
+pub use mpe::{MpeDecoder, MpeEncoder, MpeZone};
 pub use param::{
     ClipParam, EnvTarget, ModMode, ParamEvent, ParamFlags, ParamId, ParamInfo, ParamKind,
     ParamOwner, ParamRange, ParamRef, ACTIVATOR,

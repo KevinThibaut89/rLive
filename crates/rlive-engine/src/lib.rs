@@ -20,7 +20,7 @@ pub mod shared;
 pub mod track;
 
 use clip::BlockTime;
-pub use clip::{AudioClip, ClipData, MidiClip, Note, WarpedClip};
+pub use clip::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
 pub use commands::{ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, RecordCmd, TransportCmd};
 pub use graph::{
     AudioIo, BusIn, ChainAddr, ChainPath, ChainStep, RenderPlan, SidechainIn, Step, Tap, TrackRef,

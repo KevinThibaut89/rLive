@@ -125,6 +125,7 @@ fn midi_clip(length: u64, notes: &[(u64, u64, u8)]) -> Arc<ClipData> {
             length,
             key,
             velocity: 0.8,
+            ..Note::default()
         })
         .collect();
     Arc::new(ClipData::Midi(MidiClip::new(length, notes, true)))
@@ -1260,6 +1261,8 @@ fn note_on(key: u8) -> MidiMessage {
         channel: 0,
         key,
         velocity: 0.5,
+        note_id: 0,
+        tuning: 0.0,
     }
 }
 
@@ -1375,6 +1378,7 @@ fn only_notes_are_recorded() {
         channel: 0,
         key: 60,
         velocity: 0.5,
+        note_id: 0,
     };
     send(&mut h, played(tid, off, Duration::ZERO));
     run(&mut engine, 256);
@@ -1497,7 +1501,9 @@ fn midi_sender_reaches_track() {
         MidiMessage::NoteOn {
             channel: 0,
             key: 61,
-            velocity: 0.5
+            velocity: 0.5,
+            note_id: 0,
+            tuning: 0.0,
         }
     ));
     run(&mut engine, 256);

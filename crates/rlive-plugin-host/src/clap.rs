@@ -1,8 +1,8 @@
 //! CLAP plugin hosting.
 
 use crate::{
-    bundle_binary, cbuf_to_string, cptr_to_string, HostError, HostNotification, PluginDescriptor,
-    PluginHandle, PluginInstance, PortBuffers, Result,
+    bundle_binary, cbuf_to_string, cptr_to_string, wire_note_id, HostError, HostNotification,
+    PluginDescriptor, PluginHandle, PluginInstance, PortBuffers, Result,
 };
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
@@ -24,8 +24,8 @@ use clap_sys::process::clap_process;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
 use rlive_core::{
-    MidiEvent, MidiMessage, ParamFlags, ParamInfo, ParamKind, ParamOutQueue, PluginFormat,
-    ProcessContext, Processor, Tail,
+    ExprKind, MidiEvent, MidiMessage, MpeEncoder, MpeZone, NoteId, ParamFlags, ParamInfo,
+    ParamKind, ParamOutQueue, PluginFormat, ProcessContext, Processor, Tail,
 };
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
@@ -303,7 +303,7 @@ unsafe extern "C" fn host_audio_ports_rescan(host: *const clap_host, _flags: u32
 unsafe extern "C" fn host_note_ports_supported_dialects(
     _host: *const clap_host,
 ) -> clap_note_dialect {
-    CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI
+    CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI | CLAP_NOTE_DIALECT_MIDI_MPE
 }
 
 unsafe extern "C" fn host_note_ports_rescan(_host: *const clap_host, _flags: u32) {}
@@ -920,6 +920,7 @@ union ClapEvent {
     note: clap_event_note,
     param: clap_event_param_value,
     midi: clap_event_midi,
+    expression: clap_event_note_expression,
 }
 
 const MAX_EVENTS: usize = 1024;
@@ -937,6 +938,10 @@ pub struct ClapProcessor {
     steady_time: i64,
     is_instrument: bool,
     midi_notes: bool,
+    /// Carries note expression to plugins that take notes as MIDI.
+    mpe: MpeEncoder,
+    /// Reused each block for what `mpe` produces.
+    encoded: Vec<MidiEvent>,
     max_block: usize,
     sample_rate: f64,
 }
@@ -983,6 +988,8 @@ impl ClapProcessor {
             transport: unsafe { std::mem::zeroed() },
             steady_time: 0,
             midi_notes,
+            mpe: MpeEncoder::new(MpeZone::Lower, 15),
+            encoded: Vec::with_capacity(MAX_EVENTS),
             max_block,
             sample_rate,
         }
@@ -1039,32 +1046,86 @@ impl ClapProcessor {
                 channel,
                 key,
                 velocity,
-            } if !self.midi_notes => self.push(ClapEvent {
-                note: clap_event_note {
-                    header: Self::header::<clap_event_note>(time, CLAP_EVENT_NOTE_ON),
-                    note_id: -1,
-                    port_index: 0,
-                    channel: channel as i16,
-                    key: key as i16,
-                    velocity: velocity as f64,
-                },
-            }),
+                note_id,
+                tuning,
+            } if !self.midi_notes => {
+                self.push(ClapEvent {
+                    note: clap_event_note {
+                        header: Self::header::<clap_event_note>(time, CLAP_EVENT_NOTE_ON),
+                        note_id: wire_note_id(note_id),
+                        port_index: 0,
+                        channel: channel as i16,
+                        key: key as i16,
+                        velocity: velocity as f64,
+                    },
+                });
+                if tuning != 0.0 {
+                    self.push_expression(
+                        time,
+                        note_id,
+                        channel,
+                        key,
+                        CLAP_NOTE_EXPRESSION_TUNING,
+                        tuning,
+                    );
+                }
+            }
             MidiMessage::NoteOff {
                 channel,
                 key,
                 velocity,
+                note_id,
             } if !self.midi_notes => self.push(ClapEvent {
                 note: clap_event_note {
                     header: Self::header::<clap_event_note>(time, CLAP_EVENT_NOTE_OFF),
-                    note_id: -1,
+                    note_id: wire_note_id(note_id),
                     port_index: 0,
                     channel: channel as i16,
                     key: key as i16,
                     velocity: velocity as f64,
                 },
             }),
+            MidiMessage::NoteExpr {
+                channel,
+                key,
+                note_id,
+                kind,
+                value,
+            } if !self.midi_notes => {
+                let expression = match kind {
+                    ExprKind::Pitch => CLAP_NOTE_EXPRESSION_TUNING,
+                    ExprKind::Slide => CLAP_NOTE_EXPRESSION_BRIGHTNESS,
+                    ExprKind::Pressure => CLAP_NOTE_EXPRESSION_PRESSURE,
+                };
+                self.push_expression(time, note_id, channel, key, expression, value);
+            }
             ref m => self.push_midi(time, m),
         }
+    }
+
+    fn push_expression(
+        &mut self,
+        time: u32,
+        note_id: NoteId,
+        channel: u8,
+        key: u8,
+        expression: clap_note_expression,
+        value: f32,
+    ) {
+        self.push(ClapEvent {
+            expression: clap_event_note_expression {
+                header: Self::header::<clap_event_note_expression>(
+                    time,
+                    CLAP_EVENT_NOTE_EXPRESSION,
+                ),
+                expression_id: expression,
+                note_id: wire_note_id(note_id),
+                port_index: 0,
+                channel: channel as i16,
+                key: key as i16,
+                value: value as f64,
+            },
+        });
     }
 
     fn push_midi(&mut self, time: u32, msg: &MidiMessage) {
@@ -1130,10 +1191,24 @@ impl Processor for ClapProcessor {
         }
         self.pending_params.clear();
         let last = frames.saturating_sub(1) as u32;
+        // Plugins that take MIDI can't receive CLAP note expression, so it becomes MPE.
+        let mut encoded = std::mem::take(&mut self.encoded);
+        if self.midi_notes {
+            self.mpe.encode(ctx.events, &mut |e| {
+                if encoded.len() < encoded.capacity() {
+                    encoded.push(e);
+                }
+            });
+        }
+        let source = if self.midi_notes {
+            &encoded
+        } else {
+            ctx.events
+        };
         let (mut next_param, mut next_event) = (0, 0);
         // CLAP needs events in time order, so merge the parameter and MIDI streams.
         loop {
-            match (ctx.params.get(next_param), ctx.events.get(next_event)) {
+            match (ctx.params.get(next_param), source.get(next_event)) {
                 (Some(p), e) if e.is_none_or(|e| p.offset <= e.offset) => {
                     self.push_param(p.offset.min(last), p.id.0, p.value);
                     next_param += 1;
@@ -1145,6 +1220,8 @@ impl Processor for ClapProcessor {
                 _ => break,
             }
         }
+        encoded.clear();
+        self.encoded = encoded;
 
         let t = ctx.transport;
         let beats = t.beats();
@@ -1256,6 +1333,7 @@ impl Processor for ClapProcessor {
                 reset(self.inst.plugin);
             }
         }
+        self.mpe.reset();
     }
 
     fn latency(&self) -> u32 {

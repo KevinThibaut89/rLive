@@ -7,6 +7,9 @@ use std::collections::HashMap;
 /// The shortest note a press and release can make, in ticks.
 const MIN_NOTE: u64 = 10;
 
+/// Release velocity of a note that ended with no key-up (a jump or the end of recording).
+const DEFAULT_RELEASE: f32 = 0.5;
+
 #[derive(Default)]
 struct Take {
     open: HashMap<u8, (f64, f32)>,
@@ -16,18 +19,21 @@ struct Take {
 }
 
 impl Take {
-    fn close(&mut self, key: u8, until: f64) {
+    fn close(&mut self, key: u8, until: f64, release: f32) {
         if let Some((start, velocity)) = self.open.remove(&key) {
             let start = start.max(0.0).round() as u64;
             let length = (until.round() as u64).saturating_sub(start).max(MIN_NOTE);
-            self.notes.push(NoteData::new(start, length, key, velocity));
+            let mut note = NoteData::new(start, length, key, velocity);
+            note.release = release;
+            self.notes.push(note);
         }
     }
 
+    /// Closes held notes that had no key-up, so they get the default release velocity.
     fn close_all(&mut self, until: f64) {
         let keys: Vec<u8> = self.open.keys().copied().collect();
         for key in keys {
-            self.close(key, until);
+            self.close(key, until, DEFAULT_RELEASE);
         }
     }
 }
@@ -57,12 +63,11 @@ impl Recording {
         let take = self.takes.entry(track).or_default();
         match message {
             MidiMessage::NoteOn { key, velocity, .. } if velocity > 0.0 => {
-                take.close(key, tick);
+                take.close(key, tick, DEFAULT_RELEASE);
                 take.open.insert(key, (tick, velocity));
             }
-            MidiMessage::NoteOn { key, .. } | MidiMessage::NoteOff { key, .. } => {
-                take.close(key, tick);
-            }
+            MidiMessage::NoteOn { key, .. } => take.close(key, tick, DEFAULT_RELEASE),
+            MidiMessage::NoteOff { key, velocity, .. } => take.close(key, tick, velocity),
             _ => {}
         }
     }
@@ -142,6 +147,8 @@ mod tests {
             channel: 0,
             key,
             velocity: 0.7,
+            note_id: 0,
+            tuning: 0.0,
         }
     }
 
@@ -150,6 +157,7 @@ mod tests {
             channel: 0,
             key,
             velocity: 0.5,
+            note_id: 0,
         }
     }
 
@@ -175,6 +183,25 @@ mod tests {
     }
 
     #[test]
+    fn a_key_up_sets_the_release_velocity() {
+        let t = TrackId::new();
+        let mut r = Recording::new(0);
+        r.message(t, 100.0, on(60));
+        r.message(
+            t,
+            500.0,
+            MidiMessage::NoteOff {
+                channel: 0,
+                key: 60,
+                velocity: 0.2,
+                note_id: 7,
+            },
+        );
+        let p = r.placements(sig());
+        assert!((notes(&p[0])[0].release - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
     fn a_note_held_across_a_wrap_splits() {
         let t = TrackId::new();
         let mut r = Recording::new(0);
@@ -186,6 +213,15 @@ mod tests {
         n.sort_by_key(|x| x.start);
         assert_eq!((n[0].start, n[0].length), (0, 500));
         assert_eq!((n[1].start, n[1].length), (3000, 840));
+    }
+
+    #[test]
+    fn notes_without_a_key_up_keep_the_default_release() {
+        let t = TrackId::new();
+        let mut r = Recording::new(0);
+        r.message(t, 100.0, on(61));
+        r.finish(900.0);
+        assert_eq!(notes(&r.placements(sig())[0])[0].release, DEFAULT_RELEASE);
     }
 
     #[test]

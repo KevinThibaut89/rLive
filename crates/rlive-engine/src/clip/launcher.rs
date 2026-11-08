@@ -5,7 +5,7 @@ use super::data::ClipData;
 use super::midi::Voices;
 use super::{render_range, BlockTime};
 use rlive_core::warp::StretchBank;
-use rlive_core::MidiEvent;
+use rlive_core::{MidiEvent, NoteSpace};
 use std::sync::Arc;
 
 pub(crate) struct Playing {
@@ -48,7 +48,7 @@ impl ClipPlayer {
         Self {
             playing: None,
             pending: None,
-            voices: Voices::new(),
+            voices: Voices::new(NoteSpace::Session),
         }
     }
 

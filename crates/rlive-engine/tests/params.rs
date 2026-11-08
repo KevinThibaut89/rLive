@@ -268,6 +268,7 @@ fn segments_carry_the_transport_and_midi_of_their_own_offsets() {
             length: 1,
             key,
             velocity: 0.8,
+            ..Note::default()
         })
         .collect();
     track.set_slot(

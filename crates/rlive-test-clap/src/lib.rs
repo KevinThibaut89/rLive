@@ -94,6 +94,38 @@ unsafe extern "C" fn reset(p: *const clap_plugin) {
     this(p).note = None;
 }
 
+/// Parameter ids the fixture uses to tell the host what notes it received.
+const REPORT_NOTE_ON: u32 = 1000;
+const REPORT_NOTE_OFF: u32 = 1001;
+const REPORT_EXPR_NOTE: u32 = 1002;
+const REPORT_EXPR_BASE: u32 = 1100;
+
+/// Sends a value back as a parameter event, the one channel a test can read from outside.
+unsafe fn report(out: *const clap_output_events, id: u32, value: f64) {
+    if out.is_null() {
+        return;
+    }
+    let event = clap_event_param_value {
+        header: clap_event_header {
+            size: std::mem::size_of::<clap_event_param_value>() as u32,
+            time: 0,
+            space_id: CLAP_CORE_EVENT_SPACE_ID,
+            type_: CLAP_EVENT_PARAM_VALUE,
+            flags: 0,
+        },
+        param_id: id,
+        cookie: std::ptr::null_mut(),
+        note_id: -1,
+        port_index: -1,
+        channel: -1,
+        key: -1,
+        value,
+    };
+    if let Some(push) = (*out).try_push {
+        push(out, &event.header);
+    }
+}
+
 unsafe fn handle_event(
     plugin: &mut Plugin,
     e: *const clap_event_header,
@@ -117,12 +149,26 @@ unsafe fn handle_event(
                 }
             }
         }
-        CLAP_EVENT_NOTE_ON => plugin.note = Some((*(e as *const clap_event_note)).key),
+        CLAP_EVENT_NOTE_ON => {
+            let note = &*(e as *const clap_event_note);
+            plugin.note = Some(note.key);
+            report(out, REPORT_NOTE_ON, note.note_id as f64);
+        }
         CLAP_EVENT_NOTE_OFF => {
-            let key = (*(e as *const clap_event_note)).key;
-            if plugin.note == Some(key) {
+            let note = &*(e as *const clap_event_note);
+            if plugin.note == Some(note.key) {
                 plugin.note = None;
             }
+            report(out, REPORT_NOTE_OFF, note.note_id as f64);
+        }
+        CLAP_EVENT_NOTE_EXPRESSION => {
+            let expr = &*(e as *const clap_event_note_expression);
+            report(out, REPORT_EXPR_NOTE, expr.note_id as f64);
+            report(
+                out,
+                REPORT_EXPR_BASE + expr.expression_id as u32,
+                expr.value,
+            );
         }
         _ => {}
     }

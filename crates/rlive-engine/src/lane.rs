@@ -2,7 +2,7 @@
 
 use crate::clip::{chase, render_range, AudioCursor, BlockTime, ClipData, Voices, LANE_VOICE};
 use rlive_core::warp::StretchBank;
-use rlive_core::MidiEvent;
+use rlive_core::{MidiEvent, NoteSpace};
 use std::sync::Arc;
 
 /// A clip placed on the timeline over `[start, end)`, entering its content at `offset`.
@@ -56,7 +56,7 @@ impl LanePlayer {
             lane,
             next: 0,
             current: None,
-            voices: Voices::new(),
+            voices: Voices::new(NoteSpace::Arrangement),
             audio: AudioCursor::new(LANE_VOICE),
             resync: true,
         }

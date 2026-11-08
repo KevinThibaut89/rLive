@@ -42,6 +42,7 @@ pub fn params() -> Vec<ParamInfo> {
 #[derive(Clone, Copy, Default)]
 struct Voice {
     active: bool,
+    channel: u8,
     key: u8,
     pos: f64,
     step: f64,
@@ -73,7 +74,7 @@ impl Sampler {
         self.values[id as usize]
     }
 
-    fn note_on(&mut self, key: u8, velocity: f32) {
+    fn note_on(&mut self, channel: u8, key: u8, velocity: f32) {
         let Some(sample) = &self.sample else { return };
         self.clock += 1;
         let semis = key as f64 - self.v(p::ROOT) + self.v(p::TUNE);
@@ -100,6 +101,7 @@ impl Sampler {
             });
         let v = &mut self.voices[idx];
         v.active = true;
+        v.channel = channel;
         v.key = key;
         v.pos = start;
         v.step = step;
@@ -110,11 +112,15 @@ impl Sampler {
         v.env.gate_on();
     }
 
-    fn note_off(&mut self, key: u8) {
+    fn note_off(&mut self, channel: u8, key: u8) {
         if self.v(p::ONE_SHOT) >= 0.5 {
             return;
         }
-        for v in self.voices.iter_mut().filter(|v| v.active && v.key == key) {
+        for v in self
+            .voices
+            .iter_mut()
+            .filter(|v| v.active && v.channel == channel && v.key == key)
+        {
             v.env.gate_off();
         }
     }
@@ -160,10 +166,15 @@ impl Processor for Sampler {
         ctx.for_each_step(|step| match step {
             BlockStep::Param { id, value } => self.set_param(id, value),
             BlockStep::Audio(audio) => self.render(audio.left, audio.right),
-            BlockStep::Midi(MidiMessage::NoteOn { key, velocity, .. }) => {
-                self.note_on(key, velocity)
+            BlockStep::Midi(MidiMessage::NoteOn {
+                channel,
+                key,
+                velocity,
+                ..
+            }) => self.note_on(channel, key, velocity),
+            BlockStep::Midi(MidiMessage::NoteOff { channel, key, .. }) => {
+                self.note_off(channel, key)
             }
-            BlockStep::Midi(MidiMessage::NoteOff { key, .. }) => self.note_off(key),
             BlockStep::Midi(MidiMessage::AllNotesOff) => {
                 for v in self.voices.iter_mut() {
                     v.env.gate_off();

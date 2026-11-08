@@ -64,6 +64,7 @@ pub fn params() -> Vec<ParamInfo> {
 
 #[derive(Clone, Copy, Default)]
 struct Voice {
+    channel: u8,
     key: u8,
     gate: bool,
     velocity: f32,
@@ -135,13 +136,13 @@ impl PolySynth {
         self.dirty = false;
     }
 
-    fn note_on(&mut self, key: u8, velocity: f32) {
+    fn note_on(&mut self, channel: u8, key: u8, velocity: f32) {
         self.clock += 1;
         // Reuse a voice already playing this key, else a free one, else the oldest.
         let idx = self
             .voices
             .iter()
-            .position(|v| v.key == key && v.amp.is_active())
+            .position(|v| v.channel == channel && v.key == key && v.amp.is_active())
             .or_else(|| self.voices.iter().position(|v| !v.amp.is_active()))
             .unwrap_or_else(|| {
                 // Prefer stealing released voices.
@@ -155,6 +156,7 @@ impl PolySynth {
         let glide = self.v(p::GLIDE) > 0.5;
         let v = &mut self.voices[idx];
         let was_active = v.amp.is_active();
+        v.channel = channel;
         v.key = key;
         v.gate = true;
         v.velocity = velocity;
@@ -174,8 +176,14 @@ impl PolySynth {
         self.last_pitch = key as f32;
     }
 
-    fn note_off(&mut self, key: u8) {
-        for v in self.voices.iter_mut().filter(|v| v.key == key && v.gate) {
+    /// A MIDI channel holds one note per key, so channel and key name a voice: MPE notes that
+    /// share a key stay apart on their member channels.
+    fn note_off(&mut self, channel: u8, key: u8) {
+        for v in self
+            .voices
+            .iter_mut()
+            .filter(|v| v.channel == channel && v.key == key && v.gate)
+        {
             v.gate = false;
             v.amp.gate_off();
             v.flt.gate_off();
@@ -267,14 +275,24 @@ impl Processor for PolySynth {
         ctx.for_each_step(|step| match step {
             BlockStep::Param { id, value } => self.set_param(id, value),
             BlockStep::Audio(audio) => self.render(audio.left, audio.right),
-            BlockStep::Midi(MidiMessage::NoteOn { key, velocity, .. }) => {
-                self.note_on(key, velocity)
+            BlockStep::Midi(MidiMessage::NoteOn {
+                channel,
+                key,
+                velocity,
+                ..
+            }) => self.note_on(channel, key, velocity),
+            BlockStep::Midi(MidiMessage::NoteOff { channel, key, .. }) => {
+                self.note_off(channel, key)
             }
-            BlockStep::Midi(MidiMessage::NoteOff { key, .. }) => self.note_off(key),
             BlockStep::Midi(MidiMessage::AllNotesOff) => self.all_off(),
             BlockStep::Midi(MidiMessage::PitchBend { value, .. }) => self.bend = value,
             BlockStep::Midi(MidiMessage::ControlChange { cc: 120, .. }) => self.reset(),
-            BlockStep::Midi(MidiMessage::ControlChange { .. }) => {}
+            BlockStep::Midi(
+                MidiMessage::ControlChange { .. }
+                | MidiMessage::NoteExpr { .. }
+                | MidiMessage::ChannelPressure { .. }
+                | MidiMessage::ProgramChange { .. },
+            ) => {}
         });
     }
 

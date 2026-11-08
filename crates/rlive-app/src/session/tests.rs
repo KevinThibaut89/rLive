@@ -172,6 +172,8 @@ fn on(key: u8) -> MidiMessage {
         channel: 0,
         key,
         velocity: 0.8,
+        note_id: 0,
+        tuning: 0.0,
     }
 }
 
@@ -180,6 +182,7 @@ fn off(key: u8) -> MidiMessage {
         channel: 0,
         key,
         velocity: 0.5,
+        note_id: 0,
     }
 }
 
@@ -204,6 +207,25 @@ fn a_timeline_clip_is_audible_from_the_marker() {
     s.play();
     let out = render(&mut engine, &mut s, 24_000);
     assert!(out.iter().any(|x| x.abs() > 0.01), "the clip should sound");
+}
+
+#[test]
+fn a_muted_note_is_silent() {
+    let (mut engine, mut s) = session();
+    let t = silent_project(&mut s);
+    let mut clip = Clip::new_midi("x", [1, 2, 3], 1, s.project.time_signature);
+    let mut note = rlive_project::NoteData::new(0, 3000, 60, 1.0);
+    note.muted = true;
+    clip.notes_mut().unwrap().push(note);
+    s.arr_place(t, ArrangementClip::new(clip, 3840));
+    s.seek(3840.0);
+    render(&mut engine, &mut s, 1024);
+    s.play();
+    let out = render(&mut engine, &mut s, 24_000);
+    assert!(
+        out.iter().all(|x| x.abs() < 1e-6),
+        "muted notes make no sound"
+    );
 }
 
 #[test]
@@ -1206,7 +1228,9 @@ fn swapping_a_sample_keeps_held_notes_sounding_and_recycles_the_old_one() {
         MidiMessage::NoteOn {
             channel: 0,
             key: 60,
-            velocity: 1.0
+            velocity: 1.0,
+            note_id: 0,
+            tuning: 0.0,
         }
     ));
     let held = render(&mut engine, &mut s, 4_800);

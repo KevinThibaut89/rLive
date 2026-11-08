@@ -6,7 +6,7 @@ mod launcher;
 mod midi;
 
 pub(crate) use audio::{AudioCursor, LANE_VOICE};
-pub use data::{AudioClip, ClipData, MidiClip, Note, WarpedClip};
+pub use data::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
 pub(crate) use launcher::{ClipPlayer, Pending};
 pub(crate) use midi::{chase, Voices};
 

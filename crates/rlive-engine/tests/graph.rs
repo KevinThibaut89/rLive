@@ -405,6 +405,8 @@ fn note_on(key: u8) -> rlive_core::MidiMessage {
         channel: 0,
         key,
         velocity: 1.0,
+        note_id: 0,
+        tuning: 0.0,
     }
 }
 

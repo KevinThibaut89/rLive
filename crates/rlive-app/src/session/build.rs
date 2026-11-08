@@ -8,9 +8,9 @@ use rlive_core::{DeviceId, ParamInfo, Ports, Processor};
 use rlive_devices::{DeviceInit, DeviceRole, SampleBuffer};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
-    ArrangementLane, AudioClip, BusLayout, ChainNode, ClipData, DeviceSlot, LaneClip, MasterNode,
-    MidiClip, MixSettings, Note, NullProcessor, RackKind as EngineRackKind, RackNode, TrackNode,
-    WarpedClip, MAX_RACK_DEPTH,
+    ArrangementLane, AudioClip, BusLayout, ChainNode, ClipData, DeviceSlot, ExprPoint, LaneClip,
+    MasterNode, MidiClip, MixSettings, Note, NoteExpression, NullProcessor,
+    RackKind as EngineRackKind, RackNode, TrackNode, WarpedClip, MAX_RACK_DEPTH,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
@@ -349,13 +349,17 @@ impl Builder<'_> {
     pub fn clip(&mut self, clip: &Clip) -> Result<Arc<ClipData>, String> {
         Ok(Arc::new(match &clip.content {
             ClipContent::Midi { notes, .. } => {
+                // Deactivated notes never reach the engine.
                 let notes: Vec<Note> = notes
                     .iter()
+                    .filter(|n| !n.muted)
                     .map(|n| Note {
                         start: n.start,
                         length: n.length,
                         key: n.key,
                         velocity: n.velocity,
+                        release: n.release,
+                        expr: n.expr.as_deref().map(engine_expression).map(Box::new),
                     })
                     .collect();
                 ClipData::Midi(MidiClip::new(clip.length, notes, clip.looped))
@@ -526,6 +530,22 @@ pub fn mix_of(t: &Track) -> MixSettings {
         pan: t.pan,
         mute: t.mute,
         solo: t.solo,
+    }
+}
+
+fn engine_expression(expr: &rlive_project::NoteExpression) -> NoteExpression {
+    let points = |list: &[rlive_project::Breakpoint]| {
+        list.iter()
+            .map(|p| ExprPoint {
+                time: p.time,
+                value: p.value as f32,
+            })
+            .collect()
+    };
+    NoteExpression {
+        pitch: points(&expr.pitch),
+        slide: points(&expr.slide),
+        pressure: points(&expr.pressure),
     }
 }
 

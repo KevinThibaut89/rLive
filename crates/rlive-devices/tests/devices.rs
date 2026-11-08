@@ -19,6 +19,8 @@ fn note_on(key: u8) -> MidiEvent {
             channel: 0,
             key,
             velocity: 1.0,
+            note_id: 0,
+            tuning: 0.0,
         },
     )
 }
@@ -70,6 +72,43 @@ fn poly_synth_plays_correct_pitch() {
 }
 
 #[test]
+fn a_note_off_reaches_only_the_voice_on_its_channel() {
+    let on = |channel| {
+        MidiEvent::new(
+            0,
+            MidiMessage::NoteOn {
+                channel,
+                key: 60,
+                velocity: 1.0,
+                note_id: channel as u32 + 1,
+                tuning: 0.0,
+            },
+        )
+    };
+    let off = |channel| {
+        MidiEvent::new(
+            0,
+            MidiMessage::NoteOff {
+                channel,
+                key: 60,
+                velocity: 0.0,
+                note_id: channel as u32 + 1,
+            },
+        )
+    };
+    let mut synth = synth::PolySynth::new();
+    synth.activate(SR, BLOCK);
+    synth.set_param(synth::p::AMP_R, 10.0);
+    render(&mut synth, 0.0, &[on(1), on(2)], 10);
+    // Releasing channel 1 leaves the voice on channel 2 sounding.
+    let out = render(&mut synth, 0.0, &[off(1)], 40);
+    assert!(out[out.len() - 100..].iter().any(|s| s.abs() > 1e-3));
+    // Releasing channel 2 ends it too.
+    let out = render(&mut synth, 0.0, &[off(2)], 20);
+    assert!(out[out.len() - 100..].iter().all(|s| s.abs() < 1e-4));
+}
+
+#[test]
 fn poly_synth_releases() {
     let mut synth = synth::PolySynth::new();
     synth.activate(SR, BLOCK);
@@ -81,6 +120,7 @@ fn poly_synth_releases() {
             channel: 0,
             key: 60,
             velocity: 0.0,
+            note_id: 0,
         },
     );
     let out = render(&mut synth, 0.0, &[off], 20);

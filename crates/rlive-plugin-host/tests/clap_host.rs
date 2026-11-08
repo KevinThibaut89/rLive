@@ -1,8 +1,8 @@
 //! End-to-end CLAP hosting test against the `rlive-test-clap` fixture plugins.
 
 use rlive_core::{
-    AudioBuffer, AudioInput, AudioOutput, EventQueue, MidiEvent, MidiMessage, ParamEvent, ParamId,
-    ParamOutQueue, PluginFormat, ProcessContext, Tail, TransportInfo, ViewWriter,
+    AudioBuffer, AudioInput, AudioOutput, EventQueue, ExprKind, MidiEvent, MidiMessage, ParamEvent,
+    ParamId, ParamOutQueue, PluginFormat, ProcessContext, Tail, TransportInfo, ViewWriter,
 };
 use rlive_plugin_host::{instantiate, scanner, PluginDescriptor};
 use std::path::{Path, PathBuf};
@@ -128,6 +128,8 @@ fn clap_scan_instantiate_process_state() {
             channel: 0,
             key: 69,
             velocity: 1.0,
+            note_id: 0,
+            tuning: 0.0,
         },
     );
     let mut all = process(&mut *inst.processor, 0.0, &[on], &mut q);
@@ -141,6 +143,107 @@ fn clap_scan_instantiate_process_state() {
     drop(inst);
 
     std::fs::remove_dir_all(path.parent().unwrap()).ok();
+}
+
+/// Runs one note through the fixture, which reports each event it sees as a parameter.
+fn run_events(dir: &str, events: &[MidiEvent]) -> Vec<(u32, f64)> {
+    let path = fixture_named(dir);
+    let found = rlive_plugin_host::clap::scan(&path).unwrap();
+    let mut inst = instantiate(find(&found, "rs.rlive.test-sine"), 48_000.0, 512).unwrap();
+    let mut q = ParamOutQueue::with_capacity(64);
+    process(&mut *inst.processor, 0.0, events, &mut q);
+    let seen = q.drain().collect();
+    inst.processor.stop_processing();
+    drop(inst);
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    seen
+}
+
+#[test]
+fn a_clap_plugin_sees_note_ids_and_native_expression() {
+    let note = 42u32;
+    let expr = |kind, value| {
+        MidiEvent::new(
+            0,
+            MidiMessage::NoteExpr {
+                channel: 0,
+                key: 60,
+                note_id: note,
+                kind,
+                value,
+            },
+        )
+    };
+    let on = MidiEvent::new(
+        0,
+        MidiMessage::NoteOn {
+            channel: 0,
+            key: 60,
+            velocity: 1.0,
+            note_id: note,
+            tuning: 0.0,
+        },
+    );
+    let off = MidiEvent::new(
+        100,
+        MidiMessage::NoteOff {
+            channel: 0,
+            key: 60,
+            velocity: 0.2,
+            note_id: note,
+        },
+    );
+    let seen = run_events(
+        "rlive-clap-expr",
+        &[
+            on,
+            expr(ExprKind::Pitch, 2.5),
+            expr(ExprKind::Slide, 0.75),
+            expr(ExprKind::Pressure, 0.5),
+            off,
+        ],
+    );
+    let values_of = |id: u32| {
+        seen.iter()
+            .filter(|(i, _)| *i == id)
+            .map(|(_, v)| *v)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(values_of(1000), vec![note as f64], "{seen:?}");
+    assert_eq!(values_of(1001), vec![note as f64], "{seen:?}");
+    assert_eq!(values_of(1002), vec![note as f64; 3], "{seen:?}");
+    // CLAP's tuning is in semitones, brightness and pressure in 0..1.
+    let expr_value = |id: i32| values_of(1100 + id as u32);
+    assert_eq!(
+        expr_value(clap_sys::events::CLAP_NOTE_EXPRESSION_TUNING),
+        vec![2.5]
+    );
+    assert_eq!(
+        expr_value(clap_sys::events::CLAP_NOTE_EXPRESSION_BRIGHTNESS),
+        vec![0.75]
+    );
+    assert_eq!(
+        expr_value(clap_sys::events::CLAP_NOTE_EXPRESSION_PRESSURE),
+        vec![0.5]
+    );
+}
+
+#[test]
+fn an_unassigned_note_id_reaches_a_clap_plugin_as_minus_one() {
+    let seen = run_events(
+        "rlive-clap-no-id",
+        &[MidiEvent::new(
+            0,
+            MidiMessage::NoteOn {
+                channel: 0,
+                key: 60,
+                velocity: 1.0,
+                note_id: 0,
+                tuning: 0.0,
+            },
+        )],
+    );
+    assert_eq!(seen, vec![(1000, -1.0)]);
 }
 
 #[test]

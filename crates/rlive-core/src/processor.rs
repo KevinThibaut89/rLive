@@ -386,6 +386,8 @@ mod tests {
                 channel: 0,
                 key: 60,
                 velocity: 1.0,
+                note_id: 0,
+                tuning: 0.0,
             },
         ));
         q.push(MidiEvent::new(
@@ -394,6 +396,7 @@ mod tests {
                 channel: 0,
                 key: 60,
                 velocity: 0.0,
+                note_id: 0,
             },
         ));
         q.sort();

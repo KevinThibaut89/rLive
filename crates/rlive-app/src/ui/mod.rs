@@ -124,6 +124,8 @@ impl RliveApp {
             targets: session.midi_targets.clone(),
             selected: Arc::new(Mutex::new(None)),
             activity: Default::default(),
+            system: Default::default(),
+            mpe: Default::default(),
         };
         let midi = MidiInput::connect(settings.midi_input.as_deref(), routing.clone())
             .unwrap_or_else(|e| {
@@ -454,6 +456,8 @@ impl RliveApp {
                         channel: 0,
                         key: note,
                         velocity: 0.8,
+                        note_id: 0,
+                        tuning: 0.0,
                     },
                 );
             }
@@ -467,6 +471,7 @@ impl RliveApp {
                             channel: 0,
                             key: note,
                             velocity: 0.5,
+                            note_id: 0,
                         },
                     );
                 }

@@ -999,6 +999,7 @@ fn note_editor(
                     channel: 0,
                     key: k,
                     velocity: 0.5,
+                    note_id: 0,
                 },
             );
         }
@@ -1013,6 +1014,7 @@ fn note_editor(
                     channel: 0,
                     key: old,
                     velocity: 0.5,
+                    note_id: 0,
                 },
             );
         }
@@ -1022,6 +1024,8 @@ fn note_editor(
                 channel: 0,
                 key: k,
                 velocity: state.piano.new_velocity,
+                note_id: 0,
+                tuning: 0.0,
             },
         );
     }

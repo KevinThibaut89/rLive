@@ -4,13 +4,47 @@ use rlive_core::warp::{WarpMap, WarpMode};
 use rlive_core::SampleBuffer;
 use std::sync::Arc;
 
-/// A note inside a MIDI clip. Positions are in ticks relative to the clip start.
+/// A point on an expression envelope, `time` ticks after the note starts.
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExprPoint {
+    pub time: f64,
+    pub value: f32,
+}
+
+/// A note's expression envelopes, each sorted by time and possibly empty.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct NoteExpression {
+    /// Semitones from the note's key.
+    pub pitch: Vec<ExprPoint>,
+    /// 0..1.
+    pub slide: Vec<ExprPoint>,
+    /// 0..1.
+    pub pressure: Vec<ExprPoint>,
+}
+
+/// A note inside a MIDI clip. Positions are in ticks relative to the clip start.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Note {
     pub start: u64,
     pub length: u64,
     pub key: u8,
     pub velocity: f32,
+    /// Velocity of the note-off, 0..1.
+    pub release: f32,
+    pub expr: Option<Box<NoteExpression>>,
+}
+
+impl Default for Note {
+    fn default() -> Self {
+        Self {
+            start: 0,
+            length: 0,
+            key: 60,
+            velocity: 1.0,
+            release: 0.5,
+            expr: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

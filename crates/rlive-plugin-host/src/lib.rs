@@ -339,3 +339,13 @@ impl PortBuffers {
         }
     }
 }
+
+/// A note id as CLAP and VST3 want it: signed, and -1 where it is unassigned. Ids from
+/// [`rlive_core::NoteIds`] stay below 2^31, so nothing is lost.
+pub(crate) fn wire_note_id(id: rlive_core::NoteId) -> i32 {
+    if id == 0 {
+        -1
+    } else {
+        id as i32
+    }
+}

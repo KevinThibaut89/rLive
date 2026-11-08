@@ -1,11 +1,12 @@
 //! VST3 plugin hosting (via the MIT-licensed `vst3` bindings).
 
 use crate::{
-    bundle_binary, cbuf_to_string, HostError, HostNotification, PluginDescriptor, PluginHandle,
-    PluginInstance, PortBuffers, Result,
+    bundle_binary, cbuf_to_string, wire_note_id, HostError, HostNotification, PluginDescriptor,
+    PluginHandle, PluginInstance, PortBuffers, Result,
 };
 use rlive_core::{
-    MidiMessage, ParamFlags, ParamInfo, ParamKind, PluginFormat, ProcessContext, Processor, Tail,
+    ExprKind, MidiMessage, ParamFlags, ParamInfo, ParamKind, PluginFormat, ProcessContext,
+    Processor, Tail,
 };
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::HashMap;
@@ -1323,6 +1324,198 @@ impl Vst3Processor {
     }
 }
 
+/// A MIDI message as a VST3 event. `None` for what VST3 has no event for: CC and pitch bend
+/// go through IMidiMapping parameters in VST3 and are not mapped yet.
+fn to_vst3_event(message: MidiMessage, offset: int32) -> Option<Event> {
+    let mut ev: Event = unsafe { std::mem::zeroed() };
+    ev.busIndex = 0;
+    ev.sampleOffset = offset;
+    ev.flags = Event_::EventFlags_::kIsLive as u16;
+    match message {
+        MidiMessage::NoteOn {
+            channel,
+            key,
+            velocity,
+            note_id,
+            tuning,
+        } => {
+            ev.r#type = Event_::EventTypes_::kNoteOnEvent as u16;
+            ev.__field0.noteOn = NoteOnEvent {
+                channel: channel as i16,
+                pitch: key as i16,
+                // VST3 tunes in cents; our tuning is in semitones.
+                tuning: tuning * 100.0,
+                velocity,
+                length: 0,
+                noteId: wire_note_id(note_id),
+            };
+        }
+        MidiMessage::NoteOff {
+            channel,
+            key,
+            velocity,
+            note_id,
+        } => {
+            ev.r#type = Event_::EventTypes_::kNoteOffEvent as u16;
+            ev.__field0.noteOff = NoteOffEvent {
+                channel: channel as i16,
+                pitch: key as i16,
+                velocity,
+                noteId: wire_note_id(note_id),
+                tuning: 0.0,
+            };
+        }
+        // Poly pressure is a native VST3 event, and works without an id too.
+        MidiMessage::NoteExpr {
+            channel,
+            key,
+            note_id,
+            kind: ExprKind::Pressure,
+            value,
+        } => {
+            ev.r#type = Event_::EventTypes_::kPolyPressureEvent as u16;
+            ev.__field0.polyPressure = PolyPressureEvent {
+                channel: channel as i16,
+                pitch: key as i16,
+                pressure: value,
+                noteId: wire_note_id(note_id),
+            };
+        }
+        // Note expression must name a note, so it can't apply without an id.
+        MidiMessage::NoteExpr { note_id: 0, .. } => return None,
+        MidiMessage::NoteExpr {
+            note_id,
+            kind,
+            value,
+            ..
+        } => {
+            ev.r#type = Event_::EventTypes_::kNoteExpressionValueEvent as u16;
+            let (type_id, normalized) = match kind {
+                // Tuning is normalised over +-120 semitones, with 0.5 meaning none.
+                ExprKind::Pitch => (
+                    NoteExpressionTypeIDs_::kTuningTypeID,
+                    0.5 + value as f64 / 240.0,
+                ),
+                _ => (NoteExpressionTypeIDs_::kBrightnessTypeID, value as f64),
+            };
+            ev.__field0.noteExpressionValue = NoteExpressionValueEvent {
+                typeId: type_id,
+                noteId: wire_note_id(note_id),
+                value: normalized.clamp(0.0, 1.0),
+            };
+        }
+        _ => return None,
+    }
+    Some(ev)
+}
+
+#[cfg(test)]
+mod event_tests {
+    use super::*;
+
+    fn on(key: u8, note_id: rlive_core::NoteId) -> MidiMessage {
+        MidiMessage::NoteOn {
+            channel: 2,
+            key,
+            velocity: 1.0,
+            note_id,
+            tuning: 1.5,
+        }
+    }
+
+    #[test]
+    fn note_ids_and_tuning_reach_note_on() {
+        let ev = to_vst3_event(on(60, 77), 9).unwrap();
+        assert_eq!(ev.sampleOffset, 9);
+        assert_eq!(ev.r#type, Event_::EventTypes_::kNoteOnEvent as u16);
+        unsafe {
+            assert_eq!(ev.__field0.noteOn.noteId, 77);
+            assert_eq!(ev.__field0.noteOn.pitch, 60);
+            assert_eq!(ev.__field0.noteOn.channel, 2);
+            assert_eq!(ev.__field0.noteOn.tuning, 150.0);
+        }
+    }
+
+    #[test]
+    fn an_unassigned_id_becomes_minus_one() {
+        let ev = to_vst3_event(on(60, 0), 0).unwrap();
+        unsafe { assert_eq!(ev.__field0.noteOn.noteId, -1) };
+    }
+
+    #[test]
+    fn note_off_carries_its_id_and_release_velocity() {
+        let ev = to_vst3_event(
+            MidiMessage::NoteOff {
+                channel: 0,
+                key: 60,
+                velocity: 0.25,
+                note_id: 5,
+            },
+            0,
+        )
+        .unwrap();
+        assert_eq!(ev.r#type, Event_::EventTypes_::kNoteOffEvent as u16);
+        unsafe {
+            assert_eq!(ev.__field0.noteOff.noteId, 5);
+            assert_eq!(ev.__field0.noteOff.velocity, 0.25);
+        }
+    }
+
+    fn expr(note_id: rlive_core::NoteId, kind: ExprKind, value: f32) -> MidiMessage {
+        MidiMessage::NoteExpr {
+            channel: 0,
+            key: 60,
+            note_id,
+            kind,
+            value,
+        }
+    }
+
+    #[test]
+    fn pitch_is_normalised_tuning_expression() {
+        let ev = to_vst3_event(expr(5, ExprKind::Pitch, 12.0), 0).unwrap();
+        assert_eq!(
+            ev.r#type,
+            Event_::EventTypes_::kNoteExpressionValueEvent as u16
+        );
+        unsafe {
+            assert_eq!(ev.__field0.noteExpressionValue.noteId, 5);
+            assert_eq!(
+                ev.__field0.noteExpressionValue.typeId,
+                NoteExpressionTypeIDs_::kTuningTypeID
+            );
+            assert!((ev.__field0.noteExpressionValue.value - 0.55).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn slide_is_brightness_expression() {
+        let ev = to_vst3_event(expr(5, ExprKind::Slide, 0.75), 0).unwrap();
+        unsafe {
+            assert_eq!(
+                ev.__field0.noteExpressionValue.typeId,
+                NoteExpressionTypeIDs_::kBrightnessTypeID
+            );
+            assert_eq!(ev.__field0.noteExpressionValue.value, 0.75);
+        }
+    }
+
+    #[test]
+    fn pressure_is_poly_pressure_even_without_an_id() {
+        let ev = to_vst3_event(expr(0, ExprKind::Pressure, 0.5), 0).unwrap();
+        assert_eq!(ev.r#type, Event_::EventTypes_::kPolyPressureEvent as u16);
+        unsafe {
+            assert_eq!(ev.__field0.polyPressure.noteId, -1);
+            assert_eq!(ev.__field0.polyPressure.pressure, 0.5);
+        }
+    }
+
+    #[test]
+    fn note_expression_without_an_id_is_dropped() {
+        assert!(to_vst3_event(expr(0, ExprKind::Pitch, 1.0), 0).is_none());
+    }
+}
+
 impl Processor for Vst3Processor {
     fn activate(&mut self, sample_rate: f64, max_block: usize) {
         debug_assert!(sample_rate == self.sample_rate && max_block <= self.max_block);
@@ -1345,45 +1538,10 @@ impl Processor for Vst3Processor {
         events.clear();
         for e in ctx.events {
             let offset = e.offset.min(frames.saturating_sub(1) as u32) as int32;
-            let mut ev: Event = unsafe { std::mem::zeroed() };
-            ev.busIndex = 0;
-            ev.sampleOffset = offset;
-            ev.flags = Event_::EventFlags_::kIsLive as u16;
-            match e.message {
-                MidiMessage::NoteOn {
-                    channel,
-                    key,
-                    velocity,
-                } => {
-                    ev.r#type = Event_::EventTypes_::kNoteOnEvent as u16;
-                    ev.__field0.noteOn = NoteOnEvent {
-                        channel: channel as i16,
-                        pitch: key as i16,
-                        tuning: 0.0,
-                        velocity,
-                        length: 0,
-                        noteId: -1,
-                    };
+            if let Some(ev) = to_vst3_event(e.message, offset) {
+                if events.len() < events.capacity() {
+                    events.push(ev);
                 }
-                MidiMessage::NoteOff {
-                    channel,
-                    key,
-                    velocity,
-                } => {
-                    ev.r#type = Event_::EventTypes_::kNoteOffEvent as u16;
-                    ev.__field0.noteOff = NoteOffEvent {
-                        channel: channel as i16,
-                        pitch: key as i16,
-                        velocity,
-                        noteId: -1,
-                        tuning: 0.0,
-                    };
-                }
-                // CC/pitch bend go through IMidiMapping parameters in VST3; not mapped yet.
-                _ => continue,
-            }
-            if events.len() < events.capacity() {
-                events.push(ev);
             }
         }
 

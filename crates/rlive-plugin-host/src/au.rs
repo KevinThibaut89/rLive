@@ -15,7 +15,8 @@ use objc2_core_foundation::{
 };
 use objc2_foundation::{NSBundle, NSSize, NSString, NSURL};
 use rlive_core::{
-    MidiMessage, ParamInfo, ParamKind, PluginFormat, ProcessContext, Processor, Tail,
+    MidiMessage, MpeEncoder, MpeZone, ParamInfo, ParamKind, PluginFormat, ProcessContext,
+    Processor, Tail,
 };
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -506,6 +507,7 @@ pub fn instantiate(
         aux_buses,
         output: [vec![0.0; max_block], vec![0.0; max_block]],
         pending: Vec::with_capacity(256),
+        mpe: MpeEncoder::new(MpeZone::Lower, 15),
         is_effect,
         sample_time: 0.0,
         max_block,
@@ -888,6 +890,8 @@ pub struct AuProcessor {
     output: [Vec<f32>; 2],
     pending: Vec<(u32, f32)>,
     is_effect: bool,
+    /// AU takes notes as MIDI, so note expression reaches it as MPE.
+    mpe: MpeEncoder,
     sample_time: f64,
     max_block: usize,
 }
@@ -932,7 +936,7 @@ impl Processor for AuProcessor {
                 );
             }
             if !self.is_effect {
-                for e in ctx.events {
+                self.mpe.encode(ctx.events, &mut |e| {
                     let (bytes, _) = e.message.to_bytes();
                     if matches!(e.message, MidiMessage::AllNotesOff) {
                         for ch in 0..16u32 {
@@ -947,7 +951,7 @@ impl Processor for AuProcessor {
                             e.offset,
                         );
                     }
-                }
+                });
             }
         }
 
@@ -1060,6 +1064,7 @@ impl Processor for AuProcessor {
         unsafe {
             AudioUnitReset(self.inst.unit, kAudioUnitScope_Global, 0);
         }
+        self.mpe.reset();
     }
 
     fn latency(&self) -> u32 {

@@ -1,47 +1,111 @@
 //! MIDI clip rendering.
 
-use super::data::{ClipData, MidiClip};
+use super::data::{ClipData, ExprPoint, MidiClip, Note, NoteExpression};
 use super::BlockTime;
-use rlive_core::{MidiEvent, MidiMessage};
+use rlive_core::{ExprKind, MidiEvent, MidiMessage, NoteId, NoteIds, NoteSpace};
 
-/// Counts sounding instances of each key, so note-offs can be sent on stop.
-pub(crate) struct Voices([u8; 128]);
+/// How many clip notes can sound at once. A further note simply doesn't start, so that every
+/// note which does start can always be released.
+const MAX_SOUNDING: usize = 512;
+
+/// Spacing of expression values within a note, in ticks: about 10 ms at 120 BPM.
+const EXPR_STEP: f64 = 20.0;
+
+#[derive(Clone, Copy)]
+struct Sounding {
+    /// Index of the note in its clip.
+    note: u32,
+    key: u8,
+    id: NoteId,
+    release: f32,
+}
+
+const SILENT: Sounding = Sounding {
+    note: 0,
+    key: 0,
+    id: 0,
+    release: 0.0,
+};
+
+/// The clip notes currently sounding, so note-offs can be sent on stop and expression can
+/// reach the right note. Oldest first.
+pub(crate) struct Voices {
+    sounding: [Sounding; MAX_SOUNDING],
+    len: usize,
+    ids: NoteIds,
+}
 
 impl Voices {
-    pub fn new() -> Self {
-        Self([0; 128])
-    }
-
-    fn on(&mut self, key: usize) {
-        self.0[key] = self.0[key].saturating_add(1);
-    }
-
-    /// Returns whether the key was sounding (and a note-off should be sent).
-    fn off(&mut self, key: usize) -> bool {
-        if self.0[key] > 0 {
-            self.0[key] -= 1;
-            true
-        } else {
-            false
+    pub fn new(space: NoteSpace) -> Self {
+        Self {
+            sounding: [SILENT; MAX_SOUNDING],
+            len: 0,
+            ids: NoteIds::new(space),
         }
     }
 
-    /// Emit note-offs for every sounding note at `offset`.
+    /// Start note `note` of the clip. Returns its new id, or `None` if too many are sounding.
+    fn on(&mut self, note: u32, key: u8, release: f32) -> Option<NoteId> {
+        if self.len == MAX_SOUNDING {
+            return None;
+        }
+        let id = self.ids.alloc();
+        self.sounding[self.len] = Sounding {
+            note,
+            key,
+            id,
+            release,
+        };
+        self.len += 1;
+        Some(id)
+    }
+
+    /// The id of note `note`, if it is sounding.
+    fn id(&self, note: u32) -> Option<NoteId> {
+        self.sounding[..self.len]
+            .iter()
+            .find(|v| v.note == note)
+            .map(|v| v.id)
+    }
+
+    /// Stop note `note`, returning what it was so a note-off can be sent.
+    fn off(&mut self, note: u32) -> Option<Sounding> {
+        let i = self.sounding[..self.len]
+            .iter()
+            .position(|v| v.note == note)?;
+        let voice = self.sounding[i];
+        self.sounding.copy_within(i + 1..self.len, i);
+        self.len -= 1;
+        Some(voice)
+    }
+
+    /// Emit note-offs for every sounding note at `offset`, in key order.
     pub fn release_all(&mut self, offset: u32, events: &mut Vec<MidiEvent>) {
-        for key in 0..128 {
-            if self.0[key] > 0 {
-                self.0[key] = 0;
-                push_event(events, MidiEvent::new(offset, note_off(key as u8)));
-            }
+        let sounding = &mut self.sounding[..self.len];
+        sounding.sort_unstable_by_key(|v| (v.key, v.id));
+        for v in sounding.iter() {
+            push_event(events, MidiEvent::new(offset, note_off(v)));
         }
+        self.len = 0;
     }
 }
 
-fn note_off(key: u8) -> MidiMessage {
+fn note_off(v: &Sounding) -> MidiMessage {
     MidiMessage::NoteOff {
         channel: 0,
+        key: v.key,
+        velocity: v.release,
+        note_id: v.id,
+    }
+}
+
+fn note_on(note: &Note, key: u8, note_id: NoteId) -> MidiMessage {
+    MidiMessage::NoteOn {
+        channel: 0,
         key,
-        velocity: 0.5,
+        velocity: note.velocity,
+        note_id,
+        tuning: 0.0,
     }
 }
 
@@ -68,34 +132,34 @@ pub(super) fn render_midi(
         let scan_from = a - base - lookback - 1.0;
         let scan_to = seg_end - base + 1.0;
         let first = clip.notes.partition_point(|n| (n.start as f64) < scan_from);
-        for note in &clip.notes[first..] {
+        for (i, note) in clip.notes.iter().enumerate().skip(first) {
             let start = note.start as f64;
             if start > scan_to || start >= len {
                 break;
             }
-            let key = note.key as usize & 127;
+            let index = i as u32;
+            let key = note.key & 127;
             let on = base + start;
             let off = base + ((note.start + note.length.max(1)) as f64).min(len);
-            // Offs first: a note ending exactly where the next begins must not cut the new one.
-            if off >= a && off < seg_end && voices.off(key) {
-                push_event(
-                    ev,
-                    MidiEvent::new(time.event_offset(off), note_off(key as u8)),
-                );
-            }
+            // Start before stop, or a note shorter than the block never gets its note-off.
+            // Notes meeting at a boundary still come off first: the earlier one is earlier here
+            // (and in event order, once the block is sorted).
             if on >= a && on < seg_end {
-                voices.on(key);
-                push_event(
-                    ev,
-                    MidiEvent::new(
-                        time.event_offset(on),
-                        MidiMessage::NoteOn {
-                            channel: 0,
-                            key: key as u8,
-                            velocity: note.velocity,
-                        },
-                    ),
-                );
+                if let Some(id) = voices.on(index, key, note.release) {
+                    let frame = time.event_offset(on);
+                    push_event(ev, MidiEvent::new(frame, note_on(note, key, id)));
+                    if let Some(expr) = &note.expr {
+                        push_expression(expr, key, id, 0.0, frame, ev);
+                    }
+                }
+            }
+            if let (Some(expr), Some(id)) = (&note.expr, voices.id(index)) {
+                push_ramps(expr, key, id, NoteSpan { on, off }, (a, seg_end), time, ev);
+            }
+            if off >= a && off < seg_end {
+                if let Some(voice) = voices.off(index) {
+                    push_event(ev, MidiEvent::new(time.event_offset(off), note_off(&voice)));
+                }
             }
         }
     }
@@ -122,27 +186,129 @@ pub(crate) fn chase(
     let base = origin + (local / len).floor() * len;
     let scan_from = at - base - clip.max_len as f64 - 1.0;
     let first = clip.notes.partition_point(|n| (n.start as f64) < scan_from);
-    for note in &clip.notes[first..] {
+    for (i, note) in clip.notes.iter().enumerate().skip(first) {
         let start = note.start as f64;
         if base + start >= at || start >= len {
             break;
         }
         let off = base + ((note.start + note.length.max(1)) as f64).min(len);
         if off > at {
-            let key = note.key as usize & 127;
-            voices.on(key);
-            push_event(
-                ev,
-                MidiEvent::new(
-                    offset,
-                    MidiMessage::NoteOn {
-                        channel: 0,
-                        key: key as u8,
-                        velocity: note.velocity,
-                    },
-                ),
-            );
+            let key = note.key & 127;
+            if let Some(id) = voices.on(i as u32, key, note.release) {
+                push_event(ev, MidiEvent::new(offset, note_on(note, key, id)));
+                if let Some(expr) = &note.expr {
+                    push_expression(expr, key, id, at - (base + start), offset, ev);
+                }
+            }
         }
+    }
+}
+
+/// Where a note sounds, in song ticks.
+struct NoteSpan {
+    on: f64,
+    off: f64,
+}
+
+fn dimensions(expr: &NoteExpression) -> [(ExprKind, &[ExprPoint]); 3] {
+    [
+        (ExprKind::Pitch, expr.pitch.as_slice()),
+        (ExprKind::Slide, expr.slide.as_slice()),
+        (ExprKind::Pressure, expr.pressure.as_slice()),
+    ]
+}
+
+/// Emit every expression value of a note as it stands `position` ticks in, at `frame`.
+fn push_expression(
+    expr: &NoteExpression,
+    key: u8,
+    note_id: NoteId,
+    position: f64,
+    frame: u32,
+    ev: &mut Vec<MidiEvent>,
+) {
+    for (kind, points) in dimensions(expr) {
+        if !points.is_empty() {
+            push_expr_event(ev, frame, key, note_id, kind, value_at(points, position));
+        }
+    }
+}
+
+/// Emit the changes in a note's expression over `[window.0, window.1)`, on a fixed tick grid
+/// from the note's start, so a note sounds the same whatever the block size. The start of the
+/// note itself is covered by [`push_expression`].
+fn push_ramps(
+    expr: &NoteExpression,
+    key: u8,
+    note_id: NoteId,
+    span: NoteSpan,
+    (a, b): (f64, f64),
+    time: BlockTime,
+    ev: &mut Vec<MidiEvent>,
+) {
+    let end = span.off.min(b);
+    for (kind, points) in dimensions(expr) {
+        if points.is_empty() {
+            continue;
+        }
+        let mut step = ((a - span.on) / EXPR_STEP).ceil().max(1.0);
+        let mut previous = value_at(points, (step - 1.0) * EXPR_STEP);
+        loop {
+            let position = step * EXPR_STEP;
+            let tick = span.on + position;
+            if tick >= end {
+                break;
+            }
+            let value = value_at(points, position);
+            if value != previous {
+                push_expr_event(ev, time.event_offset(tick), key, note_id, kind, value);
+            }
+            previous = value;
+            step += 1.0;
+        }
+    }
+}
+
+/// An envelope's value `position` ticks into the note, straight between points and held
+/// beyond them.
+fn value_at(points: &[ExprPoint], position: f64) -> f32 {
+    let i = points.partition_point(|p| p.time <= position);
+    match (i.checked_sub(1).map(|j| points[j]), points.get(i).copied()) {
+        (Some(p), Some(next)) => {
+            let span = next.time - p.time;
+            if span <= 0.0 {
+                return next.value;
+            }
+            let t = ((position - p.time) / span) as f32;
+            p.value + (next.value - p.value) * t
+        }
+        (Some(p), None) | (None, Some(p)) => p.value,
+        (None, None) => 0.0,
+    }
+}
+
+/// Expression leaves room in the block's event list, so a burst of it can never crowd out
+/// note-ons and note-offs: a lost value is corrected by the next, a lost note-off sticks.
+fn push_expr_event(
+    events: &mut Vec<MidiEvent>,
+    offset: u32,
+    key: u8,
+    note_id: NoteId,
+    kind: ExprKind,
+    value: f32,
+) {
+    let limit = events.capacity() - events.capacity() / 4;
+    if events.len() < limit {
+        events.push(MidiEvent::new(
+            offset,
+            MidiMessage::NoteExpr {
+                channel: 0,
+                key,
+                note_id,
+                kind,
+                value,
+            },
+        ));
     }
 }
 
