@@ -1,6 +1,6 @@
 use super::defaults;
 use crate::dsp::{Biquad, BiquadKind, DelayLine, Smoother};
-use rlive_core::{ParamInfo, ProcessContext, Processor};
+use rlive_core::{AudioBuffer, BlockStep, ParamInfo, ProcessContext, Processor, Tail};
 
 // ---------------------------------------------------------------- Delay
 
@@ -49,16 +49,8 @@ impl Default for Delay {
     }
 }
 
-impl Processor for Delay {
-    fn activate(&mut self, sample_rate: f64, _: usize) {
-        self.sr = sample_rate as f32;
-        let max = (sample_rate * 4.5) as usize;
-        self.lines = [DelayLine::new(max), DelayLine::new(max)];
-        self.time.set_time(0.08, self.sr);
-        self.tone_dirty = true;
-    }
-
-    fn process(&mut self, ctx: &mut ProcessContext) {
+impl Delay {
+    fn render(&mut self, audio: AudioBuffer, tempo: f64) {
         if self.tone_dirty {
             for f in self.tone.iter_mut() {
                 f.set(
@@ -73,7 +65,7 @@ impl Processor for Delay {
         }
         let seconds = if self.v[SYNC as usize] >= 0.5 {
             let div = (self.v[DIVISION as usize].round() as usize).min(DIVISION_BEATS.len() - 1);
-            DIVISION_BEATS[div] * 60.0 / ctx.transport.tempo
+            DIVISION_BEATS[div] * 60.0 / tempo
         } else {
             self.v[TIME as usize] / 1000.0
         };
@@ -84,7 +76,7 @@ impl Processor for Delay {
         let fb = self.v[FEEDBACK as usize] as f32;
         let mix = self.v[MIX as usize] as f32;
         let ping = self.v[PING_PONG as usize] >= 0.5;
-        let (left, right) = (&mut *ctx.audio.left, &mut *ctx.audio.right);
+        let (left, right) = (&mut *audio.left, &mut *audio.right);
         for i in 0..left.len() {
             let d = self.time.next();
             let dl = self.tone[0].process(self.lines[0].read(d));
@@ -102,6 +94,25 @@ impl Processor for Delay {
             right[i] = inr * (1.0 - mix) + dr * mix;
         }
     }
+}
+
+impl Processor for Delay {
+    fn activate(&mut self, sample_rate: f64, _: usize) {
+        self.sr = sample_rate as f32;
+        let max = (sample_rate * 4.5) as usize;
+        self.lines = [DelayLine::new(max), DelayLine::new(max)];
+        self.time.set_time(0.08, self.sr);
+        self.tone_dirty = true;
+    }
+
+    fn process(&mut self, ctx: &mut ProcessContext) {
+        let tempo = ctx.transport.tempo;
+        ctx.for_each_step(|step| match step {
+            BlockStep::Param { id, value } => self.set_param(id, value),
+            BlockStep::Audio(audio) => self.render(audio, tempo),
+            BlockStep::Midi(_) => {}
+        });
+    }
 
     fn set_param(&mut self, id: u32, value: f64) {
         if let Some(v) = self.v.get_mut(id as usize) {
@@ -116,5 +127,12 @@ impl Processor for Delay {
         for l in self.lines.iter_mut() {
             l.clear();
         }
+        for f in self.tone.iter_mut() {
+            f.reset();
+        }
+    }
+
+    fn tail(&self) -> Tail {
+        Tail::Infinite
     }
 }

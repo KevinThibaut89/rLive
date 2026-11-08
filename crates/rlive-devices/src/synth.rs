@@ -2,7 +2,8 @@
 
 use crate::dsp::{Adsr, FilterMode, Oscillator, Svf, Waveform};
 use rlive_core::{
-    db_to_gain, note_to_hz, MidiMessage, ModMode, ParamInfo, ProcessContext, Processor,
+    db_to_gain, note_to_hz, BlockStep, MidiMessage, ModMode, ParamInfo, ProcessContext, Processor,
+    Tail,
 };
 
 const VOICES: usize = 16;
@@ -263,31 +264,18 @@ impl Processor for PolySynth {
     }
 
     fn process(&mut self, ctx: &mut ProcessContext) {
-        let frames = ctx.audio.frames();
-        let mut pos = 0usize;
-        for e in ctx.events {
-            let at = (e.offset as usize).min(frames);
-            if at > pos {
-                let (l, r) = (&mut ctx.audio.left[pos..at], &mut ctx.audio.right[pos..at]);
-                self.render(l, r);
-                pos = at;
+        ctx.for_each_step(|step| match step {
+            BlockStep::Param { id, value } => self.set_param(id, value),
+            BlockStep::Audio(audio) => self.render(audio.left, audio.right),
+            BlockStep::Midi(MidiMessage::NoteOn { key, velocity, .. }) => {
+                self.note_on(key, velocity)
             }
-            match e.message {
-                MidiMessage::NoteOn { key, velocity, .. } => self.note_on(key, velocity),
-                MidiMessage::NoteOff { key, .. } => self.note_off(key),
-                MidiMessage::AllNotesOff => self.all_off(),
-                MidiMessage::PitchBend { value, .. } => self.bend = value,
-                MidiMessage::ControlChange { cc: 120, .. } => self.reset(),
-                MidiMessage::ControlChange { .. } => {}
-            }
-        }
-        if pos < frames {
-            let (l, r) = (
-                &mut ctx.audio.left[pos..frames],
-                &mut ctx.audio.right[pos..frames],
-            );
-            self.render(l, r);
-        }
+            BlockStep::Midi(MidiMessage::NoteOff { key, .. }) => self.note_off(key),
+            BlockStep::Midi(MidiMessage::AllNotesOff) => self.all_off(),
+            BlockStep::Midi(MidiMessage::PitchBend { value, .. }) => self.bend = value,
+            BlockStep::Midi(MidiMessage::ControlChange { cc: 120, .. }) => self.reset(),
+            BlockStep::Midi(MidiMessage::ControlChange { .. }) => {}
+        });
     }
 
     fn set_param(&mut self, id: u32, value: f64) {
@@ -302,5 +290,9 @@ impl Processor for PolySynth {
             *v = Voice::default();
         }
         self.dirty = true;
+    }
+
+    fn tail(&self) -> Tail {
+        Tail::Infinite
     }
 }

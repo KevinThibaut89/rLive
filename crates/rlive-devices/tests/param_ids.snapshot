@@ -1,0 +1,67 @@
+rlive.poly	0	Osc 1
+rlive.poly	1	Osc 2
+rlive.poly	2	Osc 2 Semi
+rlive.poly	3	Osc 2 Fine
+rlive.poly	4	Osc Mix
+rlive.poly	5	Noise
+rlive.poly	6	Cutoff
+rlive.poly	7	Resonance
+rlive.poly	8	Filter
+rlive.poly	9	Env Amount
+rlive.poly	10	Key Track
+rlive.poly	11	Attack
+rlive.poly	12	Decay
+rlive.poly	13	Sustain
+rlive.poly	14	Release
+rlive.poly	15	F Attack
+rlive.poly	16	F Decay
+rlive.poly	17	F Sustain
+rlive.poly	18	F Release
+rlive.poly	19	Velocity
+rlive.poly	20	Glide
+rlive.poly	21	Volume
+rlive.sampler	0	Root Key
+rlive.sampler	1	Transpose
+rlive.sampler	2	Volume
+rlive.sampler	3	Attack
+rlive.sampler	4	Release
+rlive.sampler	5	One-shot
+rlive.sampler	6	Start
+rlive.sampler	7	Velocity
+rlive.sampler	8	Pan
+rlive.eq3	0	Low
+rlive.eq3	1	Low Freq
+rlive.eq3	2	Mid
+rlive.eq3	3	Mid Freq
+rlive.eq3	4	Mid Q
+rlive.eq3	5	High
+rlive.eq3	6	High Freq
+rlive.eq3	7	Output
+rlive.compressor	0	Threshold
+rlive.compressor	1	Ratio
+rlive.compressor	2	Attack
+rlive.compressor	3	Release
+rlive.compressor	4	Knee
+rlive.compressor	5	Makeup
+rlive.compressor	6	Dry/Wet
+rlive.saturator	0	Drive
+rlive.saturator	1	Output
+rlive.saturator	2	Dry/Wet
+rlive.delay	0	Sync
+rlive.delay	1	Time
+rlive.delay	2	Division
+rlive.delay	3	Feedback
+rlive.delay	4	Dry/Wet
+rlive.delay	5	Ping Pong
+rlive.delay	6	Tone
+rlive.reverb	0	Size
+rlive.reverb	1	Damping
+rlive.reverb	2	Width
+rlive.reverb	3	Dry/Wet
+rlive.reverb	4	Pre-delay
+rlive.utility	0	Gain
+rlive.utility	1	Pan
+rlive.utility	2	Width
+rlive.utility	3	Mono
+rlive.utility	4	Phase L
+rlive.utility	5	Phase R

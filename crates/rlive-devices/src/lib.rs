@@ -1,16 +1,19 @@
 //! Built-in rLive devices and their registry.
 
+pub mod devices;
 pub mod dsp;
 pub mod effects;
 pub mod sampler;
 pub mod synth;
 
-use rlive_core::{ParamInfo, Processor};
+use rlive_core::{DeviceDesc, Processor, Status};
 use std::path::Path;
 use std::sync::Arc;
 
+/// Which of Live's three device classes a device belongs to. In a chain they run in this order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceRole {
+    MidiEffect,
     Instrument,
     AudioEffect,
 }
@@ -85,91 +88,37 @@ pub fn write_wav(
 /// Extra data some devices need at construction time.
 #[derive(Default, Clone)]
 pub struct DeviceInit {
-    pub sample: Option<Arc<SampleBuffer>>,
+    /// Loaded samples, one per [`DeviceDesc::samples`] slot.
+    pub samples: Vec<Option<Arc<SampleBuffer>>>,
+    /// The device's own saved state, if it has any beyond its parameters.
+    pub state: Option<String>,
 }
 
-/// Static description of a built-in device.
+/// A row of the device registry.
 pub struct BuiltinInfo {
+    /// The persisted `type_id`. Never changes once released.
     pub id: &'static str,
     pub name: &'static str,
     pub role: DeviceRole,
-    pub params: fn() -> Vec<ParamInfo>,
+    /// Where the browser files it.
+    pub category: &'static str,
+    pub status: Status,
+    pub desc: fn() -> DeviceDesc,
     pub create: fn(&DeviceInit) -> Box<dyn Processor>,
-    /// Whether the device accepts a sample (shows a "load sample" button).
-    pub uses_sample: bool,
 }
 
-static BUILTINS: &[BuiltinInfo] = &[
-    BuiltinInfo {
-        id: "rlive.poly",
-        name: "Poly Synth",
-        role: DeviceRole::Instrument,
-        params: synth::params,
-        create: |_| Box::new(synth::PolySynth::new()),
-        uses_sample: false,
-    },
-    BuiltinInfo {
-        id: "rlive.sampler",
-        name: "Sampler",
-        role: DeviceRole::Instrument,
-        params: sampler::params,
-        create: |init| Box::new(sampler::Sampler::new(init.sample.clone())),
-        uses_sample: true,
-    },
-    BuiltinInfo {
-        id: "rlive.eq3",
-        name: "EQ Three",
-        role: DeviceRole::AudioEffect,
-        params: effects::eq_params,
-        create: |_| Box::<effects::Eq3>::default(),
-        uses_sample: false,
-    },
-    BuiltinInfo {
-        id: "rlive.compressor",
-        name: "Compressor",
-        role: DeviceRole::AudioEffect,
-        params: effects::compressor_params,
-        create: |_| Box::<effects::Compressor>::default(),
-        uses_sample: false,
-    },
-    BuiltinInfo {
-        id: "rlive.saturator",
-        name: "Saturator",
-        role: DeviceRole::AudioEffect,
-        params: effects::saturator_params,
-        create: |_| Box::<effects::Saturator>::default(),
-        uses_sample: false,
-    },
-    BuiltinInfo {
-        id: "rlive.delay",
-        name: "Delay",
-        role: DeviceRole::AudioEffect,
-        params: effects::delay_params,
-        create: |_| Box::<effects::Delay>::default(),
-        uses_sample: false,
-    },
-    BuiltinInfo {
-        id: "rlive.reverb",
-        name: "Reverb",
-        role: DeviceRole::AudioEffect,
-        params: effects::reverb_params,
-        create: |_| Box::<effects::Reverb>::default(),
-        uses_sample: false,
-    },
-    BuiltinInfo {
-        id: "rlive.utility",
-        name: "Utility",
-        role: DeviceRole::AudioEffect,
-        params: effects::utility_params,
-        create: |_| Box::<effects::Utility>::default(),
-        uses_sample: false,
-    },
-];
+impl BuiltinInfo {
+    /// Whether the browser offers this device. Stubs stay hidden until promoted.
+    pub fn visible(&self) -> bool {
+        self.status != Status::Stub
+    }
+}
 
-pub fn builtins() -> &'static [BuiltinInfo] {
-    BUILTINS
+/// Every built-in device, shown or hidden.
+pub fn builtins() -> &'static [&'static BuiltinInfo] {
+    devices::ALL
 }
 
 pub fn find(id: &str) -> Option<&'static BuiltinInfo> {
-    BUILTINS.iter().find(|b| b.id == id)
+    builtins().iter().find(|b| b.id == id).copied()
 }

@@ -193,7 +193,8 @@ fn list_category(
             } else {
                 DeviceRole::AudioEffect
             };
-            for b in rlive_devices::builtins().iter().filter(|b| b.role == role) {
+            let shown_here = |b: &&&rlive_devices::BuiltinInfo| b.role == role && b.visible();
+            for b in rlive_devices::builtins().iter().filter(shown_here) {
                 if !matches(filter, b.name) {
                     continue;
                 }

@@ -1,7 +1,8 @@
 //! End-to-end CLAP hosting test against the `rlive-test-clap` fixture plugins.
 
 use rlive_core::{
-    AudioBuffer, MidiEvent, MidiMessage, ParamOutQueue, PluginFormat, ProcessContext, TransportInfo,
+    AudioBuffer, AudioInput, AudioOutput, EventQueue, MidiEvent, MidiMessage, ParamEvent, ParamId,
+    ParamOutQueue, PluginFormat, ProcessContext, Tail, TransportInfo, ViewWriter,
 };
 use rlive_plugin_host::{instantiate, scanner, PluginDescriptor};
 use std::path::{Path, PathBuf};
@@ -11,6 +12,11 @@ use std::time::Duration;
 /// Build the fixture cdylib (in its own target dir to avoid fighting over cargo's lock)
 /// and copy it to a `.clap` file.
 fn fixture() -> PathBuf {
+    fixture_named("rlive-clap")
+}
+
+/// The same, in a directory of its own so tests can clean up after themselves.
+fn fixture_named(dir_prefix: &str) -> PathBuf {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let target = root.join("target/test-plugins");
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
@@ -26,7 +32,7 @@ fn fixture() -> PathBuf {
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_EXTENSION
     ));
-    let dir = std::env::temp_dir().join(format!("rlive-clap-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("{dir_prefix}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let dest = dir.join("rlive-test.clap");
     std::fs::copy(&lib, &dest).unwrap();
@@ -45,14 +51,22 @@ fn process(
     };
     let mut l = vec![input; 512];
     let mut r = vec![input; 512];
+    let mut events_out = EventQueue::with_capacity(0);
+    let view = ViewWriter::none();
     p.process(&mut ProcessContext {
         audio: AudioBuffer {
             left: &mut l,
             right: &mut r,
         },
+        sidechain: None,
+        aux_out: &mut [],
         events,
+        events_out: &mut events_out,
+        params: &[],
         transport: &transport,
         param_out: q,
+        mod_out: &mut [],
+        view: &view,
     });
     l
 }
@@ -139,4 +153,81 @@ fn scanner_reports_broken_files() {
     let r = scanner::scan_out_of_process(exe, PluginFormat::Clap, &bad, Duration::from_secs(10));
     assert!(r.is_err());
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The fixture gain is sample-accurate, adds its key input and copies half of it to its aux bus.
+fn with_routing(
+    p: &mut dyn rlive_core::Processor,
+    params: &[ParamEvent],
+    sidechain: Option<(&[f32], &[f32])>,
+    aux: Option<(&mut [f32], &mut [f32])>,
+) -> Vec<f32> {
+    let transport = TransportInfo {
+        playing: true,
+        ..Default::default()
+    };
+    let (mut l, mut r) = (vec![0.5f32; 512], vec![0.5f32; 512]);
+    let mut q = ParamOutQueue::with_capacity(16);
+    let mut events_out = EventQueue::with_capacity(0);
+    let view = ViewWriter::none();
+    let mut aux_buses: Vec<AudioOutput<'_>> = aux
+        .into_iter()
+        .map(|(left, right)| AudioOutput { left, right })
+        .collect();
+    p.process(&mut ProcessContext {
+        audio: AudioBuffer {
+            left: &mut l,
+            right: &mut r,
+        },
+        sidechain: sidechain.map(|(left, right)| AudioInput { left, right }),
+        aux_out: &mut aux_buses,
+        events: &[],
+        events_out: &mut events_out,
+        params,
+        transport: &transport,
+        param_out: &mut q,
+        mod_out: &mut [],
+        view: &view,
+    });
+    l
+}
+
+#[test]
+fn clap_params_land_on_their_frame_and_buses_are_forwarded() {
+    let path = fixture_named("rlive-clap-routing");
+    let found = rlive_plugin_host::clap::scan(&path).unwrap();
+    let mut inst = instantiate(find(&found, "rs.rlive.test-gain"), 48_000.0, 512).unwrap();
+
+    // Reported by the host side and readable from the processor half.
+    assert_eq!(inst.handle.latency(), 64);
+    assert_eq!(inst.processor.latency(), 64);
+    assert_eq!(inst.processor.tail(), Tail::Frames(480));
+
+    let change = ParamEvent {
+        offset: 200,
+        id: ParamId(0),
+        value: 0.5,
+    };
+    let out = with_routing(&mut *inst.processor, &[change], None, None);
+    assert!((out[199] - 0.5).abs() < 1e-6, "{}", out[199]);
+    assert!((out[200] - 0.25).abs() < 1e-6, "{}", out[200]);
+
+    let (key_l, key_r) = (vec![0.2f32; 512], vec![0.2f32; 512]);
+    let (mut aux_l, mut aux_r) = (vec![0.0f32; 512], vec![0.0f32; 512]);
+    let out = with_routing(
+        &mut *inst.processor,
+        &[],
+        Some((&key_l, &key_r)),
+        Some((&mut aux_l, &mut aux_r)),
+    );
+    assert!((out[0] - 0.45).abs() < 1e-6, "gain then key: {}", out[0]);
+    assert!((aux_l[0] - 0.1).abs() < 1e-6, "{}", aux_l[0]);
+    assert!((aux_r[100] - 0.1).abs() < 1e-6, "{}", aux_r[100]);
+
+    let out = with_routing(&mut *inst.processor, &[], None, None);
+    assert!((out[0] - 0.25).abs() < 1e-6, "no key, silence: {}", out[0]);
+
+    inst.processor.stop_processing();
+    drop(inst);
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
 }

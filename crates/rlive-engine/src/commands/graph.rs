@@ -2,7 +2,7 @@
 
 use crate::params::ParamBus;
 use crate::{retire, ChainTarget, DeviceSlot, Engine, Garbage, MasterNode, TrackNode};
-use rlive_core::{DeviceId, TrackId};
+use rlive_core::{DeviceId, Resource, TrackId};
 
 pub enum GraphCmd {
     AddTrack {
@@ -33,6 +33,14 @@ pub enum GraphCmd {
     SwapBus {
         target: ChainTarget,
         bus: Box<ParamBus>,
+    },
+    /// Hand a device a shared resource, such as a sample. Playing voices carry on. What it
+    /// replaces is retired, never freed here.
+    SetResource {
+        target: ChainTarget,
+        device: DeviceId,
+        slot: u32,
+        resource: Resource,
     },
     /// Replace the whole session (project load / sample-rate change).
     ReplaceAll {
@@ -110,6 +118,23 @@ impl Engine {
                 }
                 None => retire(&mut self.garbage, Garbage::Boxed(bus)),
             },
+            C::SetResource {
+                target,
+                device,
+                slot,
+                resource,
+            } => {
+                let found = self
+                    .chain_mut(target)
+                    .and_then(|chain| chain.iter_mut().find(|d| d.id == device));
+                let retired = match found {
+                    Some(d) => d.processor.set_resource(slot, resource),
+                    None => Some(resource),
+                };
+                if let Some(r) = retired {
+                    retire(&mut self.garbage, Garbage::Resource(r));
+                }
+            }
             C::ReplaceAll {
                 mut tracks,
                 mut master,

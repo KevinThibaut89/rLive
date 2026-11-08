@@ -2,10 +2,15 @@
 
 use crate::dsp::Adsr;
 use crate::SampleBuffer;
-use rlive_core::{db_to_gain, MidiMessage, ModMode, ParamInfo, ProcessContext, Processor};
+use rlive_core::{
+    db_to_gain, BlockStep, MidiMessage, ModMode, ParamInfo, ProcessContext, Processor, Resource,
+    Tail,
+};
 use std::sync::Arc;
 
 const VOICES: usize = 16;
+/// The one resource slot: the sample.
+const SAMPLE_SLOT: u32 = 0;
 
 pub mod p {
     pub const ROOT: u32 = 0;
@@ -152,31 +157,20 @@ impl Processor for Sampler {
     }
 
     fn process(&mut self, ctx: &mut ProcessContext) {
-        let frames = ctx.audio.frames();
-        let mut pos = 0usize;
-        for e in ctx.events {
-            let at = (e.offset as usize).min(frames);
-            if at > pos {
-                self.render(&mut ctx.audio.left[pos..at], &mut ctx.audio.right[pos..at]);
-                pos = at;
+        ctx.for_each_step(|step| match step {
+            BlockStep::Param { id, value } => self.set_param(id, value),
+            BlockStep::Audio(audio) => self.render(audio.left, audio.right),
+            BlockStep::Midi(MidiMessage::NoteOn { key, velocity, .. }) => {
+                self.note_on(key, velocity)
             }
-            match e.message {
-                MidiMessage::NoteOn { key, velocity, .. } => self.note_on(key, velocity),
-                MidiMessage::NoteOff { key, .. } => self.note_off(key),
-                MidiMessage::AllNotesOff => {
-                    for v in self.voices.iter_mut() {
-                        v.env.gate_off();
-                    }
+            BlockStep::Midi(MidiMessage::NoteOff { key, .. }) => self.note_off(key),
+            BlockStep::Midi(MidiMessage::AllNotesOff) => {
+                for v in self.voices.iter_mut() {
+                    v.env.gate_off();
                 }
-                _ => {}
             }
-        }
-        if pos < frames {
-            self.render(
-                &mut ctx.audio.left[pos..frames],
-                &mut ctx.audio.right[pos..frames],
-            );
-        }
+            BlockStep::Midi(_) => {}
+        });
     }
 
     fn set_param(&mut self, id: u32, value: f64) {
@@ -188,6 +182,31 @@ impl Processor for Sampler {
     fn reset(&mut self) {
         for v in self.voices.iter_mut() {
             v.active = false;
+        }
+    }
+
+    fn tail(&self) -> Tail {
+        Tail::Infinite
+    }
+
+    fn set_resource(&mut self, slot: u32, resource: Resource) -> Option<Resource> {
+        if slot != SAMPLE_SLOT {
+            return Some(resource);
+        }
+        match resource.downcast::<SampleBuffer>() {
+            Ok(sample) => {
+                let old_rate = self.sample.as_ref().map(|s| s.sample_rate);
+                let new_rate = sample.sample_rate;
+                let old = self.sample.replace(sample);
+                // Voices keep their place, and their pitch even if the sample rate differs.
+                if let Some(old_rate) = old_rate.filter(|r| *r > 0.0) {
+                    for v in self.voices.iter_mut().filter(|v| v.active) {
+                        v.step *= new_rate / old_rate;
+                    }
+                }
+                old.map(|o| o as Resource)
+            }
+            Err(refused) => Some(refused),
         }
     }
 }

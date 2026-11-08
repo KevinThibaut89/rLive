@@ -111,8 +111,8 @@ impl CellSpec {
 /// What resolving a bus found.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Resolved {
-    /// A device must hear a change, so its chain has to stop at this step.
-    pub devices: bool,
+    /// A device was switched on or off, so its chain has to stop at this step.
+    pub activators: bool,
     /// A mixer value changed; only the gain stage cares.
     pub mixer: bool,
 }
@@ -305,7 +305,8 @@ impl ParamBus {
                 kept += 1;
                 match spec.target {
                     CellTarget::Mixer(_) => out.mixer = true,
-                    _ => out.devices = true,
+                    CellTarget::Activator { .. } => out.activators = true,
+                    _ => {}
                 }
             }
         }

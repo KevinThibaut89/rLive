@@ -9,9 +9,11 @@ use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::*;
 use clap_sys::ext::audio_ports::*;
+use clap_sys::ext::latency::*;
 use clap_sys::ext::note_ports::*;
 use clap_sys::ext::params::*;
 use clap_sys::ext::state::*;
+use clap_sys::ext::tail::*;
 use clap_sys::factory::plugin_factory::*;
 use clap_sys::host::clap_host;
 use clap_sys::id::CLAP_INVALID_ID;
@@ -163,8 +165,19 @@ unsafe extern "C" fn process(
             let inp: &clap_audio_buffer = &*proc_.audio_inputs;
             let l = *(*inp.data32).add(i);
             let r = *(*inp.data32.add(1)).add(i);
-            out_l[i] = l * plugin.param as f32;
-            out_r[i] = r * plugin.param as f32;
+            let (mut key_l, mut key_r) = (0.0, 0.0);
+            if proc_.audio_inputs_count > 1 {
+                let key: &clap_audio_buffer = &*proc_.audio_inputs.add(1);
+                key_l = *(*key.data32).add(i);
+                key_r = *(*key.data32.add(1)).add(i);
+            }
+            out_l[i] = l * plugin.param as f32 + key_l;
+            out_r[i] = r * plugin.param as f32 + key_r;
+            if proc_.audio_outputs_count > 1 {
+                let aux: &clap_audio_buffer = &*proc_.audio_outputs.add(1);
+                *(*aux.data32).add(i) = key_l * 0.5;
+                *(*aux.data32.add(1)).add(i) = key_r * 0.5;
+            }
         }
     }
     while next_ev < count {
@@ -286,10 +299,11 @@ static STATE: clap_plugin_state = clap_plugin_state {
 // --- ports
 
 unsafe extern "C" fn audio_ports_count(p: *const clap_plugin, is_input: bool) -> u32 {
-    if is_input && this(p).instrument {
-        0
-    } else {
-        1
+    match (this(p).instrument, is_input) {
+        (true, true) => 0,
+        (true, false) => 1,
+        // The gain also has a key input and an aux output.
+        (false, _) => 2,
     }
 }
 
@@ -299,13 +313,17 @@ unsafe extern "C" fn audio_ports_get(
     is_input: bool,
     info: *mut clap_audio_port_info,
 ) -> bool {
-    if index != 0 || (is_input && this(p).instrument) {
+    if index >= audio_ports_count(p, is_input) {
         return false;
     }
     let info = &mut *info;
-    info.id = 0;
+    info.id = index;
     info.name[0] = 0;
-    info.flags = CLAP_AUDIO_PORT_IS_MAIN;
+    info.flags = if index == 0 {
+        CLAP_AUDIO_PORT_IS_MAIN
+    } else {
+        0
+    };
     info.channel_count = 2;
     info.port_type = CLAP_PORT_STEREO.as_ptr();
     info.in_place_pair = CLAP_INVALID_ID;
@@ -315,6 +333,22 @@ unsafe extern "C" fn audio_ports_get(
 static AUDIO_PORTS: clap_plugin_audio_ports = clap_plugin_audio_ports {
     count: Some(audio_ports_count),
     get: Some(audio_ports_get),
+};
+
+unsafe extern "C" fn latency_get(_p: *const clap_plugin) -> u32 {
+    64
+}
+
+static LATENCY: clap_plugin_latency = clap_plugin_latency {
+    get: Some(latency_get),
+};
+
+unsafe extern "C" fn tail_get(_p: *const clap_plugin) -> u32 {
+    480
+}
+
+static TAIL: clap_plugin_tail = clap_plugin_tail {
+    get: Some(tail_get),
 };
 
 unsafe extern "C" fn note_ports_count(p: *const clap_plugin, is_input: bool) -> u32 {
@@ -349,6 +383,10 @@ unsafe extern "C" fn get_extension(_p: *const clap_plugin, id: *const c_char) ->
         &PARAMS as *const _ as *const c_void
     } else if id == CLAP_EXT_STATE {
         &STATE as *const _ as *const c_void
+    } else if id == CLAP_EXT_LATENCY {
+        &LATENCY as *const _ as *const c_void
+    } else if id == CLAP_EXT_TAIL {
+        &TAIL as *const _ as *const c_void
     } else if id == CLAP_EXT_AUDIO_PORTS {
         &AUDIO_PORTS as *const _ as *const c_void
     } else if id == CLAP_EXT_NOTE_PORTS {

@@ -1,6 +1,8 @@
 use super::defaults;
 use crate::dsp::{Biquad, BiquadKind};
-use rlive_core::{db_to_gain, ModMode, ParamInfo, ProcessContext, Processor};
+use rlive_core::{
+    db_to_gain, AudioBuffer, BlockStep, ModMode, ParamInfo, ProcessContext, Processor,
+};
 
 // ---------------------------------------------------------------- EQ Three
 
@@ -53,13 +55,8 @@ impl Default for Eq3 {
     }
 }
 
-impl Processor for Eq3 {
-    fn activate(&mut self, sample_rate: f64, _: usize) {
-        self.sr = sample_rate as f32;
-        self.dirty = true;
-    }
-
-    fn process(&mut self, ctx: &mut ProcessContext) {
+impl Eq3 {
+    fn render(&mut self, audio: AudioBuffer) {
         if self.dirty {
             let g = |id: u32| self.v[id as usize] as f32;
             for ch in 0..2 {
@@ -88,7 +85,7 @@ impl Processor for Eq3 {
             self.dirty = false;
         }
         let out = db_to_gain(self.v[OUTPUT as usize] as f32);
-        for (ch, buf) in [&mut *ctx.audio.left, &mut *ctx.audio.right]
+        for (ch, buf) in [&mut *audio.left, &mut *audio.right]
             .into_iter()
             .enumerate()
         {
@@ -100,6 +97,21 @@ impl Processor for Eq3 {
                 *s = x * out;
             }
         }
+    }
+}
+
+impl Processor for Eq3 {
+    fn activate(&mut self, sample_rate: f64, _: usize) {
+        self.sr = sample_rate as f32;
+        self.dirty = true;
+    }
+
+    fn process(&mut self, ctx: &mut ProcessContext) {
+        ctx.for_each_step(|step| match step {
+            BlockStep::Param { id, value } => self.set_param(id, value),
+            BlockStep::Audio(audio) => self.render(audio),
+            BlockStep::Midi(_) => {}
+        });
     }
 
     fn set_param(&mut self, id: u32, value: f64) {

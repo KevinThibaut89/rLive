@@ -11,7 +11,7 @@ pub mod signal;
 
 pub use alloc_guard::{assert_no_alloc, count_allocs, AllocCounts};
 pub use measure::{onset, peak, rms};
-pub use render::{render_chunks, render_processor};
+pub use render::{render_chunks, render_processor, Harness};
 pub use signal::{dc, impulse, silence, sine};
 
 #[global_allocator]

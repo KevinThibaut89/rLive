@@ -402,6 +402,7 @@ struct FakePlugin {
     desc: PluginDescriptor,
     params: Vec<ParamInfo>,
     pending: Vec<HostNotification>,
+    latency: u32,
 }
 
 impl FakePlugin {
@@ -418,6 +419,7 @@ impl FakePlugin {
             },
             params,
             pending,
+            latency: 0,
         })
     }
 }
@@ -453,6 +455,9 @@ impl rlive_plugin_host::PluginHandle for FakePlugin {
     fn close_editor(&mut self) {}
     fn idle(&mut self) -> Vec<HostNotification> {
         std::mem::take(&mut self.pending)
+    }
+    fn latency(&self) -> u32 {
+        self.latency
     }
 }
 
@@ -615,4 +620,134 @@ fn a_plugin_that_rescans_its_params_gets_new_cells_and_keeps_old_values() {
     render(&mut engine, &mut s, 2048);
     assert!((s.effective_norm(chain, dev, old[0].id).unwrap() - 0.4).abs() < 1e-3);
     assert_eq!(s.effective_norm(chain, dev, extra), Some(0.25));
+}
+
+#[test]
+fn a_plugin_reporting_a_new_latency_updates_the_shared_atomic() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    s.add_builtin(chain, "rlive.reverb");
+    let dev = s.devices(chain)[1].id;
+    let latency = s.runtimes[&dev].latency.clone();
+    assert_eq!(latency.load(std::sync::atomic::Ordering::Relaxed), 0);
+    let mut plugin = FakePlugin::new(Vec::new(), vec![HostNotification::LatencyChanged]);
+    plugin.latency = 512;
+    s.runtimes.get_mut(&dev).unwrap().plugin = Some(plugin);
+    render(&mut engine, &mut s, 512);
+    assert_eq!(latency.load(std::sync::atomic::Ordering::Relaxed), 512);
+}
+
+#[test]
+fn midi_effects_go_before_the_instrument_and_instruments_before_audio() {
+    let (_engine, mut s) = session();
+    let t = s.project.tracks[1].id; // Poly Synth then Delay.
+    let chain = ChainRef::Track(t);
+    s.add_builtin(chain, "rlive.pitch");
+    s.add_builtin(chain, "rlive.chord");
+    let names = |s: &Session| {
+        s.devices(chain)
+            .iter()
+            .map(|d| d.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&s), ["Pitch", "Chord", "Poly Synth", "Delay"]);
+    s.add_builtin(chain, "rlive.sampler");
+    assert_eq!(
+        names(&s),
+        ["Pitch", "Chord", "Poly Synth", "Sampler", "Delay"]
+    );
+    s.add_builtin(chain, "rlive.reverb");
+    assert_eq!(
+        names(&s),
+        ["Pitch", "Chord", "Poly Synth", "Sampler", "Delay", "Reverb"]
+    );
+}
+
+#[test]
+fn a_midi_effect_in_a_session_chain_is_marked_for_the_engine() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    s.add_builtin(chain, "rlive.pitch");
+    assert_eq!(
+        s.runtimes[&s.devices(chain)[0].id].role,
+        rlive_devices::DeviceRole::MidiEffect
+    );
+    // A pure passthrough: playing into it still sounds the instrument after it.
+    s.launch_clip(t, 0);
+    s.play();
+    let out = render(&mut engine, &mut s, 96_000);
+    assert!(out.iter().any(|x| x.abs() > 0.01));
+}
+
+#[test]
+fn swapping_a_sample_keeps_held_notes_sounding_and_recycles_the_old_one() {
+    let dir = std::env::temp_dir().join(format!("rlive-swap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (a, b) = (dir.join("a.wav"), dir.join("b.wav"));
+    let tone = |v: f32| vec![v; 96_000];
+    rlive_devices::write_wav(&a, &tone(0.8), &tone(0.8), 48_000).unwrap();
+    rlive_devices::write_wav(&b, &tone(0.4), &tone(0.4), 48_000).unwrap();
+
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    s.remove_device(chain, s.devices(chain)[0].id);
+    s.add_builtin(chain, "rlive.sampler");
+    let dev = s.devices(chain)[0].id;
+    s.set_device_sample(chain, dev, a.clone());
+    render(&mut engine, &mut s, 512);
+
+    let mut midi = s.engine.take_midi_sender().unwrap();
+    assert!(midi.send(
+        t,
+        MidiMessage::NoteOn {
+            channel: 0,
+            key: 60,
+            velocity: 1.0
+        }
+    ));
+    let held = render(&mut engine, &mut s, 4_800);
+    let level = *held.last().unwrap();
+    assert!(level > 0.05, "playing: {level}");
+
+    let old = s.samples.get(&a).unwrap();
+    let refs_with_device = Arc::strong_count(&old);
+    s.set_device_sample(chain, dev, b.clone());
+    let (mut l, mut r) = (vec![0.0; 512], vec![0.0; 512]);
+    rlive_testkit::assert_no_alloc(|| engine.process(&mut l, &mut r));
+    assert!(
+        (l[0] - level * 0.5).abs() < 0.01 && (l[511] - level * 0.5).abs() < 0.01,
+        "the voice carries on with the new sample: {} {level}",
+        l[0]
+    );
+
+    s.engine.collect_garbage();
+    assert_eq!(
+        Arc::strong_count(&old),
+        refs_with_device - 1,
+        "the engine's reference came back and was dropped here"
+    );
+    assert!(matches!(
+        &s.project.tracks[0].devices[0].kind,
+        DeviceKind::Builtin { sample: Some(p), .. } if *p == b
+    ));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_sample_that_will_not_load_leaves_the_current_one_in_place() {
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    s.add_builtin(chain, "rlive.sampler");
+    let dev = s.devices(chain)[1].id;
+    s.set_device_sample(chain, dev, PathBuf::from("/nonexistent/x.wav"));
+    assert!(s.runtimes[&dev].error.is_some());
+    assert!(matches!(
+        &s.project.tracks[0].devices[1].kind,
+        DeviceKind::Builtin { sample: None, .. }
+    ));
+    render(&mut engine, &mut s, 512);
 }

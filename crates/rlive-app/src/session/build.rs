@@ -14,6 +14,7 @@ use rlive_plugin_host::{PluginDescriptor, PluginHandle};
 use rlive_project::{ArrangementClip, Clip, ClipContent, Device, DeviceKind, Project, Track};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
 /// UI-side state of one device in a chain.
@@ -22,6 +23,10 @@ pub struct DeviceRuntime {
     pub plugin: Option<Box<dyn PluginHandle>>,
     pub error: Option<String>,
     pub role: DeviceRole,
+    /// The device's latency in frames, shared with the engine.
+    pub latency: Arc<AtomicU32>,
+    /// How many samples it can hold; any shows the sample row in the device view.
+    pub sample_slots: usize,
 }
 
 impl DeviceRuntime {
@@ -104,6 +109,8 @@ pub fn descriptor_for(
 impl Builder<'_> {
     /// Instantiate a device. Never fails: broken devices become silent placeholders with an error.
     pub fn device(&mut self, dev: &Device) -> (Box<DeviceSlot>, DeviceRuntime) {
+        let mut midi_effect = false;
+        let mut mod_outs = 0;
         let (processor, runtime) = match &dev.kind {
             DeviceKind::Builtin { type_id, sample } => match rlive_devices::find(type_id) {
                 Some(info) => {
@@ -115,20 +122,34 @@ impl Builder<'_> {
                             None
                         }
                     });
-                    let mut p = (info.create)(&DeviceInit { sample });
+                    let desc = (info.desc)();
+                    let sample_slots = desc.samples.len();
+                    let mut p = (info.create)(&DeviceInit {
+                        samples: desc
+                            .samples
+                            .iter()
+                            .take(1)
+                            .map(|_| sample.clone())
+                            .collect(),
+                        state: None,
+                    });
                     p.activate(self.sample_rate, self.max_block);
-                    let params = (info.params)();
-                    for param in &params {
+                    for param in &desc.params {
                         let v = dev.params.get(&param.id).copied().unwrap_or(param.default);
                         p.set_param(param.id, v);
                     }
+                    let latency = Arc::new(AtomicU32::new(p.latency()));
+                    midi_effect = desc.ports.midi_out;
+                    mod_outs = desc.ports.mod_out.len();
                     (
                         p,
                         DeviceRuntime {
-                            params,
+                            params: desc.params,
                             plugin: None,
                             error,
                             role: info.role,
+                            latency,
+                            sample_slots,
                         },
                     )
                 }
@@ -148,6 +169,7 @@ impl Builder<'_> {
                         } else {
                             DeviceRole::AudioEffect
                         };
+                        let latency = Arc::new(AtomicU32::new(inst.handle.latency()));
                         (
                             inst.processor,
                             DeviceRuntime {
@@ -155,6 +177,8 @@ impl Builder<'_> {
                                 plugin: Some(inst.handle),
                                 error: None,
                                 role,
+                                latency,
+                                sample_slots: 0,
                             },
                         )
                     }
@@ -162,8 +186,12 @@ impl Builder<'_> {
                 }
             }
         };
-        let mut slot = DeviceSlot::new(dev.id, processor);
+        let mut slot = DeviceSlot::new(dev.id, processor)
+            .with_param_capacity(runtime.params.len(), self.max_block);
         slot.bypass = dev.bypass;
+        slot.midi_effect = midi_effect;
+        slot.latency = runtime.latency.clone();
+        slot.mod_out = vec![0.0; mod_outs].into_boxed_slice();
         (Box::new(slot), runtime)
     }
 
@@ -294,6 +322,8 @@ fn placeholder(error: String) -> (Box<dyn Processor>, DeviceRuntime) {
             plugin: None,
             error: Some(error),
             role: DeviceRole::AudioEffect,
+            latency: Arc::new(AtomicU32::new(0)),
+            sample_slots: 0,
         },
     )
 }

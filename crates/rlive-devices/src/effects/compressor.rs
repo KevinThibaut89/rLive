@@ -1,5 +1,7 @@
 use super::defaults;
-use rlive_core::{db_to_gain, gain_to_db, ModMode, ParamInfo, ProcessContext, Processor};
+use rlive_core::{
+    db_to_gain, gain_to_db, AudioBuffer, BlockStep, ModMode, ParamInfo, ProcessContext, Processor,
+};
 
 // ---------------------------------------------------------------- Compressor
 
@@ -56,17 +58,13 @@ impl Compressor {
     }
 }
 
-impl Processor for Compressor {
-    fn activate(&mut self, sample_rate: f64, _: usize) {
-        self.sr = sample_rate as f32;
-    }
-
-    fn process(&mut self, ctx: &mut ProcessContext) {
+impl Compressor {
+    fn render(&mut self, audio: AudioBuffer) {
         let att = (-1.0 / (self.v[ATTACK as usize] as f32 * 0.001 * self.sr)).exp();
         let rel = (-1.0 / (self.v[RELEASE as usize] as f32 * 0.001 * self.sr)).exp();
         let makeup = self.v[MAKEUP as usize] as f32;
         let mix = self.v[MIX as usize] as f32;
-        let (left, right) = (&mut *ctx.audio.left, &mut *ctx.audio.right);
+        let (left, right) = (&mut *audio.left, &mut *audio.right);
         for i in 0..left.len() {
             let (l, r) = (left[i], right[i]);
             let level = gain_to_db(l.abs().max(r.abs()));
@@ -77,6 +75,20 @@ impl Processor for Compressor {
             left[i] = l * (1.0 - mix) + l * g * mix;
             right[i] = r * (1.0 - mix) + r * g * mix;
         }
+    }
+}
+
+impl Processor for Compressor {
+    fn activate(&mut self, sample_rate: f64, _: usize) {
+        self.sr = sample_rate as f32;
+    }
+
+    fn process(&mut self, ctx: &mut ProcessContext) {
+        ctx.for_each_step(|step| match step {
+            BlockStep::Param { id, value } => self.set_param(id, value),
+            BlockStep::Audio(audio) => self.render(audio),
+            BlockStep::Midi(_) => {}
+        });
     }
 
     fn set_param(&mut self, id: u32, value: f64) {

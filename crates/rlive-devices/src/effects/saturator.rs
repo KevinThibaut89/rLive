@@ -1,6 +1,8 @@
 use super::defaults;
 use crate::dsp::soft_clip;
-use rlive_core::{db_to_gain, ModMode, ParamInfo, ProcessContext, Processor};
+use rlive_core::{
+    db_to_gain, AudioBuffer, BlockStep, ModMode, ParamInfo, ProcessContext, Processor,
+};
 
 // ---------------------------------------------------------------- Saturator
 
@@ -29,17 +31,27 @@ impl Default for Saturator {
     }
 }
 
+impl Saturator {
+    fn render(&mut self, audio: AudioBuffer) {
+        let drive = db_to_gain(self.v[DRIVE as usize] as f32);
+        let out = db_to_gain(self.v[OUTPUT as usize] as f32);
+        let mix = self.v[MIX as usize] as f32;
+        for s in audio.left.iter_mut().chain(audio.right.iter_mut()) {
+            let wet = soft_clip(*s * drive) * out;
+            *s = *s * (1.0 - mix) + wet * mix;
+        }
+    }
+}
+
 impl Processor for Saturator {
     fn activate(&mut self, _: f64, _: usize) {}
 
     fn process(&mut self, ctx: &mut ProcessContext) {
-        let drive = db_to_gain(self.v[DRIVE as usize] as f32);
-        let out = db_to_gain(self.v[OUTPUT as usize] as f32);
-        let mix = self.v[MIX as usize] as f32;
-        for s in ctx.audio.left.iter_mut().chain(ctx.audio.right.iter_mut()) {
-            let wet = soft_clip(*s * drive) * out;
-            *s = *s * (1.0 - mix) + wet * mix;
-        }
+        ctx.for_each_step(|step| match step {
+            BlockStep::Param { id, value } => self.set_param(id, value),
+            BlockStep::Audio(audio) => self.render(audio),
+            BlockStep::Midi(_) => {}
+        });
     }
 
     fn set_param(&mut self, id: u32, value: f64) {

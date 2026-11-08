@@ -1,6 +1,9 @@
 //! Offline rendering.
 
-use rlive_core::{AudioBuffer, MidiEvent, ParamOutQueue, ProcessContext, Processor, TransportInfo};
+use rlive_core::{
+    AudioBuffer, EventQueue, MidiEvent, ParamEvent, ParamOutQueue, ProcessContext, Processor,
+    TransportInfo, ViewWriter,
+};
 
 /// Renders `frames` stereo frames through `process`, `chunk` frames at a time (the last chunk
 /// may be shorter). Buffers start out silent.
@@ -17,6 +20,52 @@ pub fn render_chunks(
     (l, r)
 }
 
+/// The parts of a [`ProcessContext`] a test doesn't care about, ready for many blocks.
+pub struct Harness {
+    pub transport: TransportInfo,
+    pub events_out: EventQueue,
+    pub param_out: ParamOutQueue,
+}
+
+impl Harness {
+    pub fn new(sample_rate: f64) -> Self {
+        Self {
+            transport: TransportInfo {
+                playing: true,
+                sample_rate,
+                ..Default::default()
+            },
+            events_out: EventQueue::with_capacity(1024),
+            param_out: ParamOutQueue::with_capacity(256),
+        }
+    }
+
+    /// Runs one block through `p` in place. `events_out` keeps what the processor wrote.
+    pub fn process(
+        &mut self,
+        p: &mut dyn Processor,
+        left: &mut [f32],
+        right: &mut [f32],
+        events: &[MidiEvent],
+        params: &[ParamEvent],
+    ) {
+        self.events_out.clear();
+        let view = ViewWriter::none();
+        p.process(&mut ProcessContext {
+            audio: AudioBuffer { left, right },
+            sidechain: None,
+            aux_out: &mut [],
+            events,
+            events_out: &mut self.events_out,
+            params,
+            transport: &self.transport,
+            param_out: &mut self.param_out,
+            mod_out: &mut [],
+            view: &view,
+        });
+    }
+}
+
 /// Runs a processor over `blocks` blocks of constant `input`, delivering `events` in the first
 /// block, and returns its left output.
 pub fn render_processor(
@@ -27,26 +76,12 @@ pub fn render_processor(
     block_size: usize,
     sample_rate: f64,
 ) -> Vec<f32> {
-    let transport = TransportInfo {
-        playing: true,
-        sample_rate,
-        ..Default::default()
-    };
+    let mut h = Harness::new(sample_rate);
     let mut out = Vec::new();
-    let mut q = ParamOutQueue::with_capacity(16);
     for b in 0..blocks {
         let mut l = vec![input; block_size];
         let mut r = vec![input; block_size];
-        let ev: &[MidiEvent] = if b == 0 { events } else { &[] };
-        p.process(&mut ProcessContext {
-            audio: AudioBuffer {
-                left: &mut l,
-                right: &mut r,
-            },
-            events: ev,
-            transport: &transport,
-            param_out: &mut q,
-        });
+        h.process(p, &mut l, &mut r, if b == 0 { events } else { &[] }, &[]);
         out.extend_from_slice(&l);
     }
     out

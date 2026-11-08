@@ -28,6 +28,12 @@ impl TimeSignature {
         self.ticks_per_beat() * self.numerator.max(1) as u64
     }
 
+    /// Tick of the start of the bar `tick` falls in.
+    pub fn bar_start(&self, tick: f64) -> f64 {
+        let bar = self.ticks_per_bar() as f64;
+        (tick.max(0.0) / bar).floor() * bar
+    }
+
     /// Format a tick position as `bar.beat.sixteenth` (1-based, like Ableton).
     pub fn format_position(&self, ticks: f64) -> String {
         let ticks = ticks.max(0.0) as u64;
@@ -115,6 +121,10 @@ pub struct TransportInfo {
     /// Song position at the start of the block, in samples since play was pressed.
     pub sample_pos: u64,
     pub sample_rate: f64,
+    /// Tick of the start of the bar the block starts in.
+    pub bar_start: f64,
+    /// The Arrangement loop as (start, end) ticks, when it is on.
+    pub loop_range: Option<(f64, f64)>,
 }
 
 impl TransportInfo {
@@ -137,6 +147,8 @@ impl Default for TransportInfo {
             tick: 0.0,
             sample_pos: 0,
             sample_rate: 48_000.0,
+            bar_start: 0.0,
+            loop_range: None,
         }
     }
 }
@@ -179,5 +191,15 @@ mod tests {
             denominator: 8,
         };
         assert_eq!(six_eight.ticks_per_bar(), 2880);
+    }
+
+    #[test]
+    fn bar_start_finds_the_bar_a_tick_is_in() {
+        let sig = TimeSignature::default();
+        assert_eq!(sig.bar_start(0.0), 0.0);
+        assert_eq!(sig.bar_start(3839.9), 0.0);
+        assert_eq!(sig.bar_start(3840.0), 3840.0);
+        assert_eq!(sig.bar_start(5000.0), 3840.0);
+        assert_eq!(sig.bar_start(-10.0), 0.0);
     }
 }

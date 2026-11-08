@@ -116,18 +116,20 @@ impl Session {
         self.add_device(chain, index, d);
     }
 
-    /// Instruments go to the front of the chain (after any other instrument), effects at the end.
+    /// MIDI effects go to the front of the chain, instruments after them (and after any other
+    /// instrument), audio effects at the end.
     fn instrument_insert_index(&self, chain: ChainRef, role: DeviceRole) -> Option<usize> {
-        if role != DeviceRole::Instrument {
+        if role == DeviceRole::AudioEffect {
             return None;
         }
         let devs = self.devices(chain);
         Some(
             devs.iter()
                 .take_while(|d| {
-                    self.runtimes
-                        .get(&d.id)
-                        .is_some_and(|r| r.role == DeviceRole::Instrument)
+                    self.runtimes.get(&d.id).is_some_and(|r| match role {
+                        DeviceRole::MidiEffect => r.role == DeviceRole::MidiEffect,
+                        _ => r.role != DeviceRole::AudioEffect,
+                    })
                 })
                 .count(),
         )
@@ -280,34 +282,35 @@ impl Session {
         layout.effective(layout.device_cell(device, param)?)
     }
 
-    /// Change the sample of a built-in sampler (re-creates the device).
+    /// Change the sample of a built-in sampler. Playing voices carry on with the new sample; a
+    /// file that won't load leaves the current one in place and reports why.
     pub fn set_device_sample(&mut self, chain: ChainRef, id: DeviceId, path: PathBuf) {
-        let Some(devs) = self.chain_mut(chain) else {
-            return;
-        };
-        let Some(pos) = devs.iter().position(|d| d.id == id) else {
-            return;
-        };
-        if let DeviceKind::Builtin { sample, .. } = &mut devs[pos].kind {
-            *sample = Some(path);
+        let loaded = self.samples.get(&path);
+        let error = loaded.as_ref().err().cloned();
+        if let Some(rt) = self.runtimes.get_mut(&id) {
+            rt.error = error.clone();
         }
-        let d = devs[pos].clone();
-        // Replace: remove old, insert new with same id at the same position.
-        self.send(EngineCommand::Graph(GraphCmd::RemoveDevice {
+        let Ok(sample) = loaded else {
+            self.messages.extend(error);
+            return;
+        };
+        let Some(dev) = self
+            .chain_mut(chain)
+            .and_then(|v| v.iter_mut().find(|d| d.id == id))
+        else {
+            return;
+        };
+        if let DeviceKind::Builtin {
+            sample: current, ..
+        } = &mut dev.kind
+        {
+            *current = Some(path);
+        }
+        self.send(EngineCommand::Graph(GraphCmd::SetResource {
             target: chain.into(),
             device: id,
-        }));
-        let (mut b, _) = self.builder();
-        let (slot, rt) = b.device(&d);
-        if let Some(e) = &rt.error {
-            self.messages.push(e.clone());
-        }
-        self.place_device_cells(chain, pos, &rt);
-        self.runtimes.insert(id, rt);
-        self.send(EngineCommand::Graph(GraphCmd::InsertDevice {
-            target: chain.into(),
-            index: pos,
-            device: slot,
+            slot: 0,
+            resource: sample,
         }));
         self.touch();
     }

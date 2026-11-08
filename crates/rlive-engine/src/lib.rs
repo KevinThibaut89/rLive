@@ -80,6 +80,8 @@ pub enum Garbage {
     Boxed(Box<dyn Send>),
     /// Anything shared with the UI: clips, lanes.
     Shared(Arc<dyn Send + Sync>),
+    /// A resource a device replaced or refused.
+    Resource(rlive_core::Resource),
 }
 
 /// Notifications from the audio thread.
@@ -325,6 +327,8 @@ impl Engine {
             tick: self.tick,
             sample_pos: self.sample_pos,
             sample_rate: self.sample_rate,
+            bar_start: self.signature.bar_start(self.tick),
+            loop_range: self.loop_range,
         }
     }
 

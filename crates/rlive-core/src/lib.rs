@@ -3,22 +3,29 @@
 //! Everything in here is used by both the real-time audio thread and the UI thread,
 //! so the types are small, `Copy` where possible and never allocate in the hot path.
 
+pub mod device;
 pub mod ids;
 pub mod midi;
 pub mod param;
 pub mod processor;
 pub mod sample;
 pub mod time;
+pub mod view;
 
+pub use device::{DeviceDesc, Item, Ports, SampleSlot, ScopeKind, Section, Status};
 pub use ids::{ArrClipId, ChainId, DeviceId, TrackId};
 pub use midi::{MidiEvent, MidiMessage};
 pub use param::{
     ClipParam, EnvTarget, ModMode, ParamEvent, ParamFlags, ParamId, ParamInfo, ParamKind,
     ParamOwner, ParamRange, ParamRef, ACTIVATOR,
 };
-pub use processor::{AudioBuffer, ParamOutQueue, ProcessContext, Processor};
+pub use processor::{
+    AudioBuffer, AudioInput, AudioOutput, BlockStep, EventQueue, ParamOutQueue, ProcessContext,
+    Processor, Resource, Tail,
+};
 pub use sample::SampleBuffer;
 pub use time::{Quantize, TimeSignature, TransportInfo, PPQ};
+pub use view::{ViewChannel, ViewId, ViewReader, ViewWriter};
 
 /// Third-party plugin formats rLive can host.
 #[derive(

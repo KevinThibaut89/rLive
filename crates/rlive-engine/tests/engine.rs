@@ -107,15 +107,14 @@ struct Dc(f32);
 impl Processor for Dc {
     fn activate(&mut self, _: f64, _: usize) {}
     fn process(&mut self, ctx: &mut ProcessContext) {
+        if let Some(e) = ctx.params.iter().rfind(|e| e.id.0 == 0) {
+            self.0 = e.value as f32;
+        }
         for s in ctx.audio.left.iter_mut().chain(ctx.audio.right.iter_mut()) {
             *s += self.0;
         }
     }
-    fn set_param(&mut self, id: u32, v: f64) {
-        if id == 0 {
-            self.0 = v as f32;
-        }
-    }
+    fn set_param(&mut self, _: u32, _: f64) {}
 }
 
 fn midi_clip(length: u64, notes: &[(u64, u64, u8)]) -> Arc<ClipData> {

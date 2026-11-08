@@ -226,7 +226,7 @@ fn device(
     if rt.is_some_and(|r| r.error.is_some()) {
         extra_h += 34.0;
     }
-    let uses_sample = matches!(&dev.kind, DeviceKind::Builtin { type_id, .. } if rlive_devices::find(type_id).is_some_and(|b| b.uses_sample));
+    let uses_sample = rt.is_some_and(|r| r.sample_slots > 0);
     if uses_sample {
         extra_h += 24.0;
     }

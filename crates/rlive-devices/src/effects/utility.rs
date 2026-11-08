@@ -1,6 +1,8 @@
 use super::defaults;
 use crate::dsp::Smoother;
-use rlive_core::{db_to_gain, ModMode, ParamInfo, ProcessContext, Processor};
+use rlive_core::{
+    db_to_gain, AudioBuffer, BlockStep, ModMode, ParamInfo, ProcessContext, Processor,
+};
 
 // ---------------------------------------------------------------- Utility
 
@@ -38,13 +40,8 @@ impl Default for Utility {
     }
 }
 
-impl Processor for Utility {
-    fn activate(&mut self, sample_rate: f64, _: usize) {
-        self.gain_l.set_time(0.01, sample_rate as f32);
-        self.gain_r.set_time(0.01, sample_rate as f32);
-    }
-
-    fn process(&mut self, ctx: &mut ProcessContext) {
+impl Utility {
+    fn render(&mut self, audio: AudioBuffer) {
         let g = db_to_gain(self.v[GAIN as usize] as f32);
         let pan = self.v[PAN as usize] as f32;
         let width = if self.v[MONO as usize] >= 0.5 {
@@ -64,13 +61,28 @@ impl Processor for Utility {
         };
         self.gain_l.target = g * (1.0 - pan).min(1.0) * inv_l;
         self.gain_r.target = g * (1.0 + pan).min(1.0) * inv_r;
-        let (left, right) = (&mut *ctx.audio.left, &mut *ctx.audio.right);
+        let (left, right) = (&mut *audio.left, &mut *audio.right);
         for i in 0..left.len() {
             let mid = (left[i] + right[i]) * 0.5;
             let side = (left[i] - right[i]) * 0.5 * width;
             left[i] = (mid + side) * self.gain_l.next();
             right[i] = (mid - side) * self.gain_r.next();
         }
+    }
+}
+
+impl Processor for Utility {
+    fn activate(&mut self, sample_rate: f64, _: usize) {
+        self.gain_l.set_time(0.01, sample_rate as f32);
+        self.gain_r.set_time(0.01, sample_rate as f32);
+    }
+
+    fn process(&mut self, ctx: &mut ProcessContext) {
+        ctx.for_each_step(|step| match step {
+            BlockStep::Param { id, value } => self.set_param(id, value),
+            BlockStep::Audio(audio) => self.render(audio),
+            BlockStep::Midi(_) => {}
+        });
     }
 
     fn set_param(&mut self, id: u32, value: f64) {

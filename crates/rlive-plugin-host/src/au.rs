@@ -14,10 +14,12 @@ use objc2_core_foundation::{
     CFPropertyListFormat, CFRetained, CFString,
 };
 use objc2_foundation::{NSBundle, NSSize, NSString, NSURL};
-use rlive_core::{MidiMessage, ParamInfo, ParamKind, PluginFormat, ProcessContext, Processor};
+use rlive_core::{
+    MidiMessage, ParamInfo, ParamKind, PluginFormat, ProcessContext, Processor, Tail,
+};
 use std::ffi::c_void;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 const NO_ERR: i32 = 0;
@@ -126,12 +128,74 @@ struct HostTiming {
     numerator: std::cell::Cell<u32>,
     denominator: std::cell::Cell<u32>,
     sample_pos: std::cell::Cell<f64>,
+    cycling: std::cell::Cell<bool>,
+    cycle_start: std::cell::Cell<f64>,
+    cycle_end: std::cell::Cell<f64>,
 }
 
 struct AuInstance {
     unit: AudioUnit,
     sample_rate: f64,
     timing: Box<HostTiming>,
+    /// Latency and tail in frames, as last read on the main thread.
+    latency_frames: AtomicU32,
+    tail_frames: AtomicU32,
+}
+
+impl AuInstance {
+    /// A property holding a time in seconds, in frames.
+    fn read_seconds(&self, property: AudioUnitPropertyID) -> u32 {
+        let mut secs: f64 = 0.0;
+        let mut size = 8u32;
+        let status = unsafe {
+            AudioUnitGetProperty(
+                self.unit,
+                property,
+                kAudioUnitScope_Global,
+                0,
+                NonNull::new_unchecked(&mut secs as *mut f64 as *mut c_void),
+                NonNull::from(&mut size),
+            )
+        };
+        if status == NO_ERR && secs.is_finite() && secs > 0.0 {
+            (secs * self.sample_rate) as u32
+        } else {
+            0
+        }
+    }
+
+    /// Read the latency and tail. Main thread only.
+    fn read_audio_props(&self) {
+        self.latency_frames.store(
+            self.read_seconds(kAudioUnitProperty_Latency),
+            Ordering::Relaxed,
+        );
+        self.tail_frames.store(
+            self.read_seconds(kAudioUnitProperty_TailTime),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// How many buses a scope has.
+    fn element_count(&self, scope: AudioUnitScope) -> u32 {
+        let mut count = 0u32;
+        let mut size = 4u32;
+        let status = unsafe {
+            AudioUnitGetProperty(
+                self.unit,
+                kAudioUnitProperty_ElementCount,
+                scope,
+                0,
+                NonNull::new_unchecked(&mut count as *mut u32 as *mut c_void),
+                NonNull::from(&mut size),
+            )
+        };
+        if status == NO_ERR {
+            count
+        } else {
+            0
+        }
+    }
 }
 
 unsafe impl Send for AuInstance {}
@@ -207,13 +271,13 @@ unsafe extern "C-unwind" fn transport_state(
         *sample_pos = t.sample_pos.get();
     }
     if !cycling.is_null() {
-        *cycling = 0;
+        *cycling = t.cycling.get() as u8;
     }
     if !cycle_start.is_null() {
-        *cycle_start = 0.0;
+        *cycle_start = t.cycle_start.get();
     }
     if !cycle_end.is_null() {
-        *cycle_end = 0.0;
+        *cycle_end = t.cycle_end.get();
     }
     NO_ERR
 }
@@ -316,6 +380,8 @@ pub fn instantiate(
             denominator: 4.into(),
             ..Default::default()
         }),
+        latency_frames: AtomicU32::new(0),
+        tail_frames: AtomicU32::new(0),
     });
     let is_effect = query.componentType != kAudioUnitType_MusicDevice
         && query.componentType != kAudioUnitType_Generator;
@@ -325,6 +391,8 @@ pub fn instantiate(
         left: vec![0.0; max_block],
         right: vec![0.0; max_block],
     });
+    let mut sidechain = None;
+    let mut aux_buses = 0;
     unsafe {
         set_property(
             unit,
@@ -352,6 +420,47 @@ pub fn instantiate(
                 0,
                 &cb,
             );
+        }
+        // Extra buses are connected but silent until something is routed to them.
+        if is_effect && inst.element_count(kAudioUnitScope_Input) > 1 {
+            let mut key = Box::new(InputData {
+                left: vec![0.0; max_block],
+                right: vec![0.0; max_block],
+            });
+            let cb = AURenderCallbackStruct {
+                inputProc: Some(input_callback),
+                inputProcRefCon: &mut *key as *mut InputData as *mut c_void,
+            };
+            let format = set_property(
+                unit,
+                kAudioUnitProperty_StreamFormat,
+                kAudioUnitScope_Input,
+                1,
+                &fmt,
+            );
+            let callback = set_property(
+                unit,
+                kAudioUnitProperty_SetRenderCallback,
+                kAudioUnitScope_Input,
+                1,
+                &cb,
+            );
+            if format == NO_ERR && callback == NO_ERR {
+                sidechain = Some(key);
+            }
+        }
+        for bus in 1..inst.element_count(kAudioUnitScope_Output) {
+            let status = set_property(
+                unit,
+                kAudioUnitProperty_StreamFormat,
+                kAudioUnitScope_Output,
+                bus,
+                &fmt,
+            );
+            if status != NO_ERR {
+                break;
+            }
+            aux_buses += 1;
         }
         set_property(
             unit,
@@ -389,9 +498,12 @@ pub fn instantiate(
         editor: None,
     };
     handle.rescan_params();
+    inst.read_audio_props();
     let processor = AuProcessor {
         inst,
         input,
+        sidechain,
+        aux_buses,
         output: [vec![0.0; max_block], vec![0.0; max_block]],
         pending: Vec::with_capacity(256),
         is_effect,
@@ -738,27 +850,23 @@ impl PluginHandle for AuHandle {
     }
 
     fn idle(&mut self) -> Vec<HostNotification> {
+        let mut out = Vec::new();
+        // Audio Units have no latency callback here, so notice a change by asking.
+        let before = self.inst.latency_frames.load(Ordering::Relaxed);
+        self.inst.read_audio_props();
+        if self.inst.latency_frames.load(Ordering::Relaxed) != before {
+            out.push(HostNotification::LatencyChanged);
+        }
         if matches!(&self.editor, Some(w) if !w.is_visible()) {
             self.editor = None;
-            return vec![HostNotification::EditorClosed];
+            out.push(HostNotification::EditorClosed);
         }
-        Vec::new()
+        out
     }
 
     fn latency(&self) -> u32 {
-        let mut secs: f64 = 0.0;
-        let mut size = 8u32;
-        unsafe {
-            AudioUnitGetProperty(
-                self.inst.unit,
-                kAudioUnitProperty_Latency,
-                kAudioUnitScope_Global,
-                0,
-                NonNull::new_unchecked(&mut secs as *mut f64 as *mut c_void),
-                NonNull::from(&mut size),
-            );
-        }
-        (secs * self.inst.sample_rate) as u32
+        self.inst.read_audio_props();
+        self.inst.latency_frames.load(Ordering::Relaxed)
     }
 }
 
@@ -773,6 +881,10 @@ impl Drop for AuHandle {
 pub struct AuProcessor {
     inst: Arc<AuInstance>,
     input: Box<InputData>,
+    /// Where the key input is read from, when the unit has one.
+    sidechain: Option<Box<InputData>>,
+    /// Output buses past the main one.
+    aux_buses: usize,
     output: [Vec<f32>; 2],
     pending: Vec<(u32, f32)>,
     is_effect: bool,
@@ -798,12 +910,27 @@ impl Processor for AuProcessor {
         timing.numerator.set(t.time_signature.numerator as u32);
         timing.denominator.set(t.time_signature.denominator as u32);
         timing.sample_pos.set(t.sample_pos as f64);
+        let (cycle_start, cycle_end) = t.loop_range.unwrap_or((0.0, 0.0));
+        timing.cycling.set(t.loop_range.is_some());
+        timing.cycle_start.set(cycle_start / rlive_core::PPQ as f64);
+        timing.cycle_end.set(cycle_end / rlive_core::PPQ as f64);
 
         unsafe {
             for &(id, v) in &self.pending {
                 AudioUnitSetParameter(unit, id, kAudioUnitScope_Global, 0, v, 0);
             }
             self.pending.clear();
+            let last = frames.saturating_sub(1) as u32;
+            for e in ctx.params {
+                AudioUnitSetParameter(
+                    unit,
+                    e.id.0,
+                    kAudioUnitScope_Global,
+                    0,
+                    e.value as f32,
+                    e.offset.min(last),
+                );
+            }
             if !self.is_effect {
                 for e in ctx.events {
                     let (bytes, _) = e.message.to_bytes();
@@ -829,6 +956,15 @@ impl Processor for AuProcessor {
         if self.is_effect {
             self.input.left[..frames].copy_from_slice(left);
             self.input.right[..frames].copy_from_slice(right);
+        }
+        if let Some(key) = self.sidechain.as_mut() {
+            key.left[..frames].fill(0.0);
+            key.right[..frames].fill(0.0);
+            if let Some(sc) = &ctx.sidechain {
+                let n = frames.min(sc.frames());
+                key.left[..n].copy_from_slice(&sc.left[..n]);
+                key.right[..n].copy_from_slice(&sc.right[..n]);
+            }
         }
         let mut list = StereoBufferList {
             number_buffers: 2,
@@ -881,6 +1017,37 @@ impl Processor for AuProcessor {
                 right[i] += out_r[i];
             }
         }
+        for (i, aux) in ctx.aux_out.iter_mut().take(self.aux_buses).enumerate() {
+            let n = frames.min(aux.frames());
+            let mut list = StereoBufferList {
+                number_buffers: 2,
+                buffers: [
+                    AudioBuffer {
+                        mNumberChannels: 1,
+                        mDataByteSize: (n * 4) as u32,
+                        mData: aux.left.as_mut_ptr() as *mut c_void,
+                    },
+                    AudioBuffer {
+                        mNumberChannels: 1,
+                        mDataByteSize: (n * 4) as u32,
+                        mData: aux.right.as_mut_ptr() as *mut c_void,
+                    },
+                ],
+            };
+            let mut flags = AudioUnitRenderActionFlags(0);
+            unsafe {
+                AudioUnitRender(
+                    unit,
+                    &mut flags,
+                    NonNull::from(&mut ts),
+                    i as u32 + 1,
+                    n as u32,
+                    NonNull::new_unchecked(
+                        &mut list as *mut StereoBufferList as *mut AudioBufferList,
+                    ),
+                );
+            }
+        }
     }
 
     fn set_param(&mut self, id: u32, value: f64) {
@@ -893,6 +1060,14 @@ impl Processor for AuProcessor {
         unsafe {
             AudioUnitReset(self.inst.unit, kAudioUnitScope_Global, 0);
         }
+    }
+
+    fn latency(&self) -> u32 {
+        self.inst.latency_frames.load(Ordering::Relaxed)
+    }
+
+    fn tail(&self) -> Tail {
+        Tail::from_samples(self.inst.tail_frames.load(Ordering::Relaxed))
     }
 }
 
@@ -918,6 +1093,8 @@ mod tests {
         assert!(!inst.handle.params().is_empty());
         let transport = rlive_core::TransportInfo::default();
         let mut q = rlive_core::ParamOutQueue::with_capacity(8);
+        let mut events_out = rlive_core::EventQueue::with_capacity(0);
+        let view = rlive_core::ViewWriter::none();
         let mut l = vec![0.5f32; 512];
         let mut r = vec![0.5f32; 512];
         inst.processor.process(&mut ProcessContext {
@@ -925,9 +1102,15 @@ mod tests {
                 left: &mut l,
                 right: &mut r,
             },
+            sidechain: None,
+            aux_out: &mut [],
             events: &[],
+            events_out: &mut events_out,
+            params: &[],
             transport: &transport,
             param_out: &mut q,
+            mod_out: &mut [],
+            view: &view,
         });
         assert!(l.iter().all(|s| s.is_finite()));
         let state = inst.handle.save_state().expect("AU state");

@@ -1,5 +1,6 @@
 use rlive_core::{
-    AudioBuffer, MidiEvent, MidiMessage, ParamOutQueue, ProcessContext, Processor, TransportInfo,
+    AudioBuffer, EventQueue, MidiEvent, MidiMessage, ParamOutQueue, ProcessContext, Processor,
+    TransportInfo, ViewWriter,
 };
 use rlive_devices::*;
 use std::sync::Arc;
@@ -34,7 +35,7 @@ fn every_builtin_processes_finite_audio() {
         let mut p = (info.create)(&DeviceInit::default());
         p.activate(SR, BLOCK);
         // Defaults must be valid param values.
-        for param in (info.params)() {
+        for param in (info.desc)().params {
             assert!(
                 param.default >= param.min && param.default <= param.max,
                 "{} {}",
@@ -119,6 +120,8 @@ fn delay_echoes() {
     // Impulse then silence.
     let transport = TransportInfo::default();
     let mut q = ParamOutQueue::with_capacity(4);
+    let mut events_out = EventQueue::with_capacity(0);
+    let view = ViewWriter::none();
     let mut l = vec![0.0; 9600];
     let mut r = vec![0.0; 9600];
     l[0] = 1.0;
@@ -128,9 +131,15 @@ fn delay_echoes() {
             left: &mut l,
             right: &mut r,
         },
+        sidechain: None,
+        aux_out: &mut [],
         events: &[],
+        events_out: &mut events_out,
+        params: &[],
         transport: &transport,
         param_out: &mut q,
+        mod_out: &mut [],
+        view: &view,
     });
     let peak = l
         .iter()

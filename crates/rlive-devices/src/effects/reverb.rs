@@ -1,6 +1,6 @@
 use super::defaults;
 use crate::dsp::DelayLine;
-use rlive_core::{ParamInfo, ProcessContext, Processor};
+use rlive_core::{AudioBuffer, BlockStep, ParamInfo, ProcessContext, Processor, Tail};
 
 // ---------------------------------------------------------------- Reverb (Freeverb)
 
@@ -79,6 +79,43 @@ impl Default for Reverb {
     }
 }
 
+impl Reverb {
+    fn render(&mut self, audio: AudioBuffer) {
+        if self.combs[0].is_empty() {
+            return;
+        }
+        let feedback = 0.7 + self.v[SIZE as usize] as f32 * 0.28;
+        let damp = self.v[DAMPING as usize] as f32 * 0.4;
+        let width = self.v[WIDTH as usize] as f32;
+        let mix = self.v[MIX as usize] as f32;
+        let pre = (self.v[PREDELAY as usize] as f32 * 0.001 * self.sr).max(1.0);
+        let wet1 = width / 2.0 + 0.5;
+        let wet2 = (1.0 - width) / 2.0;
+        let (left, right) = (&mut *audio.left, &mut *audio.right);
+        for i in 0..left.len() {
+            let (inl, inr) = (left[i], right[i]);
+            let input = (inl + inr) * 0.015;
+            self.predelay[0].write(input);
+            let x = self.predelay[0].read(pre);
+            let mut out = [0f32; 2];
+            for (ch, o) in out.iter_mut().enumerate() {
+                let mut acc = 0.0;
+                for c in self.combs[ch].iter_mut() {
+                    acc += c.process(x, feedback, damp);
+                }
+                for a in self.allpasses[ch].iter_mut() {
+                    acc = a.process(acc);
+                }
+                *o = acc;
+            }
+            let wl = out[0] * wet1 + out[1] * wet2;
+            let wr = out[1] * wet1 + out[0] * wet2;
+            left[i] = inl * (1.0 - mix) + wl * mix;
+            right[i] = inr * (1.0 - mix) + wr * mix;
+        }
+    }
+}
+
 impl Processor for Reverb {
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.sr = sample_rate as f32;
@@ -105,38 +142,11 @@ impl Processor for Reverb {
     }
 
     fn process(&mut self, ctx: &mut ProcessContext) {
-        if self.combs[0].is_empty() {
-            return;
-        }
-        let feedback = 0.7 + self.v[SIZE as usize] as f32 * 0.28;
-        let damp = self.v[DAMPING as usize] as f32 * 0.4;
-        let width = self.v[WIDTH as usize] as f32;
-        let mix = self.v[MIX as usize] as f32;
-        let pre = (self.v[PREDELAY as usize] as f32 * 0.001 * self.sr).max(1.0);
-        let wet1 = width / 2.0 + 0.5;
-        let wet2 = (1.0 - width) / 2.0;
-        let (left, right) = (&mut *ctx.audio.left, &mut *ctx.audio.right);
-        for i in 0..left.len() {
-            let (inl, inr) = (left[i], right[i]);
-            let input = (inl + inr) * 0.015;
-            self.predelay[0].write(input);
-            let x = self.predelay[0].read(pre);
-            let mut out = [0f32; 2];
-            for (ch, o) in out.iter_mut().enumerate() {
-                let mut acc = 0.0;
-                for c in self.combs[ch].iter_mut() {
-                    acc += c.process(x, feedback, damp);
-                }
-                for a in self.allpasses[ch].iter_mut() {
-                    acc = a.process(acc);
-                }
-                *o = acc;
-            }
-            let wl = out[0] * wet1 + out[1] * wet2;
-            let wr = out[1] * wet1 + out[0] * wet2;
-            left[i] = inl * (1.0 - mix) + wl * mix;
-            right[i] = inr * (1.0 - mix) + wr * mix;
-        }
+        ctx.for_each_step(|step| match step {
+            BlockStep::Param { id, value } => self.set_param(id, value),
+            BlockStep::Audio(audio) => self.render(audio),
+            BlockStep::Midi(_) => {}
+        });
     }
 
     fn set_param(&mut self, id: u32, value: f64) {
@@ -156,5 +166,9 @@ impl Processor for Reverb {
             }
             self.predelay[ch].clear();
         }
+    }
+
+    fn tail(&self) -> Tail {
+        Tail::Infinite
     }
 }

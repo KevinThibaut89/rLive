@@ -1,7 +1,7 @@
 //! The parameter bus end to end: resolving inside blocks, gain timing and modulation.
 
 use rlive_core::param::mixer;
-use rlive_core::{DeviceId, ModMode, ParamInfo, ProcessContext, Processor, TrackId};
+use rlive_core::{BlockStep, DeviceId, ModMode, ParamInfo, ProcessContext, Processor, TrackId};
 use rlive_engine::*;
 use rlive_testkit::assert_no_alloc;
 use std::sync::{Arc, Mutex};
@@ -34,27 +34,34 @@ enum Seen {
 impl Processor for Probe {
     fn activate(&mut self, _: f64, _: usize) {}
     fn process(&mut self, ctx: &mut ProcessContext) {
-        let len = ctx.audio.left.len();
-        self.log.lock().unwrap().push(Seen::Block {
-            frame: self.frames,
-            len,
-            sample_pos: ctx.transport.sample_pos,
+        let sample_pos = ctx.transport.sample_pos;
+        ctx.for_each_step(|step| match step {
+            BlockStep::Audio(audio) => {
+                let len = audio.left.len();
+                self.log.lock().unwrap().push(Seen::Block {
+                    frame: self.frames,
+                    len,
+                    sample_pos,
+                });
+                for s in audio.left.iter_mut().chain(audio.right.iter_mut()) {
+                    *s += self.level;
+                }
+                self.frames += len as u64;
+            }
+            BlockStep::Param { id, value } => {
+                self.log.lock().unwrap().push(Seen::Param {
+                    frame: self.frames,
+                    id,
+                    value,
+                });
+                if id == 0 {
+                    self.level = value as f32;
+                }
+            }
+            BlockStep::Midi(_) => {}
         });
-        for s in ctx.audio.left.iter_mut().chain(ctx.audio.right.iter_mut()) {
-            *s += self.level;
-        }
-        self.frames += len as u64;
     }
-    fn set_param(&mut self, id: u32, value: f64) {
-        self.log.lock().unwrap().push(Seen::Param {
-            frame: self.frames,
-            id,
-            value,
-        });
-        if id == 0 {
-            self.level = value as f32;
-        }
-    }
+    fn set_param(&mut self, _: u32, _: f64) {}
     fn reset(&mut self) {
         self.log.lock().unwrap().push(Seen::Reset);
     }
@@ -589,11 +596,12 @@ fn a_plugin_changing_a_param_is_reported_and_not_echoed_back() {
     impl Processor for SelfMoving {
         fn activate(&mut self, _: f64, _: usize) {}
         fn process(&mut self, ctx: &mut ProcessContext) {
+            for e in ctx.params {
+                self.delivered.lock().unwrap().push(e.value);
+            }
             ctx.param_out.push(0, self.value);
         }
-        fn set_param(&mut self, _: u32, value: f64) {
-            self.delivered.lock().unwrap().push(value);
-        }
+        fn set_param(&mut self, _: u32, _: f64) {}
     }
 
     let (mut engine, mut h) = create_engine(SR, BLOCK);

@@ -1,6 +1,8 @@
 //! End-to-end VST3 hosting test against the `rlive-test-vst3` fixture plugin.
 
-use rlive_core::{AudioBuffer, ParamOutQueue, PluginFormat, ProcessContext, TransportInfo};
+use rlive_core::{
+    AudioBuffer, EventQueue, ParamOutQueue, PluginFormat, ProcessContext, TransportInfo, ViewWriter,
+};
 use rlive_plugin_host::{instantiate, scanner};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,6 +45,8 @@ fn fixture() -> PathBuf {
 fn process(p: &mut dyn rlive_core::Processor, input: f32) -> Vec<f32> {
     let transport = TransportInfo::default();
     let mut q = ParamOutQueue::with_capacity(16);
+    let mut events_out = EventQueue::with_capacity(0);
+    let view = ViewWriter::none();
     let mut l = vec![input; 256];
     let mut r = vec![input; 256];
     p.process(&mut ProcessContext {
@@ -50,9 +54,15 @@ fn process(p: &mut dyn rlive_core::Processor, input: f32) -> Vec<f32> {
             left: &mut l,
             right: &mut r,
         },
+        sidechain: None,
+        aux_out: &mut [],
         events: &[],
+        events_out: &mut events_out,
+        params: &[],
         transport: &transport,
         param_out: &mut q,
+        mod_out: &mut [],
+        view: &view,
     });
     l
 }

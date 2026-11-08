@@ -14,6 +14,7 @@ use clap_sys::ext::log::*;
 use clap_sys::ext::note_ports::*;
 use clap_sys::ext::params::*;
 use clap_sys::ext::state::*;
+use clap_sys::ext::tail::*;
 use clap_sys::ext::thread_check::*;
 use clap_sys::factory::plugin_factory::*;
 use clap_sys::fixedpoint::{CLAP_BEATTIME_FACTOR, CLAP_SECTIME_FACTOR};
@@ -23,12 +24,12 @@ use clap_sys::process::clap_process;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
 use rlive_core::{
-    MidiMessage, ParamFlags, ParamInfo, ParamKind, ParamOutQueue, PluginFormat, ProcessContext,
-    Processor,
+    MidiEvent, MidiMessage, ParamFlags, ParamInfo, ParamKind, ParamOutQueue, PluginFormat,
+    ProcessContext, Processor, Tail,
 };
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::ThreadId;
 
@@ -162,6 +163,7 @@ struct HostData {
     restart_requested: AtomicBool,
     params_rescan: AtomicBool,
     latency_changed: AtomicBool,
+    tail_changed: AtomicBool,
     gui_closed: AtomicBool,
     resize_request: Mutex<Option<(u32, u32)>>,
 }
@@ -188,6 +190,8 @@ unsafe extern "C" fn host_get_extension(
         &HOST_STATE as *const _ as *const c_void
     } else if id == CLAP_EXT_LATENCY {
         &HOST_LATENCY as *const _ as *const c_void
+    } else if id == CLAP_EXT_TAIL {
+        &HOST_TAIL as *const _ as *const c_void
     } else if id == CLAP_EXT_GUI {
         &HOST_GUI as *const _ as *const c_void
     } else if id == CLAP_EXT_AUDIO_PORTS {
@@ -260,6 +264,10 @@ unsafe extern "C" fn host_latency_changed(host: *const clap_host) {
         .store(true, Ordering::Release);
 }
 
+unsafe extern "C" fn host_tail_changed(host: *const clap_host) {
+    host_data(host).tail_changed.store(true, Ordering::Release);
+}
+
 unsafe extern "C" fn host_gui_resize_hints_changed(_host: *const clap_host) {}
 
 unsafe extern "C" fn host_gui_request_resize(host: *const clap_host, w: u32, h: u32) -> bool {
@@ -318,6 +326,9 @@ static HOST_STATE: clap_host_state = clap_host_state {
 static HOST_LATENCY: clap_host_latency = clap_host_latency {
     changed: Some(host_latency_changed),
 };
+static HOST_TAIL: clap_host_tail = clap_host_tail {
+    changed: Some(host_tail_changed),
+};
 static HOST_GUI: clap_host_gui = clap_host_gui {
     resize_hints_changed: Some(host_gui_resize_hints_changed),
     request_resize: Some(host_gui_request_resize),
@@ -347,6 +358,11 @@ struct ClapInstance {
     state: *const clap_plugin_state,
     gui: *const clap_plugin_gui,
     latency: *const clap_plugin_latency,
+    tail: *const clap_plugin_tail,
+    /// Latency in frames, as last read on the main thread.
+    latency_frames: AtomicU32,
+    /// Tail in frames, in CLAP's encoding, as last read on the main thread.
+    tail_frames: AtomicU32,
     activated: AtomicBool,
     // Kept alive for as long as the plugin exists.
     host: Box<clap_host>,
@@ -358,6 +374,23 @@ unsafe impl Send for ClapInstance {}
 unsafe impl Sync for ClapInstance {}
 
 impl ClapInstance {
+    /// Read the latency and tail. Main thread only, while activated.
+    fn read_audio_props(&self) {
+        let (plugin, latency, tail) = (self.plugin, self.latency, self.tail);
+        let frames = if latency.is_null() {
+            0
+        } else {
+            unsafe { (*latency).get.map_or(0, |g| g(plugin)) }
+        };
+        self.latency_frames.store(frames, Ordering::Relaxed);
+        let frames = if tail.is_null() {
+            0
+        } else {
+            unsafe { (*tail).get.map_or(0, |g| g(plugin)) }
+        };
+        self.tail_frames.store(frames, Ordering::Relaxed);
+    }
+
     unsafe fn ext<T>(plugin: *const clap_plugin, id: &CStr) -> *const T {
         match (*plugin).get_extension {
             Some(get) => get(plugin, id.as_ptr()) as *const T,
@@ -437,6 +470,7 @@ pub fn instantiate(
         restart_requested: AtomicBool::new(false),
         params_rescan: AtomicBool::new(false),
         latency_changed: AtomicBool::new(false),
+        tail_changed: AtomicBool::new(false),
         gui_closed: AtomicBool::new(false),
         resize_request: Mutex::new(None),
     });
@@ -480,6 +514,9 @@ pub fn instantiate(
             state: ClapInstance::ext(plugin, CLAP_EXT_STATE),
             gui: ClapInstance::ext(plugin, CLAP_EXT_GUI),
             latency: ClapInstance::ext(plugin, CLAP_EXT_LATENCY),
+            tail: ClapInstance::ext(plugin, CLAP_EXT_TAIL),
+            latency_frames: AtomicU32::new(0),
+            tail_frames: AtomicU32::new(0),
             activated: AtomicBool::new(false),
             host,
             host_data,
@@ -500,6 +537,7 @@ pub fn instantiate(
         return Err(HostError::Activate(desc.name.clone()));
     }
     inst.activated.store(true, Ordering::Release);
+    inst.read_audio_props();
 
     let processor = ClapProcessor::new(
         inst.clone(),
@@ -808,7 +846,11 @@ impl PluginHandle for ClapHandle {
         if hd.restart_requested.swap(false, Ordering::AcqRel) {
             out.push(HostNotification::RestartRequested);
         }
-        if hd.latency_changed.swap(false, Ordering::AcqRel) {
+        let latency_changed = hd.latency_changed.swap(false, Ordering::AcqRel);
+        if latency_changed || hd.tail_changed.swap(false, Ordering::AcqRel) {
+            self.inst.read_audio_props();
+        }
+        if latency_changed {
             out.push(HostNotification::LatencyChanged);
         }
         let resize = hd.resize_request.lock().unwrap().take();
@@ -835,11 +877,8 @@ impl PluginHandle for ClapHandle {
     }
 
     fn latency(&self) -> u32 {
-        let ext = self.inst.latency;
-        if ext.is_null() {
-            return 0;
-        }
-        unsafe { (*ext).get.map_or(0, |g| g(self.inst.plugin)) }
+        self.inst.read_audio_props();
+        self.inst.latency_frames.load(Ordering::Relaxed)
     }
 }
 
@@ -965,6 +1004,69 @@ impl ClapProcessor {
         }
     }
 
+    /// Queue a parameter change. If this block's event list is full it goes to the next block,
+    /// because the value must reach the plugin even if its timing can't.
+    fn push_param(&mut self, time: u32, id: u32, value: f64) {
+        if self.events.len() < self.events.capacity() {
+            self.push(ClapEvent {
+                param: clap_event_param_value {
+                    header: Self::header::<clap_event_param_value>(time, CLAP_EVENT_PARAM_VALUE),
+                    param_id: id,
+                    cookie: std::ptr::null_mut(),
+                    note_id: -1,
+                    port_index: -1,
+                    channel: -1,
+                    key: -1,
+                    value,
+                },
+            });
+        } else {
+            self.defer_param(id, value);
+        }
+    }
+
+    fn defer_param(&mut self, id: u32, value: f64) {
+        if let Some(e) = self.pending_params.iter_mut().find(|(i, _)| *i == id) {
+            e.1 = value;
+        } else if self.pending_params.len() < self.pending_params.capacity() {
+            self.pending_params.push((id, value));
+        }
+    }
+
+    fn push_note(&mut self, time: u32, event: &MidiEvent) {
+        match event.message {
+            MidiMessage::NoteOn {
+                channel,
+                key,
+                velocity,
+            } if !self.midi_notes => self.push(ClapEvent {
+                note: clap_event_note {
+                    header: Self::header::<clap_event_note>(time, CLAP_EVENT_NOTE_ON),
+                    note_id: -1,
+                    port_index: 0,
+                    channel: channel as i16,
+                    key: key as i16,
+                    velocity: velocity as f64,
+                },
+            }),
+            MidiMessage::NoteOff {
+                channel,
+                key,
+                velocity,
+            } if !self.midi_notes => self.push(ClapEvent {
+                note: clap_event_note {
+                    header: Self::header::<clap_event_note>(time, CLAP_EVENT_NOTE_OFF),
+                    note_id: -1,
+                    port_index: 0,
+                    channel: channel as i16,
+                    key: key as i16,
+                    velocity: velocity as f64,
+                },
+            }),
+            ref m => self.push_midi(time, m),
+        }
+    }
+
     fn push_midi(&mut self, time: u32, msg: &MidiMessage) {
         let (bytes, _) = msg.to_bytes();
         self.push(ClapEvent {
@@ -1021,62 +1123,37 @@ impl Processor for ClapProcessor {
         }
 
         self.events.clear();
+        // Never fuller than the list, so nothing here gets deferred.
         for i in 0..self.pending_params.len() {
             let (id, value) = self.pending_params[i];
-            self.push(ClapEvent {
-                param: clap_event_param_value {
-                    header: Self::header::<clap_event_param_value>(0, CLAP_EVENT_PARAM_VALUE),
-                    param_id: id,
-                    cookie: std::ptr::null_mut(),
-                    note_id: -1,
-                    port_index: -1,
-                    channel: -1,
-                    key: -1,
-                    value,
-                },
-            });
+            self.push_param(0, id, value);
         }
         self.pending_params.clear();
-        for e in ctx.events {
-            let time = e.offset.min(frames.saturating_sub(1) as u32);
-            match e.message {
-                MidiMessage::NoteOn {
-                    channel,
-                    key,
-                    velocity,
-                } if !self.midi_notes => self.push(ClapEvent {
-                    note: clap_event_note {
-                        header: Self::header::<clap_event_note>(time, CLAP_EVENT_NOTE_ON),
-                        note_id: -1,
-                        port_index: 0,
-                        channel: channel as i16,
-                        key: key as i16,
-                        velocity: velocity as f64,
-                    },
-                }),
-                MidiMessage::NoteOff {
-                    channel,
-                    key,
-                    velocity,
-                } if !self.midi_notes => self.push(ClapEvent {
-                    note: clap_event_note {
-                        header: Self::header::<clap_event_note>(time, CLAP_EVENT_NOTE_OFF),
-                        note_id: -1,
-                        port_index: 0,
-                        channel: channel as i16,
-                        key: key as i16,
-                        velocity: velocity as f64,
-                    },
-                }),
-                ref m => self.push_midi(time, m),
+        let last = frames.saturating_sub(1) as u32;
+        let (mut next_param, mut next_event) = (0, 0);
+        // CLAP needs events in time order, so merge the parameter and MIDI streams.
+        loop {
+            match (ctx.params.get(next_param), ctx.events.get(next_event)) {
+                (Some(p), e) if e.is_none_or(|e| p.offset <= e.offset) => {
+                    self.push_param(p.offset.min(last), p.id.0, p.value);
+                    next_param += 1;
+                }
+                (_, Some(e)) => {
+                    self.push_note(e.offset.min(last), e);
+                    next_event += 1;
+                }
+                _ => break,
             }
         }
 
         let t = ctx.transport;
         let beats = t.beats();
         let seconds = t.sample_pos as f64 / t.sample_rate;
-        let bar_beats = t.time_signature.ticks_per_bar() as f64 / rlive_core::PPQ as f64;
-        let bar = (beats / bar_beats).floor();
+        let ppq = rlive_core::PPQ as f64;
+        let bar_beats = t.time_signature.ticks_per_bar() as f64 / ppq;
+        let bar = t.bar_start / ppq / bar_beats;
+        let (loop_start, loop_end) = t.loop_range.unwrap_or((0.0, 0.0));
+        let to_seconds = |ticks: f64| ticks / t.ticks_per_sample() / t.sample_rate;
         self.transport = clap_event_transport {
             header: Self::header::<clap_event_transport>(0, CLAP_EVENT_TRANSPORT),
             flags: CLAP_TRANSPORT_HAS_TEMPO
@@ -1087,16 +1164,21 @@ impl Processor for ClapProcessor {
                     CLAP_TRANSPORT_IS_PLAYING
                 } else {
                     0
+                }
+                | if t.loop_range.is_some() {
+                    CLAP_TRANSPORT_IS_LOOP_ACTIVE
+                } else {
+                    0
                 },
             song_pos_beats: (beats * CLAP_BEATTIME_FACTOR as f64) as i64,
             song_pos_seconds: (seconds * CLAP_SECTIME_FACTOR as f64) as i64,
             tempo: t.tempo,
             tempo_inc: 0.0,
-            loop_start_beats: 0,
-            loop_end_beats: 0,
-            loop_start_seconds: 0,
-            loop_end_seconds: 0,
-            bar_start: (bar * bar_beats * CLAP_BEATTIME_FACTOR as f64) as i64,
+            loop_start_beats: (loop_start / ppq * CLAP_BEATTIME_FACTOR as f64) as i64,
+            loop_end_beats: (loop_end / ppq * CLAP_BEATTIME_FACTOR as f64) as i64,
+            loop_start_seconds: (to_seconds(loop_start) * CLAP_SECTIME_FACTOR as f64) as i64,
+            loop_end_seconds: (to_seconds(loop_end) * CLAP_SECTIME_FACTOR as f64) as i64,
+            bar_start: (t.bar_start / ppq * CLAP_BEATTIME_FACTOR as f64) as i64,
             bar_number: bar as i32,
             tsig_num: t.time_signature.numerator as u16,
             tsig_denom: t.time_signature.denominator as u16,
@@ -1109,6 +1191,10 @@ impl Processor for ClapProcessor {
         }
         for p in self.inputs.iter_mut().skip(1) {
             p.clear(frames);
+        }
+        if let (Some(sc), Some(port)) = (&ctx.sidechain, self.inputs.get_mut(1)) {
+            let n = frames.min(sc.frames());
+            port.load_stereo(&sc.left[..n], &sc.right[..n]);
         }
         for p in self.outputs.iter_mut() {
             p.clear(frames);
@@ -1143,14 +1229,14 @@ impl Processor for ClapProcessor {
         if let Some(main) = self.outputs.first() {
             main.store_stereo(left, right, self.is_instrument);
         }
+        for (port, aux) in self.outputs.iter().skip(1).zip(ctx.aux_out.iter_mut()) {
+            let n = frames.min(aux.frames());
+            port.store_stereo(&mut aux.left[..n], &mut aux.right[..n], false);
+        }
     }
 
     fn set_param(&mut self, id: u32, value: f64) {
-        if let Some(e) = self.pending_params.iter_mut().find(|(i, _)| *i == id) {
-            e.1 = value;
-        } else if self.pending_params.len() < self.pending_params.capacity() {
-            self.pending_params.push((id, value));
-        }
+        self.defer_param(id, value);
     }
 
     fn stop_processing(&mut self) {
@@ -1173,8 +1259,11 @@ impl Processor for ClapProcessor {
     }
 
     fn latency(&self) -> u32 {
-        // Latency is read on the main thread via the handle.
-        0
+        self.inst.latency_frames.load(Ordering::Relaxed)
+    }
+
+    fn tail(&self) -> Tail {
+        Tail::from_samples(self.inst.tail_frames.load(Ordering::Relaxed))
     }
 }
 

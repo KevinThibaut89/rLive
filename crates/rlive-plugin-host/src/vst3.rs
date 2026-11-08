@@ -5,13 +5,13 @@ use crate::{
     PluginInstance, PortBuffers, Result,
 };
 use rlive_core::{
-    MidiMessage, ParamFlags, ParamInfo, ParamKind, PluginFormat, ProcessContext, Processor,
+    MidiMessage, ParamFlags, ParamInfo, ParamKind, PluginFormat, ProcessContext, Processor, Tail,
 };
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
@@ -594,12 +594,12 @@ unsafe impl Send for ParamChanges {}
 unsafe impl Sync for ParamChanges {}
 
 impl ParamChanges {
-    fn new(capacity: usize) -> Self {
+    fn new(capacity: usize, points: usize) -> Self {
         let queues: Vec<_> = (0..capacity)
             .map(|_| {
                 ComWrapper::new(ParamQueue {
                     id: Cell::new(0),
-                    points: UnsafeCell::new(Vec::with_capacity(16)),
+                    points: UnsafeCell::new(Vec::with_capacity(points)),
                 })
             })
             .collect();
@@ -614,19 +614,28 @@ impl ParamChanges {
         }
     }
 
+    /// Queue a change. If the parameter's points are full, the last point takes the value: its
+    /// timing is off, but the final value still reaches the plugin.
+    fn add_or_merge(&self, id: ParamID, offset: i32, value: f64) {
+        let mut index = 0;
+        let q = unsafe { self.addParameterData(&id, &mut index) };
+        if q.is_null() {
+            return;
+        }
+        let queue = &self.queues[index as usize];
+        let added = unsafe { queue.addPoint(offset, value, std::ptr::null_mut()) };
+        if added != kResultOk {
+            if let Some(last) = unsafe { (&mut *queue.points.get()).last_mut() } {
+                last.1 = value;
+            }
+        }
+    }
+
     fn clear(&self) {
         for q in &self.queues[..self.used.get()] {
             unsafe { (*q.points.get()).clear() };
         }
         self.used.set(0);
-    }
-
-    fn add(&self, id: ParamID, offset: i32, value: f64) {
-        let mut index = 0;
-        let q = unsafe { self.addParameterData(&id, &mut index) };
-        if !q.is_null() {
-            unsafe { self.queues[index as usize].addPoint(offset, value, std::ptr::null_mut()) };
-        }
     }
 }
 
@@ -710,6 +719,9 @@ struct Vst3Instance {
     controller: Option<ComPtr<IEditController>>,
     separate_controller: bool,
     connections: Option<(ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>)>,
+    /// Latency and tail in frames, as last read on the main thread.
+    latency_frames: AtomicU32,
+    tail_frames: AtomicU32,
     _host: ComWrapper<HostApplication>,
     _handler: ComWrapper<ComponentHandler>,
     _lib: Arc<VstLibrary>,
@@ -733,6 +745,18 @@ impl Drop for Vst3Instance {
                 }
             }
             self.component.terminate();
+        }
+    }
+}
+
+impl Vst3Instance {
+    /// Read the latency and tail. Main thread only.
+    fn read_audio_props(&self) {
+        unsafe {
+            self.latency_frames
+                .store(self.processor.getLatencySamples(), Ordering::Relaxed);
+            self.tail_frames
+                .store(self.processor.getTailSamples(), Ordering::Relaxed);
         }
     }
 }
@@ -924,10 +948,13 @@ pub fn instantiate(
             controller,
             separate_controller: separate,
             connections,
+            latency_frames: AtomicU32::new(0),
+            tail_frames: AtomicU32::new(0),
             _host: host,
             _handler: handler,
             _lib: lib,
         });
+        inst.read_audio_props();
         let proc_ = Vst3Processor::new(inst.clone(), &inputs, &outputs, max_block, sample_rate);
         let mut handle = Vst3Handle {
             inst,
@@ -1174,6 +1201,7 @@ impl PluginHandle for Vst3Handle {
             out.push(HostNotification::ParamsRescanned);
         }
         if flags & RestartFlags_::kLatencyChanged != 0 {
+            self.inst.read_audio_props();
             out.push(HostNotification::LatencyChanged);
         }
         if flags & (RestartFlags_::kReloadComponent | RestartFlags_::kIoChanged) != 0 {
@@ -1199,7 +1227,8 @@ impl PluginHandle for Vst3Handle {
     }
 
     fn latency(&self) -> u32 {
-        unsafe { self.inst.processor.getLatencySamples() }
+        self.inst.read_audio_props();
+        self.inst.latency_frames.load(Ordering::Relaxed)
     }
 }
 
@@ -1257,8 +1286,10 @@ impl Vst3Processor {
         };
         let in_buses = inputs.iter_mut().map(mk).collect();
         let out_buses = outputs.iter_mut().map(mk).collect();
-        let in_changes = ComWrapper::new(ParamChanges::new(128));
-        let out_changes = ComWrapper::new(ParamChanges::new(128));
+        // Enough points for a change at every control step of the longest block.
+        let points = (max_block / 16).max(16);
+        let in_changes = ComWrapper::new(ParamChanges::new(512, points));
+        let out_changes = ComWrapper::new(ParamChanges::new(128, 16));
         let events = ComWrapper::new(EventList {
             events: UnsafeCell::new(Vec::with_capacity(1024)),
         });
@@ -1305,6 +1336,11 @@ impl Processor for Vst3Processor {
         }
 
         self.out_changes.clear();
+        let last = frames.saturating_sub(1) as u32;
+        for e in ctx.params {
+            self.in_changes
+                .add_or_merge(e.id.0, e.offset.min(last) as int32, e.value);
+        }
         let events = unsafe { &mut *self.events.events.get() };
         events.clear();
         for e in ctx.events {
@@ -1353,15 +1389,23 @@ impl Processor for Vst3Processor {
 
         let t = ctx.transport;
         let beats = t.beats();
-        let bar_beats = t.time_signature.ticks_per_bar() as f64 / rlive_core::PPQ as f64;
+        let ppq = rlive_core::PPQ as f64;
         use ProcessContext_::StatesAndFlags_ as F;
         self.context.state =
             (F::kTempoValid | F::kTimeSigValid | F::kProjectTimeMusicValid | F::kBarPositionValid)
-                | if t.playing { F::kPlaying } else { 0 };
+                | if t.playing { F::kPlaying } else { 0 }
+                | if t.loop_range.is_some() {
+                    F::kCycleValid | F::kCycleActive
+                } else {
+                    0
+                };
         self.context.sampleRate = t.sample_rate;
         self.context.projectTimeSamples = t.sample_pos as i64;
         self.context.projectTimeMusic = beats;
-        self.context.barPositionMusic = (beats / bar_beats).floor() * bar_beats;
+        self.context.barPositionMusic = t.bar_start / ppq;
+        let (cycle_start, cycle_end) = t.loop_range.unwrap_or((0.0, 0.0));
+        self.context.cycleStartMusic = cycle_start / ppq;
+        self.context.cycleEndMusic = cycle_end / ppq;
         self.context.tempo = t.tempo;
         self.context.timeSigNumerator = t.time_signature.numerator as i32;
         self.context.timeSigDenominator = t.time_signature.denominator as i32;
@@ -1373,6 +1417,10 @@ impl Processor for Vst3Processor {
         }
         for p in self.inputs.iter_mut().skip(1) {
             p.clear(frames);
+        }
+        if let (Some(sc), Some(port)) = (&ctx.sidechain, self.inputs.get_mut(1)) {
+            let n = frames.min(sc.frames());
+            port.load_stereo(&sc.left[..n], &sc.right[..n]);
         }
         for p in self.outputs.iter_mut() {
             p.clear(frames);
@@ -1404,10 +1452,14 @@ impl Processor for Vst3Processor {
         if let Some(main) = self.outputs.first() {
             main.store_stereo(left, right, self.is_instrument);
         }
+        for (port, aux) in self.outputs.iter().skip(1).zip(ctx.aux_out.iter_mut()) {
+            let n = frames.min(aux.frames());
+            port.store_stereo(&mut aux.left[..n], &mut aux.right[..n], false);
+        }
     }
 
     fn set_param(&mut self, id: u32, value: f64) {
-        self.in_changes.add(id, 0, value);
+        self.in_changes.add_or_merge(id, 0, value);
     }
 
     fn stop_processing(&mut self) {
@@ -1418,7 +1470,11 @@ impl Processor for Vst3Processor {
     }
 
     fn latency(&self) -> u32 {
-        0
+        self.inst.latency_frames.load(Ordering::Relaxed)
+    }
+
+    fn tail(&self) -> Tail {
+        Tail::from_samples(self.inst.tail_frames.load(Ordering::Relaxed))
     }
 }
 

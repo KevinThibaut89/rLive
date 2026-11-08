@@ -295,7 +295,14 @@ impl Session {
                 }
                 HostNotification::ParamsRescanned => self.refit_device_cells(chain, id),
                 HostNotification::RestartRequested => self.reload_device(chain, id),
-                _ => {}
+                HostNotification::LatencyChanged => {
+                    if let Some(rt) = self.runtimes.get(&id) {
+                        let latency = rt.plugin.as_ref().map_or(0, |h| h.latency());
+                        rt.latency
+                            .store(latency, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                HostNotification::EditorClosed => {}
             }
         }
     }
