@@ -1,4 +1,13 @@
 [package]
 name = "rlive-devices"
+description = "Built-in instruments and audio effects for the rLive DAW"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rlive-core.workspace = true
+hound.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
