@@ -44,6 +44,20 @@ rlive.compressor	3	Release
 rlive.compressor	4	Knee
 rlive.compressor	5	Makeup
 rlive.compressor	6	Dry/Wet
+rlive.compressor	7	Mode
+rlive.compressor	8	Envelope
+rlive.compressor	9	Lookahead
+rlive.compressor	10	Auto Release
+rlive.compressor	11	Auto Makeup
+rlive.compressor	12	S/C On
+rlive.compressor	13	S/C Gain
+rlive.compressor	14	S/C Mix
+rlive.compressor	15	S/C Listen
+rlive.compressor	16	S/C EQ On
+rlive.compressor	17	S/C EQ Type
+rlive.compressor	18	S/C EQ Freq
+rlive.compressor	19	S/C EQ Q
+rlive.compressor	20	S/C EQ Gain
 rlive.saturator	0	Drive
 rlive.saturator	1	Output
 rlive.saturator	2	Dry/Wet
@@ -65,3 +79,106 @@ rlive.utility	2	Width
 rlive.utility	3	Mono
 rlive.utility	4	Phase L
 rlive.utility	5	Phase R
+rlive.gate	0	Threshold
+rlive.gate	1	Return
+rlive.gate	2	Attack
+rlive.gate	3	Hold
+rlive.gate	4	Release
+rlive.gate	5	Floor
+rlive.gate	6	Flip
+rlive.gate	7	Lookahead
+rlive.gate	8	S/C On
+rlive.gate	9	S/C Gain
+rlive.gate	10	S/C Mix
+rlive.gate	11	S/C Listen
+rlive.gate	12	S/C EQ On
+rlive.gate	13	S/C EQ Type
+rlive.gate	14	S/C EQ Freq
+rlive.gate	15	S/C EQ Q
+rlive.gate	16	S/C EQ Gain
+rlive.glue_compressor	0	Threshold
+rlive.glue_compressor	1	Ratio
+rlive.glue_compressor	2	Attack
+rlive.glue_compressor	3	Release
+rlive.glue_compressor	4	Makeup
+rlive.glue_compressor	5	Range
+rlive.glue_compressor	6	Dry/Wet
+rlive.glue_compressor	7	Soft
+rlive.glue_compressor	8	Oversampling
+rlive.glue_compressor	9	S/C On
+rlive.glue_compressor	10	S/C Gain
+rlive.glue_compressor	11	S/C Mix
+rlive.glue_compressor	12	S/C Listen
+rlive.glue_compressor	13	S/C EQ On
+rlive.glue_compressor	14	S/C EQ Type
+rlive.glue_compressor	15	S/C EQ Freq
+rlive.glue_compressor	16	S/C EQ Q
+rlive.glue_compressor	17	S/C EQ Gain
+rlive.limiter	0	Gain
+rlive.limiter	1	Ceiling
+rlive.limiter	2	Release
+rlive.limiter	3	Auto Release
+rlive.limiter	4	Lookahead
+rlive.limiter	5	Link
+rlive.limiter	6	Maximize
+rlive.limiter	7	Threshold
+rlive.limiter	8	Output
+rlive.limiter	9	Ceiling Mode
+rlive.limiter	10	Routing
+rlive.multiband_dynamics	0	High
+rlive.multiband_dynamics	1	Low
+rlive.multiband_dynamics	2	High Freq
+rlive.multiband_dynamics	3	Low Freq
+rlive.multiband_dynamics	4	Output
+rlive.multiband_dynamics	5	Time
+rlive.multiband_dynamics	6	Amount
+rlive.multiband_dynamics	7	Soft Knee
+rlive.multiband_dynamics	8	Detection
+rlive.multiband_dynamics	9	Low Input
+rlive.multiband_dynamics	10	Low Output
+rlive.multiband_dynamics	11	Low Above Threshold
+rlive.multiband_dynamics	12	Low Above Ratio
+rlive.multiband_dynamics	13	Low Below Threshold
+rlive.multiband_dynamics	14	Low Below Ratio
+rlive.multiband_dynamics	15	Low Attack
+rlive.multiband_dynamics	16	Low Release
+rlive.multiband_dynamics	17	Low On
+rlive.multiband_dynamics	18	Low Solo
+rlive.multiband_dynamics	19	Mid Input
+rlive.multiband_dynamics	20	Mid Output
+rlive.multiband_dynamics	21	Mid Above Threshold
+rlive.multiband_dynamics	22	Mid Above Ratio
+rlive.multiband_dynamics	23	Mid Below Threshold
+rlive.multiband_dynamics	24	Mid Below Ratio
+rlive.multiband_dynamics	25	Mid Attack
+rlive.multiband_dynamics	26	Mid Release
+rlive.multiband_dynamics	27	Mid On
+rlive.multiband_dynamics	28	Mid Solo
+rlive.multiband_dynamics	29	High Input
+rlive.multiband_dynamics	30	High Output
+rlive.multiband_dynamics	31	High Above Threshold
+rlive.multiband_dynamics	32	High Above Ratio
+rlive.multiband_dynamics	33	High Below Threshold
+rlive.multiband_dynamics	34	High Below Ratio
+rlive.multiband_dynamics	35	High Attack
+rlive.multiband_dynamics	36	High Release
+rlive.multiband_dynamics	37	High On
+rlive.multiband_dynamics	38	High Solo
+rlive.multiband_dynamics	39	S/C On
+rlive.multiband_dynamics	40	S/C Gain
+rlive.multiband_dynamics	41	S/C Mix
+rlive.multiband_dynamics	42	S/C Listen
+rlive.drum_buss	0	Trim
+rlive.drum_buss	1	Comp
+rlive.drum_buss	2	Type
+rlive.drum_buss	3	Drive
+rlive.drum_buss	4	Crunch
+rlive.drum_buss	5	Damp
+rlive.drum_buss	6	Transients
+rlive.drum_buss	7	Boom
+rlive.drum_buss	8	Freq
+rlive.drum_buss	9	Force To Note
+rlive.drum_buss	10	Decay
+rlive.drum_buss	11	Boom Audition
+rlive.drum_buss	12	Dry/Wet
+rlive.drum_buss	13	Output Gain

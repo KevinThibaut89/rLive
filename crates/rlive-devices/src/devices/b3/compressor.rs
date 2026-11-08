@@ -1,7 +1,7 @@
 //! Compressor. Its implementation is in [`crate::effects`].
 
 use crate::{BuiltinInfo, DeviceRole};
-use rlive_core::{DeviceDesc, Status};
+use rlive_core::{DeviceDesc, Ports, Status};
 
 pub static INFO: BuiltinInfo = BuiltinInfo {
     id: "rlive.compressor",
@@ -11,6 +11,10 @@ pub static INFO: BuiltinInfo = BuiltinInfo {
     status: Status::Beta,
     desc: || DeviceDesc {
         params: crate::effects::compressor_params(),
+        ports: Ports {
+            sidechain: true,
+            ..Default::default()
+        },
         layout: crate::effects::compressor::compressor_layout(),
         ..Default::default()
     },

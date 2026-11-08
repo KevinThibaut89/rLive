@@ -129,6 +129,11 @@ const EXISTING: &[(&str, &str)] = &[
     ("rlive.delay", "Delay"),
     ("rlive.reverb", "Reverb"),
     ("rlive.utility", "Utility"),
+    ("rlive.gate", "Gate"),
+    ("rlive.glue_compressor", "Glue Compressor"),
+    ("rlive.limiter", "Limiter"),
+    ("rlive.multiband_dynamics", "Multiband Dynamics"),
+    ("rlive.drum_buss", "Drum Buss"),
 ];
 
 #[test]

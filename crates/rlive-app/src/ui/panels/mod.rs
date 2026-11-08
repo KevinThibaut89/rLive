@@ -3,7 +3,11 @@
 //! To add one: write a file here with a [`PanelDef`] named `PANEL`, add a row to [`PANELS`], and
 //! put `Item::Panel("its name")` in the device's layout. The renderer finds it by name.
 
+mod clip_led;
+mod compressor_display;
 mod gain_reduction;
+mod gate_display;
+mod multiband_display;
 
 use super::devices::{Action, ActionQueue};
 use crate::session::{ChainRef, DeviceRuntime};
@@ -82,7 +86,13 @@ pub struct PanelDef {
 }
 
 /// Every custom panel. One row per panel.
-pub const PANELS: &[PanelDef] = &[gain_reduction::PANEL];
+pub const PANELS: &[PanelDef] = &[
+    gain_reduction::PANEL,
+    compressor_display::PANEL,
+    gate_display::PANEL,
+    multiband_display::PANEL,
+    clip_led::PANEL,
+];
 
 /// What a panel takes up when the table has no entry for it.
 const MISSING_SIZE: Vec2 = Vec2::new(90.0, 40.0);
