@@ -4,7 +4,7 @@ use super::{ChainRef, Session};
 use rlive_core::param::{mixer, EnvTarget, ParamOwner, ParamRef};
 use rlive_core::{ParamId, TrackId};
 use rlive_engine::{mix_cell, GraphOp, MAX_SENDS};
-use rlive_project::{Track, TrackKind, TrackSend, PALETTE};
+use rlive_project::{Track, TrackDelay, TrackKind, TrackSend, PALETTE};
 
 /// The edits that take the engine from the order `current` to `target`, which hold the same
 /// tracks. Everything else in the engine's list sits after them and is left where it is.
@@ -340,6 +340,30 @@ impl Session {
         for ret in returns {
             self.set_send_enabled(track, ret, true);
         }
+    }
+
+    /// Keep tracks in sync through device and plug-in latency, and allow Track Delay.
+    pub fn set_delay_compensation(&mut self, on: bool) {
+        self.project.delay_compensation = on;
+        self.send_track_edits(Vec::new());
+        self.mark_edit("Delay Compensation");
+    }
+
+    /// Whether tracks with input monitoring on skip compensation, for the lowest latency.
+    pub fn set_reduced_latency_when_monitoring(&mut self, on: bool) {
+        self.project.reduced_latency_when_monitoring = on;
+        self.send_track_edits(Vec::new());
+        self.mark_edit("Reduced Latency When Monitoring");
+    }
+
+    /// How much a track's output is delayed or, negative, brought forward.
+    pub fn set_track_delay(&mut self, id: TrackId, delay: TrackDelay) {
+        let Some(t) = self.project.track_mut(id) else {
+            return;
+        };
+        t.delay = delay;
+        self.send_track_edits(Vec::new());
+        self.mark_edit("Track Delay");
     }
 
     /// Whether soloing a clip or group track leaves the return tracks audible.

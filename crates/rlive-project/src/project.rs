@@ -85,6 +85,15 @@ pub struct Project {
         skip_serializing_if = "crate::defaults::is_true"
     )]
     pub solo_in_place: bool,
+    /// Keep tracks in sync through the latency of devices and plug-ins, and allow Track Delay.
+    #[serde(
+        default = "crate::defaults::yes",
+        skip_serializing_if = "crate::defaults::is_true"
+    )]
+    pub delay_compensation: bool,
+    /// Tracks with input monitoring on skip compensation for the lowest possible latency.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub reduced_latency_when_monitoring: bool,
 }
 
 impl Default for Project {
@@ -159,6 +168,8 @@ impl Project {
             midi_mappings: Vec::new(),
             key_mappings: Vec::new(),
             solo_in_place: true,
+            delay_compensation: true,
+            reduced_latency_when_monitoring: false,
         }
     }
 

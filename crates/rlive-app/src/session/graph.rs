@@ -2,9 +2,9 @@
 //! edits to the engine together with that plan.
 //!
 //! Routing, delay compensation and multi-core ordering all come down to producing a different
-//! [`RenderPlan`] here. For now the plan is what the engine has always done: every track renders,
-//! then the Master sums them all.
+//! [`RenderPlan`] here. Delays are worked out in [`timing`](super::timing).
 
+use super::timing::{compensation_ops, RuntimeLatency, Timing};
 use super::Session;
 use rlive_engine::{
     mix_cell, BusIn, EngineCommand, GraphOp, GraphTxn, RenderPlan, Step, MAX_SENDS,
@@ -35,6 +35,12 @@ fn main_destination(project: &Project, t: &Track, master: usize) -> Option<usize
 /// track feeds the returns through its sends, and tracks render after whatever feeds them. Group
 /// nesting is what makes levels of a plan; the Master is always the last step.
 pub fn compile_plan(project: &Project) -> RenderPlan {
+    compile_with(project, &Timing::default())
+}
+
+/// [`compile_plan`] over the compensation `timing` asks for. Each input is delayed to reach its
+/// destination in step with its siblings.
+pub(super) fn compile_with(project: &Project, timing: &Timing) -> RenderPlan {
     let tracks = project.tracks.len();
     let returns = project.returns.len();
     let all: Vec<&Track> = project.tracks.iter().chain(&project.returns).collect();
@@ -115,6 +121,7 @@ pub fn compile_plan(project: &Project) -> RenderPlan {
         }
         levels.push(start..steps.len() as u32);
     }
+    let aligned = timing.align(&mut steps, master);
     let groups = all
         .iter()
         .map(|t| {
@@ -132,6 +139,8 @@ pub fn compile_plan(project: &Project) -> RenderPlan {
         groups,
         returns: tracks as u32..master as u32,
         solo_in_place: project.solo_in_place,
+        click_delay: aligned.click_delay,
+        output_latency: aligned.output_latency,
     }
 }
 
@@ -141,14 +150,48 @@ impl Session {
     pub(super) fn send_edits(&mut self, mut ops: Vec<GraphOp>) {
         let routes = self.routes_for_bus_swaps(&ops);
         ops.extend(routes);
-        self.send(EngineCommand::Graph(GraphTxn::new(ops, None)));
+        let timing = self.measure_timing();
+        if timing == self.timing {
+            self.send(EngineCommand::Graph(GraphTxn::new(ops, None)));
+        } else {
+            self.send_recompiled(ops, timing);
+        }
     }
 
     /// Apply edits that change the list of tracks, along with the plan for the result. Call after
     /// the project reflects them.
     pub(super) fn send_track_edits(&mut self, ops: Vec<GraphOp>) {
-        let plan = compile_plan(&self.project);
+        let timing = self.measure_timing();
+        self.send_recompiled(ops, timing);
+    }
+
+    fn send_recompiled(&mut self, mut ops: Vec<GraphOp>, timing: Timing) {
+        let plan = compile_with(&self.project, &timing);
+        ops.extend(compensation_ops(
+            &plan,
+            &timing,
+            &self.project,
+            self.engine.max_block,
+        ));
+        self.timing = timing;
         self.send(EngineCommand::Graph(GraphTxn::new(ops, Some(plan))));
+    }
+
+    /// Recompile if what compensation depends on has moved: a plug-in's latency, or anything else
+    /// that doesn't pass through an edit. Call at idle.
+    pub(super) fn follow_latency(&mut self) {
+        let timing = self.measure_timing();
+        if timing != self.timing {
+            self.send_recompiled(Vec::new(), timing);
+        }
+    }
+
+    pub(super) fn measure_timing(&self) -> Timing {
+        Timing::measure(
+            &self.project,
+            self.engine.sample_rate,
+            &RuntimeLatency(&self.runtimes),
+        )
     }
 }
 

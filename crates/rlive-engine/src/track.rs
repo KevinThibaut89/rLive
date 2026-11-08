@@ -2,6 +2,7 @@
 #![allow(clippy::vec_box)]
 
 use crate::clip::{BlockTime, ClipData, ClipPlayer, Pending};
+use crate::delay::{offer_line, FadingDelay, StereoLine, TapLines};
 use crate::graph::{BusIn, Tap};
 use crate::lane::{ArrangementLane, LanePlayer};
 use crate::params::{mix_cell, MAX_SENDS};
@@ -46,6 +47,10 @@ pub struct DeviceSlot {
     pub mod_out: Box<[f32]>,
     /// Where the device's view data goes. `None` for a device with nothing to show.
     pub view: Option<Arc<ViewChannel>>,
+    /// What this device was fed, so bypassing it can keep its timing: a bypassed effect is out
+    /// of the signal path, but still takes as long as it would have.
+    pub(crate) bypass_line: Option<Box<StereoLine>>,
+    pub(crate) bypass_delay: FadingDelay,
 }
 
 impl DeviceSlot {
@@ -60,6 +65,8 @@ impl DeviceSlot {
             latency: Arc::new(AtomicU32::new(0)),
             mod_out: Box::default(),
             view: None,
+            bypass_line: None,
+            bypass_delay: FadingDelay::default(),
         }
     }
 
@@ -341,6 +348,18 @@ impl GainStage {
     }
 }
 
+/// How many readers a track can have that are held back separately: its main output and its sends.
+const EDGES: usize = MAX_SENDS + 1;
+const MAIN_EDGE: usize = 0;
+
+/// Which of a track's edges an input is.
+fn edge_of(input: &BusIn) -> Option<usize> {
+    match input.gain {
+        None => Some(MAIN_EDGE),
+        Some(cell) => mix_cell::send_index(cell).map(|n| n + 1),
+    }
+}
+
 /// Signal a track makes available to its sends. Only filled when the plan has one.
 struct SendTaps {
     /// Before the mixer stage, gated by solo.
@@ -508,6 +527,12 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
                 }
             }
         }
+        if let Some(line) = &mut dev.bypass_line {
+            line.push(left, right);
+            if dev.bypass && !dev.bypass_delay.is_straight() {
+                dev.bypass_delay.read(line, left, right);
+            }
+        }
         if dev.bypass {
             continue;
         }
@@ -613,8 +638,14 @@ pub struct TrackNode {
     cursor: ChainCursor,
     gain: GainStage,
     sends: SendTaps,
-    /// Room to read a feedback ring into, on a return track.
+    /// Room to read a feedback ring or a compensation line into.
     scratch: [Vec<f32>; 2],
+    /// Lines the taps of this track are held back through, when a plan delays any.
+    pub(crate) lines: TapLines,
+    /// How far behind this track its readers are: its main output first, then each send.
+    edges: [FadingDelay; EDGES],
+    /// Which edges the running plan still reads.
+    edge_live: [bool; EDGES],
     /// Takes the Master's place in the plan: no pan law, and never silenced by solo.
     is_master: bool,
     /// This track's Solo switch as of the last control step.
@@ -655,7 +686,10 @@ impl TrackNode {
             cursor: ChainCursor::default(),
             gain: GainStage::new(max_block),
             sends: SendTaps::new(max_block),
-            scratch: [Vec::new(), Vec::new()],
+            scratch: [vec![0.0; max_block], vec![0.0; max_block]],
+            lines: TapLines::default(),
+            edges: [FadingDelay::default(); EDGES],
+            edge_live: [false; EDGES],
             is_master: false,
             soloed: false,
             holds_solo: false,
@@ -675,7 +709,6 @@ impl TrackNode {
     /// Give a return track somewhere to remember what it sent, so it can be fed back.
     pub fn with_feedback(mut self, max_block: usize) -> Self {
         self.sends.feedback = Some(FeedbackRing::new(max_block));
-        self.scratch = [vec![0.0; max_block], vec![0.0; max_block]];
         self
     }
 
@@ -773,15 +806,55 @@ impl TrackNode {
 
     /// Clear what the sends carry over, as of a change of plan.
     pub(crate) fn plan_changed(&mut self) {
-        self.sends.wants_pre = false;
-        self.sends.wants_post = false;
+        // A tap with a line is kept up to date whether or not anything reads it yet, so a
+        // reader coming back never finds a stale past.
+        self.sends.wants_pre = self.lines.pre.is_some();
+        self.sends.wants_post = self.lines.post.is_some();
+        self.edge_live = [false; EDGES];
     }
 
-    /// Take the plan's demand for this track's send signals.
-    pub(crate) fn want_send(&mut self, tap: &Tap) {
-        match tap {
-            Tap::PostFx => self.sends.wants_pre = true,
-            _ => self.sends.wants_post = true,
+    /// Take one input of the plan: what it taps, and how far behind this track it reads.
+    pub(crate) fn want_input(&mut self, input: &BusIn) {
+        let edge = edge_of(input);
+        if let Some(edge) = edge {
+            self.edge_live[edge] = true;
+            self.edges[edge].set_target(if input.feedback { 0 } else { input.delay });
+        }
+        if input.gain.is_some() {
+            match input.tap {
+                Tap::PostFx => self.sends.wants_pre = true,
+                _ => self.sends.wants_post = true,
+            }
+        }
+    }
+
+    /// An edge nothing reads any more starts from no delay if something reads it again.
+    pub(crate) fn settle_edges(&mut self) {
+        for (edge, live) in self.edges.iter_mut().zip(self.edge_live) {
+            if !live {
+                edge.snap_to(0);
+            }
+        }
+    }
+
+    /// Whether a line is there to read an input at its delay.
+    pub(crate) fn can_delay(&self, input: &BusIn) -> bool {
+        let line = match (input.gain.is_some(), &input.tap) {
+            (false, _) => &self.lines.main,
+            (true, Tap::PostFx) => &self.lines.pre,
+            (true, _) => &self.lines.post,
+        };
+        input.delay == 0
+            || (edge_of(input).is_some()
+                && line.as_ref().is_some_and(|l| l.max_delay() >= input.delay))
+    }
+
+    /// Install lines, keeping whichever is longer. Hands back what is to be retired.
+    pub(crate) fn offer_lines(&mut self, new: TapLines) -> TapLines {
+        TapLines {
+            main: offer_line(&mut self.lines.main, new.main),
+            pre: offer_line(&mut self.lines.pre, new.pre),
+            post: offer_line(&mut self.lines.post, new.post),
         }
     }
 
@@ -982,7 +1055,15 @@ impl TrackNode {
             Tap::PostFx => &s.pre,
             _ => &s.post,
         };
-        if input.feedback {
+        let line = match input.tap {
+            Tap::PostFx => &self.lines.pre,
+            _ => &self.lines.post,
+        };
+        if let (Some(line), false) = (line, input.feedback || self.edges[n + 1].is_straight()) {
+            let [sl, sr] = &mut self.scratch;
+            self.edges[n + 1].read(line, &mut sl[..frames], &mut sr[..frames]);
+            level.add((&sl[..frames], &sr[..frames]), dst, frames, coeff);
+        } else if input.feedback {
             let Some(ring) = &s.feedback else { return };
             let ring_tap = match input.tap {
                 Tap::PostFx => &ring.pre,
@@ -995,6 +1076,40 @@ impl TrackNode {
         } else {
             let (sl, sr) = (&tap[0][..frames], &tap[1][..frames]);
             level.add((sl, sr), dst, frames, coeff);
+        }
+    }
+
+    /// Add this track's main output to `left` and `right`.
+    pub(crate) fn main_into(&mut self, left: &mut [f32], right: &mut [f32], frames: usize) {
+        match &self.lines.main {
+            Some(line) if !self.edges[MAIN_EDGE].is_straight() => {
+                let [sl, sr] = &mut self.scratch;
+                self.edges[MAIN_EDGE].read(line, &mut sl[..frames], &mut sr[..frames]);
+                for i in 0..frames {
+                    left[i] += sl[i];
+                    right[i] += sr[i];
+                }
+            }
+            _ => {
+                for i in 0..frames {
+                    left[i] += self.left[i];
+                    right[i] += self.right[i];
+                }
+            }
+        }
+    }
+
+    /// Remember this block for whatever reads it late. Call after the mixer stage.
+    pub(crate) fn feed_lines(&mut self, frames: usize) {
+        let l = &mut self.lines;
+        if let Some(line) = &mut l.main {
+            line.push(&self.left[..frames], &self.right[..frames]);
+        }
+        if let Some(line) = &mut l.pre {
+            line.push(&self.sends.pre[0][..frames], &self.sends.pre[1][..frames]);
+        }
+        if let Some(line) = &mut l.post {
+            line.push(&self.sends.post[0][..frames], &self.sends.post[1][..frames]);
         }
     }
 

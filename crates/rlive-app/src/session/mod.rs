@@ -13,12 +13,15 @@ mod graph;
 mod info;
 mod recording;
 mod routing;
+mod timing;
 mod tracks;
 mod transport;
 mod undo;
 
 #[cfg(test)]
 mod automation_tests;
+#[cfg(test)]
+mod compensation_tests;
 #[cfg(test)]
 mod golden;
 #[cfg(test)]
@@ -68,6 +71,8 @@ pub struct Session {
     pub colors: ColorSettings,
     recording: Option<Recording>,
     automation: automation::AutomationRecorder,
+    /// The compensation the running plan was compiled for.
+    timing: timing::Timing,
 }
 
 impl Session {
@@ -89,6 +94,7 @@ impl Session {
             colors: ColorSettings::default(),
             recording: None,
             automation: automation::AutomationRecorder::default(),
+            timing: timing::Timing::default(),
         };
         s.rebuild();
         s
@@ -350,6 +356,7 @@ impl Session {
                 HostNotification::EditorClosed => {}
             }
         }
+        self.follow_latency();
     }
 
     /// Descriptors of all known plugins of a format.

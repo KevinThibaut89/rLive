@@ -1,6 +1,8 @@
 //! Offline rendering to WAV files.
 
-use super::{compile_plan, Builder, Session};
+use super::graph::compile_with;
+use super::timing::{compensation_ops, RuntimeLatency, Timing};
+use super::{Builder, Session};
 use rlive_core::Quantize;
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{EngineCommand, GraphOp, GraphTxn, LaunchCmd, TransportCmd, MAX_TRACKS};
@@ -77,14 +79,18 @@ impl Session {
         }
         let master = b.master(p, &mut runtimes, &mut layouts, &mut errors);
         let maps = super::build::time_maps(p);
+        let timing = Timing::measure(p, sample_rate, &RuntimeLatency(&runtimes));
+        let plan = compile_with(p, &timing);
+        // The render starts this much late, and is one this much longer, for the audio that
+        // leaves the Master in its first frames.
+        let lead_in = plan.output_latency as usize;
+        let mut ops = vec![GraphOp::ReplaceAll {
+            tracks: Box::new(tracks),
+            master,
+        }];
+        ops.extend(compensation_ops(&plan, &timing, p, max_block));
         let mut cmds = vec![
-            EngineCommand::Graph(GraphTxn::new(
-                vec![GraphOp::ReplaceAll {
-                    tracks: Box::new(tracks),
-                    master,
-                }],
-                Some(compile_plan(p)),
-            )),
+            EngineCommand::Graph(GraphTxn::new(ops, Some(plan))),
             EngineCommand::Transport(TransportCmd::SetTimeMaps(Arc::new(maps.clone()))),
             EngineCommand::Transport(TransportCmd::SetQuantize(Quantize::None)),
         ];
@@ -99,13 +105,15 @@ impl Session {
         } else {
             maps.tempo.tick_to_seconds(ticks as f64)
         };
-        let frames = (seconds * sample_rate) as usize;
+        let frames = (seconds * sample_rate) as usize + lead_in;
         let mut left = vec![0.0; frames];
         let mut right = vec![0.0; frames];
         for (l, r) in left.chunks_mut(max_block).zip(right.chunks_mut(max_block)) {
             engine.process_stereo(l, r);
             handle.collect_garbage();
         }
+        left.drain(..lead_in);
+        right.drain(..lead_in);
         rlive_devices::write_wav(path, &left, &right, sample_rate as u32)
             .map_err(|e| e.to_string())?;
         drop(engine);

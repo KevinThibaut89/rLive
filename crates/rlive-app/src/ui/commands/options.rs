@@ -12,6 +12,8 @@ super::domain! {
         VelocityDown,
         VelocityUp,
         ToggleSoloInPlace,
+        ToggleDelayCompensation,
+        ToggleReducedLatency,
         RescanPlugins,
     }
 }
@@ -22,6 +24,14 @@ pub const MENU: &[Entry] = &[
         M::Options(Options::ToggleComputerKeys),
     ),
     Item("Solo in Place", M::Options(Options::ToggleSoloInPlace)),
+    Item(
+        "Delay Compensation",
+        M::Options(Options::ToggleDelayCompensation),
+    ),
+    Item(
+        "Reduced Latency When Monitoring",
+        M::Options(Options::ToggleReducedLatency),
+    ),
     Item("Rescan Plugins", M::Options(Options::RescanPlugins)),
 ];
 
@@ -43,13 +53,36 @@ impl RliveApp {
             M::Options(Options::ToggleSoloInPlace),
             self.session.project.solo_in_place,
         );
+        let project = &self.session.project;
+        s.check(
+            M::Options(Options::ToggleDelayCompensation),
+            project.delay_compensation,
+        );
+        s.check(
+            M::Options(Options::ToggleReducedLatency),
+            project.reduced_latency_when_monitoring,
+        );
+        s.enable(
+            M::Options(Options::ToggleReducedLatency),
+            project.delay_compensation,
+        );
     }
 
     pub(super) fn options_command(&mut self, c: Options) {
-        if c == Options::ToggleSoloInPlace {
-            let on = !self.session.project.solo_in_place;
-            self.session.set_solo_in_place(on);
-            return;
+        match c {
+            Options::ToggleSoloInPlace => {
+                let on = !self.session.project.solo_in_place;
+                return self.session.set_solo_in_place(on);
+            }
+            Options::ToggleDelayCompensation => {
+                let on = !self.session.project.delay_compensation;
+                return self.session.set_delay_compensation(on);
+            }
+            Options::ToggleReducedLatency => {
+                let on = !self.session.project.reduced_latency_when_monitoring;
+                return self.session.set_reduced_latency_when_monitoring(on);
+            }
+            _ => {}
         }
         let ui = &mut self.ui;
         match c {
@@ -61,7 +94,9 @@ impl RliveApp {
             }
             Options::VelocityUp => ui.key_velocity = (ui.key_velocity + VELOCITY_STEP).min(1.0),
             Options::RescanPlugins => self.start_plugin_scan(),
-            Options::ToggleSoloInPlace => {}
+            Options::ToggleSoloInPlace
+            | Options::ToggleDelayCompensation
+            | Options::ToggleReducedLatency => {}
         }
     }
 }

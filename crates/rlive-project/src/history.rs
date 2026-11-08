@@ -360,6 +360,8 @@ pub fn capture(project: &Project, prev: Option<&Snapshot>) -> (Snapshot, usize) 
         midi_mappings: project.midi_mappings.clone(),
         key_mappings: project.key_mappings.clone(),
         solo_in_place: project.solo_in_place,
+        delay_compensation: project.delay_compensation,
+        reduced_latency_when_monitoring: project.reduced_latency_when_monitoring,
     };
     let snapshot = Snapshot {
         shell: share(

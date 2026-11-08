@@ -5,6 +5,7 @@
 //! in the owning track's flat bus. For now the chains only sum: zones, macros, choke and return
 //! chains come with the rack runtime.
 
+use crate::delay::{FadingDelay, StereoLine};
 use crate::track::{run_chain, ChainRun, DeviceSlot, Stretch, MAX_DEVICES, MAX_EVENTS};
 use rlive_core::{ChainId, EventQueue, MidiEvent};
 
@@ -35,6 +36,9 @@ pub struct ChainNode {
     pub(crate) events: EventQueue,
     /// Holds what MIDI effects in this chain pass along.
     pub(crate) midi: [EventQueue; 2],
+    /// Holds this chain back to line up with the slowest chain of its rack.
+    pub(crate) line: Option<Box<StereoLine>>,
+    pub(crate) delay: FadingDelay,
 }
 
 impl ChainNode {
@@ -51,6 +55,8 @@ impl ChainNode {
                 EventQueue::with_capacity(MAX_EVENTS),
                 EventQueue::with_capacity(MAX_EVENTS),
             ],
+            line: None,
+            delay: FadingDelay::default(),
         }
     }
 }
@@ -109,6 +115,14 @@ impl RackNode {
             if forward_midi {
                 events_out
                     .extend(held.map_or(chain.events.as_slice(), |q| chain.midi[q].as_slice()));
+            }
+            if let Some(line) = &mut chain.line {
+                line.push(&chain.left[..frames], &chain.right[..frames]);
+                if !chain.delay.is_straight() {
+                    chain
+                        .delay
+                        .read(line, &mut chain.left[..frames], &mut chain.right[..frames]);
+                }
             }
         }
         left.fill(0.0);

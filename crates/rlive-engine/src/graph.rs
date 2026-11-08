@@ -126,6 +126,11 @@ pub struct RenderPlan {
     pub returns: Range<u32>,
     /// Soloing a clip or group track leaves the return tracks audible.
     pub solo_in_place: bool,
+    /// Frames to hold the metronome back so it stays with the tracks at the Master.
+    pub click_delay: u32,
+    /// Frames from the playhead to the Master's output, however the Master got its input. Not
+    /// used to render: offline rendering and input monitoring need to know it.
+    pub output_latency: u32,
 }
 
 /// One track's turn.
@@ -213,6 +218,8 @@ impl RenderPlan {
             groups: Vec::new(),
             returns: 0..0,
             solo_in_place: true,
+            click_delay: 0,
+            output_latency: 0,
         };
         plan.steps.push(Step {
             track: 0,
@@ -296,7 +303,8 @@ impl RenderPlan {
                         let from = i.from as usize;
                         from < tracks
                             && matches!(i.tap, Tap::PostMixer | Tap::PostFx)
-                            && i.delay == 0
+                            // A feedback tap is already as late as it can be.
+                            && (i.delay == 0 || !i.feedback)
                             // Rendered already, unless it is explicitly a feedback tap.
                             && (i.feedback || (level_of[from] as usize) < level)
                     })
@@ -418,8 +426,9 @@ mod tests {
         assert!(!p.fits(2));
 
         let mut p = good();
+        p.steps[2].inputs[0].feedback = true;
         p.steps[2].inputs[0].delay = 1;
-        assert!(!p.fits(2));
+        assert!(!p.fits(2), "a feedback tap takes no delay");
 
         let mut p = good();
         p.steps[0].inputs.push(BusIn::post_mixer(1));

@@ -275,6 +275,8 @@ impl Session {
             midi_mappings,
             key_mappings,
             solo_in_place,
+            delay_compensation,
+            reduced_latency_when_monitoring,
         } = shell;
         let mut commands = Vec::new();
         let p = &mut self.project;
@@ -300,6 +302,8 @@ impl Session {
         p.midi_mappings = midi_mappings.clone();
         p.key_mappings = key_mappings.clone();
         p.solo_in_place = *solo_in_place;
+        p.delay_compensation = *delay_compensation;
+        p.reduced_latency_when_monitoring = *reduced_latency_when_monitoring;
         for c in commands {
             self.send(EngineCommand::Transport(c));
         }

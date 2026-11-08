@@ -23,7 +23,7 @@ use egui::{
 use rlive_core::TrackId;
 use rlive_engine::mix_cell;
 use rlive_engine::shared::{NO_SLOT, STOP_QUEUED};
-use rlive_project::{ArrangementClip, Clip, TrackKind, PALETTE, SEND_OFF_DB};
+use rlive_project::{ArrangementClip, Clip, TrackDelay, TrackKind, PALETTE, SEND_OFF_DB};
 use std::sync::atomic::Ordering;
 
 const HEADER_H: f32 = 22.0;
@@ -987,6 +987,7 @@ fn mixer_strip(
         .map(|r| (r.id, t.send_level(r.id), t.send_enabled(r.id)))
         .collect();
     let solo_in_place = session.project.solo_in_place;
+    let delay = t.delay;
     let meter = state.meters.get(&id).copied().unwrap_or_default();
     let p = ui.painter().clone();
     p.rect_filled(
@@ -1053,6 +1054,7 @@ fn mixer_strip(
         if !sends.is_empty() {
             y = send_knobs(ui, session, id, is_return, &sends, inner, y);
         }
+        y = track_delay_row(ui, session, id, delay, inner, y);
     }
 
     // Fader + meter take the remaining height above the buttons and dB box.
@@ -1288,6 +1290,76 @@ fn send_knobs(
         }
     }
     y + rows as f32 * SEND_H
+}
+
+const DELAY_RANGE_MS: f32 = 500.0;
+const DELAY_RANGE_SAMPLES: i32 = 48_000;
+
+/// Track Delay: a value, dragged, and a toggle between milliseconds and samples. Disabled while
+/// delay compensation is off, as Live has it. Returns the height to carry on from.
+fn track_delay_row(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    id: TrackId,
+    delay: TrackDelay,
+    inner: Rect,
+    y: f32,
+) -> f32 {
+    let sample_rate = session.engine.sample_rate as f32;
+    let row = Rect::from_min_size(Pos2::new(inner.left(), y), Vec2::new(inner.width(), 14.0));
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(row)
+            .layout(Layout::left_to_right(egui::Align::Center)),
+    );
+    child.spacing_mut().item_spacing.x = 2.0;
+    if !session.project.delay_compensation {
+        child.disable();
+    }
+    let mut next = delay;
+    match delay {
+        TrackDelay::Samples(mut n) => {
+            let drag = egui::DragValue::new(&mut n)
+                .range(-DELAY_RANGE_SAMPLES..=DELAY_RANGE_SAMPLES)
+                .speed(1.0);
+            if child.add(drag).changed() {
+                next = TrackDelay::Samples(n);
+            }
+        }
+        other => {
+            let mut ms = match other {
+                TrackDelay::Ms(ms) => ms,
+                _ => 0.0,
+            };
+            let drag = egui::DragValue::new(&mut ms)
+                .range(-DELAY_RANGE_MS..=DELAY_RANGE_MS)
+                .speed(0.25)
+                .fixed_decimals(1);
+            if child.add(drag).changed() {
+                next = TrackDelay::Ms(ms);
+            }
+        }
+    }
+    let unit = if matches!(delay, TrackDelay::Samples(_)) {
+        "smp"
+    } else {
+        "ms"
+    };
+    if child
+        .button(egui::RichText::new(unit).font(theme::font(9.0)))
+        .on_hover_text("Track Delay — switch between milliseconds and samples")
+        .clicked()
+    {
+        next = match delay {
+            TrackDelay::Samples(n) => TrackDelay::Ms(n as f32 / sample_rate * 1000.0),
+            TrackDelay::Ms(ms) => TrackDelay::Samples((ms / 1000.0 * sample_rate).round() as i32),
+            TrackDelay::None => TrackDelay::Samples(0),
+        };
+    }
+    if next != delay {
+        session.set_track_delay(id, next);
+    }
+    y + 16.0
 }
 
 fn clear_other_solos(session: &mut Session, id: TrackId) {

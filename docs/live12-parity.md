@@ -628,7 +628,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[x]` Solo in Place option; returns stay audible only with it on. S
 - `[x]` Soloing a return mutes other mains but keeps send audio. S
 - `[ ]` Cue mode: separate Main and Cue outputs, Cue Volume, headphone switches, browser preview goes to Cue. M. Needs 4 outputs.
-- `[ ]` Track Delay in ms or samples; unavailable when PDC is off. M
+- `[~]` Track Delay in ms or samples; unavailable when PDC is off. M
 - `[ ]` Performance Impact meters: 6 segments per track, relative to Set. M. Needs per-track DSP timing.
 
 
@@ -732,9 +732,9 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Slicing defaults, shown in Slice dialog. S. Depends on slicing.
 - `[ ]` Audio-to-MIDI defaults: Drums, Harmony, Melody folders; last added wins. S. Depends on conversion.
 - `[ ]` Project-specific Defaults folder overrides User Library. S
-- `[ ]` Automatic device and plug-in delay compensation, including returns; Options toggle. XL (with monitoring and tap-point cases)
+- `[~]` Automatic device and plug-in delay compensation, including returns; Options toggle. XL (with monitoring and tap-point cases)
 - `[ ]` Reduced Latency When Monitoring option. M
-- `[ ]` Tempo-synced devices after latent devices may drift; PDC raises CPU. Document.
+- `[~]` Tempo-synced devices after latent devices may drift; PDC raises CPU. Document.
 
 
 ## 24. Using Plug-Ins (479-490)
@@ -1231,7 +1231,7 @@ No Ableton hardware, runtime or service is required. This chapter is an acceptan
 - `[ ]` Unstretched playback, including Beats, Tones, Texture, Re-Pitch at native tempo, and tempo round-trip [M]
 - `[ ]` 64-bit summing at single mix points with 32-bit processing [M]
 - `[ ]` Neutral recording when bit depth is at least the converter, or 32-bit internal [S]
-- `[ ]` Bypass removes devices but keeps lookahead delay [S]
+- `[x]` Bypass removes devices but keeps lookahead delay [S]
 - `[ ]` Routing and clip split are neutral [S]
 - `[ ]` Frozen files are 32-bit; Session freeze is two loop cycles and snapshots parameters; random values get baked [M]
 

@@ -13,6 +13,7 @@
 pub mod automation;
 pub mod clip;
 mod commands;
+pub mod delay;
 pub mod graph;
 pub mod lane;
 pub mod params;
@@ -24,6 +25,8 @@ pub use automation::AutomationLane;
 use clip::BlockTime;
 pub use clip::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
 pub use commands::{ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, RecordCmd, TransportCmd};
+use delay::FadingDelay;
+pub use delay::{StereoLine, TapLines, FADE_FRAMES, MAX_COMPENSATION_FRAMES};
 pub use graph::{
     AudioIo, BusIn, ChainAddr, ChainPath, ChainStep, RenderPlan, SidechainIn, Step, Tap, TrackRef,
     MAX_RACK_DEPTH,
@@ -288,6 +291,8 @@ pub struct Engine {
     /// Backdated recorded notes never land before this tick.
     record_floor: f64,
     metronome: Metronome,
+    /// The click rendered on its own, when it is held back to stay with the tracks.
+    click: ClickDelay,
     smooth_coeff: f32,
     /// Solo has to be worked out again, as the plan or a Solo switch changed.
     solo_dirty: bool,
@@ -339,6 +344,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
             freq: 880.0,
             amp: 0.3,
         },
+        click: ClickDelay::new(max_block),
         // ~5 ms one-pole smoothing.
         smooth_coeff: 1.0 - (-1.0 / (0.005 * sample_rate as f32)).exp(),
         solo_dirty: true,
@@ -379,6 +385,11 @@ impl Engine {
     /// Whether the engine is running a plan the UI compiled, rather than its own fallback.
     pub fn has_compiled_plan(&self) -> bool {
         self.plans.compiled.is_some()
+    }
+
+    /// The plan the engine is running.
+    pub fn active_plan(&self) -> &RenderPlan {
+        self.plans.active()
     }
 
     fn transport(&self) -> TransportInfo {
@@ -717,9 +728,8 @@ impl Engine {
                     add_input(from, input, l, r, frames, coeff);
                 }
             }
-            if transport.playing {
-                self.metronome.render(time, bars, l, r);
-            }
+            self.click
+                .render(&mut self.metronome, time, bars, l, r, transport.playing);
             return;
         }
         if to > self.tracks.len() {
@@ -890,6 +900,7 @@ impl Engine {
             });
             t.prepare_sends(time.frames, coeff);
             t.apply_mix(time.frames, coeff);
+            t.feed_lines(time.frames);
             if is_master {
                 let (l, r) = t.output(time.frames);
                 self.shared.master_meter.update(l, r);
@@ -916,11 +927,7 @@ fn add_input(
         );
         return;
     }
-    let (l, r) = from.output(frames);
-    for i in 0..frames {
-        left[i] += l[i];
-        right[i] += r[i];
-    }
+    from.main_into(left, right, frames);
 }
 
 fn push_param_changed(
@@ -944,6 +951,55 @@ enum JumpKind {
     Wrap,
     /// The user moved the playhead: queued launches pick a new launch point.
     Seek,
+}
+
+/// The metronome, held back as far as the tracks it plays with. Without a line it writes straight
+/// into the Master, exactly as it always has.
+struct ClickDelay {
+    line: Option<Box<StereoLine>>,
+    delay: FadingDelay,
+    buf: [Vec<f32>; 2],
+}
+
+impl ClickDelay {
+    fn new(max_block: usize) -> Self {
+        Self {
+            line: None,
+            delay: FadingDelay::default(),
+            buf: [vec![0.0; max_block], vec![0.0; max_block]],
+        }
+    }
+
+    fn render(
+        &mut self,
+        metronome: &mut Metronome,
+        time: BlockTime,
+        bars: &BarMap,
+        left: &mut [f32],
+        right: &mut [f32],
+        playing: bool,
+    ) {
+        let Some(line) = &mut self.line else {
+            if playing {
+                metronome.render(time, bars, left, right);
+            }
+            return;
+        };
+        let frames = left.len();
+        let [bl, br] = &mut self.buf;
+        let (bl, br) = (&mut bl[..frames], &mut br[..frames]);
+        bl.fill(0.0);
+        br.fill(0.0);
+        if playing {
+            metronome.render(time, bars, bl, br);
+        }
+        line.push(bl, br);
+        self.delay.read(line, bl, br);
+        for i in 0..frames {
+            left[i] += bl[i];
+            right[i] += br[i];
+        }
+    }
 }
 
 /// Does nothing. Used as a placeholder when moving device slots in and out of boxes.

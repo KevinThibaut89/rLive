@@ -3,6 +3,7 @@
 //! Every structural edit travels in a [`GraphTxn`], applied whole between two blocks. A block can
 //! never see a track without its plan, or a device without its parameter cells.
 
+use crate::delay::{offer_line, StereoLine, TapLines};
 use crate::graph::{ChainAddr, RenderPlan, TrackRef, MAX_RACK_DEPTH};
 use crate::params::{ParamBus, TrackRoutes};
 use crate::rack::ChainNode;
@@ -74,6 +75,30 @@ pub enum GraphOp {
         slot: u32,
         resource: Resource,
     },
+    /// Give a track delay lines for its taps. Longer ones replace what's there and take over its
+    /// past; shorter ones come straight back.
+    SetTapLines {
+        track: TrackId,
+        lines: TapLines,
+    },
+    /// Hold a chain of the rack `device` back, to line up with its slowest chain. The chain keeps
+    /// the line it has if `line` is `None`.
+    SetChainDelay {
+        target: ChainAddr,
+        device: DeviceId,
+        chain: ChainId,
+        delay: u32,
+        line: Option<Box<StereoLine>>,
+    },
+    /// How late a device is while bypassed, to keep the timing it would have had switched on.
+    SetBypassDelay {
+        target: ChainAddr,
+        device: DeviceId,
+        delay: u32,
+        line: Option<Box<StereoLine>>,
+    },
+    /// Give the metronome a line to wait for the tracks in.
+    SetClickLine(Box<StereoLine>),
     /// Replace the whole session (project load / sample-rate change).
     ReplaceAll {
         tracks: Box<Vec<Box<TrackNode>>>,
@@ -106,6 +131,11 @@ impl GraphTxn {
     }
 }
 
+/// A delay no longer than `line` can provide.
+fn fit_delay(delay: u32, line: Option<&StereoLine>) -> u32 {
+    delay.min(line.map_or(0, StereoLine::max_delay))
+}
+
 /// What an edit changed, beyond the node it touched.
 #[derive(Default)]
 struct Applied {
@@ -126,7 +156,8 @@ impl Engine {
 
     /// Runs after all the edits, so the plan is checked against the tracks it will run over.
     fn install_plan(&mut self, txn: &mut GraphTxn, applied: &Applied) {
-        if txn.plan.as_ref().is_some_and(|p| p.fits(self.tracks.len())) {
+        let fits = |p: &RenderPlan| p.fits(self.tracks.len()) && self.delays_fit(p);
+        if txn.plan.as_ref().is_some_and(fits) {
             std::mem::swap(&mut self.plans.compiled, &mut txn.plan);
         } else if applied.tracks || txn.plan.is_some() {
             txn.replaced = self.plans.compiled.take();
@@ -144,13 +175,35 @@ impl Engine {
             t.plan_changed();
         }
         for step in &plan.steps {
-            for input in step.inputs.iter().filter(|i| i.gain.is_some()) {
+            for input in &step.inputs {
                 if let Some(t) = self.tracks.get_mut(input.from as usize) {
-                    t.want_send(&input.tap);
+                    t.want_input(input);
                 }
             }
         }
+        for t in self.tracks.iter_mut() {
+            t.settle_edges();
+        }
+        self.click.delay.set_target(plan.click_delay);
         self.solo_dirty = true;
+    }
+
+    /// Whether every delay a plan asks for has a line long enough to read it from.
+    fn delays_fit(&self, plan: &RenderPlan) -> bool {
+        let click_fits = plan.click_delay == 0
+            || self
+                .click
+                .line
+                .as_ref()
+                .is_some_and(|l| l.max_delay() >= plan.click_delay);
+        click_fits
+            && plan.steps.iter().all(|step| {
+                step.inputs.iter().all(|input| {
+                    self.tracks
+                        .get(input.from as usize)
+                        .is_some_and(|t| t.can_delay(input))
+                })
+            })
     }
 
     fn apply_graph_op(&mut self, op: GraphOp, applied: &mut Applied) {
@@ -275,6 +328,57 @@ impl Engine {
                 None => retire(&mut self.garbage, Garbage::Boxed(bus)),
             },
             C::SetRoutes { target, routes } => self.set_routes(target, routes),
+            C::SetTapLines { track, lines } => {
+                let spare = match self.track_mut(track) {
+                    Some(t) => t.offer_lines(lines),
+                    None => lines,
+                };
+                self.retire_lines(spare);
+            }
+            C::SetChainDelay {
+                target,
+                device,
+                chain,
+                delay,
+                line,
+            } => {
+                let found = self
+                    .rack_mut(target, device)
+                    .and_then(|rack| rack.chains.iter_mut().find(|c| c.id == chain));
+                let spare = match found {
+                    Some(c) => {
+                        let spare = offer_line(&mut c.line, line);
+                        c.delay.set_target(fit_delay(delay, c.line.as_deref()));
+                        spare
+                    }
+                    None => line,
+                };
+                self.retire_line(spare);
+            }
+            C::SetBypassDelay {
+                target,
+                device,
+                delay,
+                line,
+            } => {
+                let found = self
+                    .chain_mut(target)
+                    .and_then(|chain| chain.iter_mut().find(|d| d.id == device));
+                let spare = match found {
+                    Some(d) => {
+                        let spare = offer_line(&mut d.bypass_line, line);
+                        d.bypass_delay
+                            .set_target(fit_delay(delay, d.bypass_line.as_deref()));
+                        spare
+                    }
+                    None => line,
+                };
+                self.retire_line(spare);
+            }
+            C::SetClickLine(line) => {
+                let spare = offer_line(&mut self.click.line, Some(line));
+                self.retire_line(spare);
+            }
             C::SetResource {
                 target,
                 device,
@@ -326,6 +430,18 @@ impl Engine {
                 applied.tracks = true;
             }
         }
+    }
+
+    fn retire_line(&mut self, line: Option<Box<StereoLine>>) {
+        if let Some(line) = line {
+            retire(&mut self.garbage, Garbage::Boxed(line));
+        }
+    }
+
+    fn retire_lines(&mut self, lines: TapLines) {
+        self.retire_line(lines.main);
+        self.retire_line(lines.pre);
+        self.retire_line(lines.post);
     }
 
     /// Move a device between chains of one track, or leave it where it is if it can't go.
