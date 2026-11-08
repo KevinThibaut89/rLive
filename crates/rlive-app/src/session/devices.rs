@@ -2,12 +2,12 @@
 
 use super::{build, Session};
 use rlive_audio_io::SampleStatus;
-use rlive_core::param::mixer;
+use rlive_core::param::{mixer, ParamOwner, ParamRef};
 use rlive_core::{ChainId, DeviceId, ParamId, ParamInfo, TrackId};
 use rlive_devices::DeviceRole;
 use rlive_engine::{mix_cell, CellIx, ChainAddr, GraphOp, TrackRef};
 use rlive_plugin_host::PluginDescriptor;
-use rlive_project::{Chain, Device, DeviceKind, FileRef, TrackKind};
+use rlive_project::{Chain, Device, DeviceKind, FileRef, RackKind, TrackKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -136,9 +136,54 @@ impl Session {
         }
     }
 
-    /// Whether a chain's track can host this kind of device: group and return tracks take audio
-    /// effects only. Reports it to the user when it can't.
-    fn accepts_role(&mut self, chain: ChainRef, role: DeviceRole, name: &str) -> bool {
+    /// The kind of the rack a chain is directly inside, if it is inside one.
+    pub(super) fn enclosing_rack_kind(&self, chain: ChainRef) -> Option<RackKind> {
+        let ChainRef::Nested(addr) = chain else {
+            return None;
+        };
+        let steps = addr.path.steps();
+        let step = *steps.last()?;
+        let mut path = rlive_engine::ChainPath::ROOT;
+        for s in &steps[..steps.len() - 1] {
+            path = path.child(*s)?;
+        }
+        let parent = ChainAddr {
+            owner: addr.owner,
+            path,
+        };
+        match &self
+            .chain_at(parent)?
+            .iter()
+            .find(|d| d.id == step.rack)?
+            .kind
+        {
+            DeviceKind::Rack { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
+
+    pub(super) fn chain_at(&self, addr: ChainAddr) -> Option<&Vec<Device>> {
+        self.chain(chain_ref_of(addr))
+    }
+
+    /// Whether a chain can host this kind of device, by the rules of its track and of the rack
+    /// it is in (manual p. 493). Reports it to the user when it can't.
+    pub(super) fn accepts_role(&mut self, chain: ChainRef, role: DeviceRole, name: &str) -> bool {
+        match self.enclosing_rack_kind(chain) {
+            Some(RackKind::Midi) if role != DeviceRole::MidiEffect => {
+                self.messages.push(format!(
+                    "{name}: a MIDI Effect Rack takes MIDI effects only"
+                ));
+                return false;
+            }
+            Some(RackKind::Audio) if role != DeviceRole::AudioEffect => {
+                self.messages.push(format!(
+                    "{name}: an Audio Effect Rack takes audio effects only"
+                ));
+                return false;
+            }
+            _ => {}
+        }
         let ChainRef::Track(id) = chain.owner() else {
             return true;
         };
@@ -182,7 +227,11 @@ impl Session {
 
     /// MIDI effects go to the front of the chain, instruments after them (and after any other
     /// instrument), audio effects at the end.
-    fn instrument_insert_index(&self, chain: ChainRef, role: DeviceRole) -> Option<usize> {
+    pub(super) fn instrument_insert_index(
+        &self,
+        chain: ChainRef,
+        role: DeviceRole,
+    ) -> Option<usize> {
         if role == DeviceRole::AudioEffect {
             return None;
         }
@@ -214,11 +263,19 @@ impl Session {
     }
 
     /// Forgets the runtime side of a device leaving the project, parking it for undo.
-    fn retire_device_runtimes(&mut self, chain: ChainRef, device: &mut Device) {
+    pub(super) fn retire_device_runtimes(&mut self, chain: ChainRef, device: &mut Device) {
         self.park_device(device);
         let mut ids = Vec::new();
         device.for_each(&mut |d| ids.push(d.id));
+        let chains = build::chains_of(device);
         self.forget_device_automation(chain, &ids);
+        self.forget_chain_automation(chain, &chains);
+        self.forget_macro_targets(chain, &ids, &chains);
+        if let Some(l) = self.layouts.get_mut(&chain.owner()) {
+            for c in chains {
+                l.remove_chain(c);
+            }
+        }
         for id in ids {
             if let Some(mut rt) = self.runtimes.remove(&id) {
                 if let Some(h) = rt.plugin.as_mut() {
@@ -262,6 +319,9 @@ impl Session {
     }
 
     pub fn set_bypass(&mut self, chain: ChainRef, id: DeviceId, bypass: bool) {
+        if self.is_macro_mapped(chain, device_param(id, rlive_core::ACTIVATOR)) {
+            return;
+        }
         self.write_bypass(chain, id, bypass, true);
         self.mark_edit("Device On/Off");
     }
@@ -290,9 +350,9 @@ impl Session {
         if let Some(v) = self
             .chain(chain)
             .and_then(|v| v.iter().find(|d| d.id == id))
-            .and_then(|d| d.params.get(&param.id))
+            .and_then(|d| d.stored_param(param.id))
         {
-            return *v;
+            return v;
         }
         self.runtimes
             .get(&id)
@@ -302,6 +362,10 @@ impl Session {
     }
 
     pub fn set_param(&mut self, chain: ChainRef, id: DeviceId, param: u32, value: f64) {
+        // A Macro owns this one. Only a clip envelope can still move it (manual p. 505).
+        if self.is_macro_mapped(chain, device_param(id, ParamId(param))) {
+            return;
+        }
         self.write_param(chain, id, param, value, true);
         self.mark_edit("Change Parameter");
     }
@@ -325,7 +389,7 @@ impl Session {
             .chain_mut(chain)
             .and_then(|v| v.iter_mut().find(|d| d.id == id))
         {
-            if d.params.insert(param, value).is_none() {
+            if d.store_param(param, value) {
                 if let (Some(rt), Some(before)) = (self.runtimes.get_mut(&id), before) {
                     rt.unmoved.entry(param).or_insert(before);
                 }
@@ -354,10 +418,10 @@ impl Session {
             .and_then(|v| v.iter_mut().find(|d| d.id == id));
         let known = device
             .as_ref()
-            .and_then(|d| d.params.get(&param).copied())
+            .and_then(|d| d.stored_param(param))
             .or(seeded);
         let changed = known.is_none_or(|old| !nearly_equal(old, value));
-        let first_value = device.is_some_and(|d| d.params.insert(param, value).is_none());
+        let first_value = device.is_some_and(|d| d.store_param(param, value));
         if let (true, Some(rt), Some(before)) = (first_value, self.runtimes.get_mut(&id), seeded) {
             rt.unmoved.entry(param).or_insert(before);
         }
@@ -523,26 +587,76 @@ impl Session {
         index: usize,
         new: Chain,
     ) {
+        self.install_chain(chain, rack, index, new, false);
+        self.mark_edit("Add Chain");
+    }
+
+    /// Adds a return chain to the Drum Rack `rack`, found in the chain at `chain`.
+    pub(super) fn insert_return_chain(
+        &mut self,
+        chain: ChainRef,
+        rack: DeviceId,
+        index: usize,
+        new: Chain,
+    ) {
+        self.install_chain(chain, rack, index, new, true);
+        self.mark_edit("Add Return Chain");
+    }
+
+    fn install_chain(
+        &mut self,
+        chain: ChainRef,
+        rack: DeviceId,
+        index: usize,
+        new: Chain,
+        is_return: bool,
+    ) {
         let depth = chain.depth() + 1;
         let mut built = HashMap::new();
         let (mut b, _) = self.builder();
-        let node = b.chain(&new, depth, &mut built);
+        let mut node = b.chain(&new, depth, &mut built);
         for d in &new.devices {
             build::note_errors(d, &built, &mut self.messages);
         }
         let devices = new.devices.clone();
-        let index = {
-            let Some(chains) = self.rack_chains_mut(chain, rack) else {
-                return;
-            };
-            let index = index.min(chains.len());
-            chains.insert(index, new);
-            index
+        let id = new.id;
+        let Some(d) = self
+            .chain_mut(chain)
+            .and_then(|v| v.iter_mut().find(|d| d.id == rack))
+        else {
+            return;
         };
+        let DeviceKind::Rack {
+            chains, returns, ..
+        } = &mut d.kind
+        else {
+            return;
+        };
+        let list = if is_return {
+            &mut *returns
+        } else {
+            &mut *chains
+        };
+        let index = index.min(list.len());
+        list.insert(index, new);
+        let returns_now = returns.clone();
+        let mix = returns_now
+            .iter()
+            .chain(chains.iter())
+            .find(|c| c.id == id)
+            .map(|c| build::chain_values(c, &returns_now));
+        let seeded = returns_now
+            .iter()
+            .chain(chains.iter())
+            .find(|c| c.id == id)
+            .map(|c| build::engine_mix(c, &returns_now));
+        if let Some(seed) = seeded {
+            node.seed_mix(seed);
+        }
         self.runtimes.extend(built);
         let layout = self.layouts.get_mut(&chain.owner());
         let swap = layout.and_then(|layout| {
-            let mut needs_bus = false;
+            let mut needs_bus = mix.is_some_and(|m| layout.place_chain(id, &m));
             for d in &devices {
                 needs_bus |= build::place_device_tree(layout, d, &self.runtimes);
             }
@@ -551,33 +665,67 @@ impl Session {
                 bus: layout.build(),
             })
         });
-        let insert = GraphOp::InsertChain {
-            target: chain.into(),
-            device: rack,
-            index,
-            chain: node,
+        let insert = if is_return {
+            GraphOp::InsertReturn {
+                target: chain.into(),
+                device: rack,
+                index,
+                chain: node,
+            }
+        } else {
+            GraphOp::InsertChain {
+                target: chain.into(),
+                device: rack,
+                index,
+                chain: node,
+            }
         };
         self.send_edits(swap.into_iter().chain([insert]).collect());
-        self.mark_edit("Add Chain");
+        self.push_rack_mix(chain, rack);
     }
 
-    /// Removes a chain from the rack `rack`, parking its devices for undo.
+    /// Removes a chain or a return chain from the rack `rack`, parking its devices for undo.
     pub(super) fn remove_rack_chain(&mut self, chain: ChainRef, rack: DeviceId, id: ChainId) {
-        let removed = self.rack_chains_mut(chain, rack).and_then(|chains| {
-            let i = chains.iter().position(|c| c.id == id)?;
-            Some(chains.remove(i))
-        });
+        let removed = self
+            .chain_mut(chain)
+            .and_then(|v| v.iter_mut().find(|d| d.id == rack))
+            .and_then(|d| {
+                let DeviceKind::Rack {
+                    chains, returns, ..
+                } = &mut d.kind
+                else {
+                    return None;
+                };
+                match chains.iter().position(|c| c.id == id) {
+                    Some(i) => Some(chains.remove(i)),
+                    None => {
+                        let i = returns.iter().position(|c| c.id == id)?;
+                        // Sends to a return chain that is gone are gone too.
+                        let removed = returns.remove(i);
+                        for c in chains.iter_mut() {
+                            c.mix.sends.retain(|s| s.to != id);
+                        }
+                        Some(removed)
+                    }
+                }
+            });
         let Some(mut removed) = removed else {
             return;
         };
         for d in &mut removed.devices {
             self.retire_device_runtimes(chain, d);
         }
+        self.forget_chain_automation(chain, &[id]);
+        self.forget_macro_targets(chain, &[], &[id]);
+        if let Some(l) = self.layouts.get_mut(&chain.owner()) {
+            l.remove_chain(id);
+        }
         self.send_edits(vec![GraphOp::RemoveChain {
             target: chain.into(),
             device: rack,
             chain: id,
         }]);
+        self.push_rack_mix(chain, rack);
         self.mark_edit("Delete Chain");
     }
 
@@ -602,6 +750,7 @@ impl Session {
             self.project
                 .tracks
                 .iter()
+                .chain(&self.project.returns)
                 .find_map(|t| find_device(&t.devices, ChainRef::Track(t.id), id))
         })
     }
@@ -619,6 +768,25 @@ pub(super) fn mixer_cell_of(chain: ChainRef, control: ParamId) -> Option<CellIx>
             (n < rlive_engine::MAX_SENDS).then(|| mix_cell::send(n))
         }
         _ => None,
+    }
+}
+
+/// The `ChainRef` an address came from.
+pub(super) fn chain_ref_of(addr: ChainAddr) -> ChainRef {
+    if addr.path.is_empty() {
+        match addr.owner {
+            TrackRef::Track(t) => ChainRef::Track(t),
+            TrackRef::Master => ChainRef::Master,
+        }
+    } else {
+        ChainRef::Nested(addr)
+    }
+}
+
+fn device_param(device: DeviceId, id: ParamId) -> ParamRef {
+    ParamRef {
+        owner: ParamOwner::Device(device),
+        id,
     }
 }
 

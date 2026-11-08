@@ -6,10 +6,11 @@
 
 use super::timing::{compensation_ops, RuntimeLatency, Timing};
 use super::Session;
+use rlive_core::TrackId;
 use rlive_engine::{
-    mix_cell, BusIn, EngineCommand, GraphOp, GraphTxn, RenderPlan, Step, MAX_SENDS,
+    mix_cell, BusIn, EngineCommand, GraphOp, GraphTxn, RackOuts, RenderPlan, Step, Tap, MAX_SENDS,
 };
-use rlive_project::{Project, Route, Track, TrackKind};
+use rlive_project::{Device, DeviceKind, Project, Route, Track, TrackKind};
 
 /// Where a track's main output goes, as an engine index. `None` for nowhere (Sends Only, or a
 /// destination it has no route to). Tracks not yet routable by A5 stay on Main.
@@ -83,6 +84,26 @@ pub(super) fn compile_with(project: &Project, timing: &Timing) -> RenderPlan {
         }
     }
 
+    // Rack return chains that feed return tracks directly. A return track may only feed one
+    // after it, so a chain of these can never loop.
+    for (i, t) in all.iter().enumerate() {
+        for (slot, target) in rack_out_targets(t).into_iter().enumerate() {
+            let Some(k) = project.return_index(target).filter(|k| *k < MAX_SENDS) else {
+                continue;
+            };
+            if i >= tracks && k <= i - tracks {
+                continue;
+            }
+            inputs[tracks + k].push(BusIn {
+                from: i as u32,
+                tap: Tap::Aux(rlive_core::DeviceId(0), slot as u8),
+                gain: None,
+                delay: 0,
+                feedback: false,
+            });
+        }
+    }
+
     // Each track's depth: 0 for a track fed by nothing, and one past whatever feeds it.
     let mut depth = vec![0u32; master + 1];
     let mut known = vec![false; master + 1];
@@ -144,6 +165,45 @@ pub(super) fn compile_with(project: &Project, timing: &Timing) -> RenderPlan {
     }
 }
 
+/// The return tracks a track's racks feed directly, in the order of the track's rack outputs.
+fn rack_out_targets(t: &Track) -> Vec<TrackId> {
+    fn walk(devices: &[Device], out: &mut Vec<TrackId>) {
+        for d in devices {
+            if let DeviceKind::Rack { returns, .. } = &d.kind {
+                for r in returns {
+                    if let Some(target) = r.mix.output {
+                        if !out.contains(&target) {
+                            out.push(target);
+                        }
+                    }
+                }
+            }
+            for c in d.chains() {
+                walk(&c.devices, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&t.devices, &mut out);
+    out
+}
+
+/// The room each track needs for its rack outputs, sent along with every plan that may read it.
+fn rack_out_ops(project: &Project, max_block: usize) -> Vec<GraphOp> {
+    project
+        .tracks
+        .iter()
+        .chain(&project.returns)
+        .filter_map(|t| {
+            let targets = rack_out_targets(t);
+            (!targets.is_empty()).then(|| GraphOp::SetRackOuts {
+                track: t.id,
+                outs: Box::new(RackOuts::new(targets, max_block)),
+            })
+        })
+        .collect()
+}
+
 impl Session {
     /// Apply edits to devices and chains, all at once. Only for edits within tracks: the list of
     /// tracks must not change, so the running plan still applies.
@@ -173,6 +233,7 @@ impl Session {
             &self.project,
             self.engine.max_block,
         ));
+        ops.extend(rack_out_ops(&self.project, self.engine.max_block));
         self.timing = timing;
         self.send(EngineCommand::Graph(GraphTxn::new(ops, Some(plan))));
     }

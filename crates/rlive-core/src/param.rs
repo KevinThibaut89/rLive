@@ -129,6 +129,119 @@ pub mod mixer {
     }
 }
 
+/// A rack's own parameters: its Macro Controls and the Chain Selector, as ids of a
+/// [`ParamOwner::Device`]. A rack always has cells for all sixteen macros, so showing or hiding
+/// one never moves a cell.
+pub mod rack {
+    use super::{ParamId, ParamInfo};
+
+    /// How many Macro Controls a rack can have (manual p. 504).
+    pub const MACRO_COUNT: usize = 16;
+    /// How many a new rack shows.
+    pub const DEFAULT_VISIBLE_MACROS: u8 = 8;
+    /// The Macro Control knobs and the Chain Selector run from 0 to this (p. 499, p. 505).
+    pub const SCALE: f64 = 127.0;
+    /// The Chain Selector, the value Chain Select zones are compared to.
+    pub const CHAIN_SELECT: ParamId = ParamId(MACRO_COUNT as u32);
+
+    /// The id of macro `n`, counting from 0.
+    pub const fn macro_id(n: usize) -> ParamId {
+        ParamId(n as u32)
+    }
+
+    /// Which macro an id is, if it is one.
+    pub fn macro_index(id: ParamId) -> Option<usize> {
+        ((id.0 as usize) < MACRO_COUNT).then_some(id.0 as usize)
+    }
+
+    /// Every parameter of a rack: the macros, then the Chain Selector.
+    pub fn infos() -> Vec<ParamInfo> {
+        let mut params: Vec<ParamInfo> = (0..MACRO_COUNT)
+            .map(|n| {
+                ParamInfo::continuous(
+                    macro_id(n).0,
+                    &format!("Macro {}", n + 1),
+                    0.0,
+                    SCALE,
+                    0.0,
+                    "",
+                )
+            })
+            .collect();
+        params.push(ParamInfo::continuous(
+            CHAIN_SELECT.0,
+            "Chain Selector",
+            0.0,
+            SCALE,
+            0.0,
+            "",
+        ));
+        params
+    }
+}
+
+/// The controls of a rack chain's mixer strip, as ids of a [`ParamOwner::Chain`]. Volume, pan and
+/// solo keep the ids they have on a track; a chain's on/off switch is its Chain Activator.
+pub mod chain {
+    use super::{mixer, ModMode, ParamId, ParamInfo, ACTIVATOR as DEVICE_ACTIVATOR};
+
+    pub const VOLUME: ParamId = mixer::VOLUME;
+    pub const PAN: ParamId = mixer::PAN;
+    pub const SOLO: ParamId = mixer::SOLO;
+    /// The Chain Activator. 1 means on.
+    pub const ACTIVATOR: ParamId = DEVICE_ACTIVATOR;
+    /// Send to return chain `n` is `ParamId(FIRST_SEND.0 + n)`.
+    pub const FIRST_SEND: ParamId = mixer::FIRST_SEND;
+    /// How many return chains a Drum Rack can have (p. 493).
+    pub const MAX_RETURNS: usize = 6;
+    /// Cells per chain: volume, pan, activator, solo, then one send per possible return chain.
+    pub const CONTROLS: usize = 4 + MAX_RETURNS;
+
+    pub const fn send(n: usize) -> ParamId {
+        ParamId(FIRST_SEND.0 + n as u32)
+    }
+
+    /// Where a control sits among a chain's cells.
+    pub fn control_index(id: ParamId) -> Option<usize> {
+        match id {
+            VOLUME => Some(0),
+            PAN => Some(1),
+            ACTIVATOR => Some(2),
+            SOLO => Some(3),
+            ParamId(n) if n >= FIRST_SEND.0 => {
+                let k = (n - FIRST_SEND.0) as usize;
+                (k < MAX_RETURNS).then_some(4 + k)
+            }
+            _ => None,
+        }
+    }
+
+    /// Every control of a chain, in cell order.
+    pub fn infos() -> Vec<ParamInfo> {
+        let [volume, pan, _mute, solo] = mixer::infos();
+        let mut params = vec![
+            volume,
+            pan,
+            ParamInfo::toggle(ACTIVATOR.0, "Chain Activator", true),
+            solo,
+        ];
+        for n in 0..MAX_RETURNS {
+            params.push(
+                ParamInfo::continuous(
+                    send(n).0,
+                    "Send",
+                    mixer::VOLUME_MIN_DB,
+                    0.0,
+                    mixer::VOLUME_MIN_DB,
+                    "dB",
+                )
+                .with_mod_mode(ModMode::Scale),
+            );
+        }
+        params
+    }
+}
+
 /// How a parameter's plain values map to knob positions. Small and `Copy` so the audio thread
 /// can resolve values without touching a [`ParamInfo`].
 #[derive(Debug, Clone, Copy, PartialEq)]

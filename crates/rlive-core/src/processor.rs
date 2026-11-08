@@ -118,6 +118,10 @@ impl EventQueue {
         &self.items
     }
 
+    pub fn as_mut_slice(&mut self) -> &mut [MidiEvent] {
+        &mut self.items
+    }
+
     pub fn len(&self) -> usize {
         self.items.len()
     }

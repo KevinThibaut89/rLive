@@ -122,9 +122,21 @@ impl DeviceSlot {
         self.for_each_processor(&mut |p| p.stop_processing());
     }
 
-    /// Silence every processor in this slot.
+    /// Silence every processor in this slot, and forget every note a rack in it let through.
     pub(crate) fn reset(&mut self) {
         self.for_each_processor(&mut |p| p.reset());
+        self.clear_rack_notes();
+    }
+
+    fn clear_rack_notes(&mut self) {
+        if let DeviceBody::Rack(r) = &mut self.body {
+            r.clear_notes();
+            for chain in r.chains.iter_mut().chain(r.returns.iter_mut()) {
+                for d in chain.devices.iter_mut() {
+                    d.clear_rack_notes();
+                }
+            }
+        }
     }
 
     /// Hand a processor a shared resource. A rack takes none and gives it straight back.
@@ -140,6 +152,7 @@ impl DeviceSlot {
         self.cells = bus.cells_of(self.id).unwrap_or(0..0);
         if let DeviceBody::Rack(r) = &mut self.body {
             for chain in r.chains.iter_mut().chain(r.returns.iter_mut()) {
+                chain.cells = bus.chain_cells(chain.id).unwrap_or(0..0);
                 bind_chain(&mut chain.devices, bus);
             }
         }
@@ -236,7 +249,7 @@ impl GainSmoother {
 }
 
 /// A gain whose target changes at control steps inside a block.
-struct GainStage {
+pub(crate) struct GainStage {
     smoother: GainSmoother,
     /// The target in force at the start of the next block.
     settled: (f32, f32),
@@ -248,7 +261,7 @@ struct GainStage {
 }
 
 impl GainStage {
-    fn new(max_block: usize) -> Self {
+    pub(crate) fn new(max_block: usize) -> Self {
         Self {
             smoother: GainSmoother::new(),
             settled: (1.0, 1.0),
@@ -258,7 +271,31 @@ impl GainStage {
         }
     }
 
-    fn set_target(&mut self, offset: usize, target: (f32, f32)) {
+    /// A stage that starts at exactly unity, doing nothing until it is told otherwise.
+    pub(crate) fn unity(max_block: usize) -> Self {
+        let mut stage = Self::new(max_block);
+        stage.dirty = false;
+        stage
+    }
+
+    /// [`apply`](Self::apply), or nothing at all for a stage sitting at unity.
+    pub(crate) fn apply_unless_unity(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        frames: usize,
+        coeff: f32,
+    ) {
+        let unity = self.points.is_empty()
+            && self.settled == (1.0, 1.0)
+            && (self.smoother.l - 1.0).abs() < 1e-6
+            && (self.smoother.r - 1.0).abs() < 1e-6;
+        if !unity {
+            self.apply(left, right, frames, coeff);
+        }
+    }
+
+    pub(crate) fn set_target(&mut self, offset: usize, target: (f32, f32)) {
         self.dirty = false;
         if target != self.target && self.points.len() < self.points.capacity() {
             self.target = target;
@@ -267,7 +304,7 @@ impl GainStage {
     }
 
     /// Smooth towards each target from the frame it took effect.
-    fn apply(&mut self, left: &mut [f32], right: &mut [f32], frames: usize, coeff: f32) {
+    pub(crate) fn apply(&mut self, left: &mut [f32], right: &mut [f32], frames: usize, coeff: f32) {
         let mut target = self.settled;
         let mut from = 0;
         for &(at, next) in &self.points {
@@ -288,7 +325,7 @@ impl GainStage {
     }
 
     /// [`apply`](Self::apply), but mixing `src` into `dst` and leaving `src` alone.
-    fn add(
+    pub(crate) fn add(
         &mut self,
         src: (&[f32], &[f32]),
         dst: (&mut [f32], &mut [f32]),
@@ -338,7 +375,7 @@ impl GainStage {
     }
 
     /// Start exactly at a gain, with nothing to smooth towards.
-    fn seed(&mut self, gain: (f32, f32)) {
+    pub(crate) fn seed(&mut self, gain: (f32, f32)) {
         self.smoother.l = gain.0;
         self.smoother.r = gain.1;
         self.settled = gain;
@@ -463,7 +500,7 @@ impl BlockCtx<'_> {
     }
 
     /// The transport as it stands `offset` frames into the block.
-    fn at(&self, offset: usize) -> TransportInfo {
+    pub(crate) fn at(&self, offset: usize) -> TransportInfo {
         let mut t = *self.transport;
         if t.playing {
             t.tick = self.time.tick_at(offset).max(0.0);
@@ -483,12 +520,75 @@ struct ChainCursor {
     next_event: usize,
 }
 
+/// Where a track's rack return chains that feed the Set's return tracks mix to, one bus per
+/// return track. Built on the UI thread.
+pub struct RackOuts {
+    tracks: Vec<TrackId>,
+    left: Vec<Vec<f32>>,
+    right: Vec<Vec<f32>>,
+}
+
+impl RackOuts {
+    /// A bus for each of these return tracks, in the slot order a plan's taps use.
+    pub fn new(tracks: Vec<TrackId>, max_block: usize) -> Self {
+        let n = tracks.len();
+        Self {
+            tracks,
+            left: vec![vec![0.0; max_block]; n],
+            right: vec![vec![0.0; max_block]; n],
+        }
+    }
+
+    /// The return tracks with a bus here, in slot order.
+    pub fn tracks(&self) -> &[TrackId] {
+        &self.tracks
+    }
+
+    fn clear(&mut self, frames: usize) {
+        for (l, r) in self.left.iter_mut().zip(&mut self.right) {
+            l[..frames].fill(0.0);
+            r[..frames].fill(0.0);
+        }
+    }
+
+    pub(crate) fn has(&self, track: TrackId) -> bool {
+        self.tracks.contains(&track)
+    }
+
+    /// Add a stereo signal to the bus for `track`, if there is one.
+    pub(crate) fn add(&mut self, track: TrackId, left: &[f32], right: &[f32]) {
+        let Some(slot) = self.tracks.iter().position(|t| *t == track) else {
+            return;
+        };
+        for (out, s) in self.left[slot].iter_mut().zip(left) {
+            *out += s;
+        }
+        for (out, s) in self.right[slot].iter_mut().zip(right) {
+            *out += s;
+        }
+    }
+
+    /// What slot `n` holds, for a plan's tap to read.
+    fn slot(&self, n: usize, frames: usize) -> Option<(&[f32], &[f32])> {
+        Some((
+            self.left.get(n)?.get(..frames)?,
+            self.right.get(n)?.get(..frames)?,
+        ))
+    }
+}
+
 /// What every chain of a track shares while one stretch of a block runs through it.
 pub(crate) struct Stretch<'a> {
     pub transport: &'a TransportInfo,
     pub param_out: &'a mut ParamOutQueue,
     pub bus: &'a mut ParamBus,
     pub on_param: &'a mut dyn FnMut(DeviceId, u32, f64),
+    /// The block this stretch is part of, so a rack can see how far into it a later moment is.
+    pub block: &'a BlockCtx<'a>,
+    /// One-pole coefficient for smoothing gains at this sample rate.
+    pub coeff: f32,
+    /// Where return chains that feed the Set's return tracks mix to, if this track has any.
+    pub rack_outs: Option<&'a mut RackOuts>,
     /// The stretch in frames from the start of the block.
     pub from: u32,
     pub to: u32,
@@ -586,12 +686,22 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
                     param_out: &mut *at.param_out,
                     bus: &mut *at.bus,
                     on_param: &mut *at.on_param,
+                    block: at.block,
+                    coeff: at.coeff,
+                    rack_outs: at.rack_outs.as_deref_mut(),
                     from: at.from,
                     to: at.from,
                 };
-                rack.run(&mut left[..0], &mut right[..0], &[], out, &mut none);
+                rack.run(
+                    &mut left[..0],
+                    &mut right[..0],
+                    &[],
+                    out,
+                    dev.cells.start,
+                    &mut none,
+                );
             }
-            DeviceBody::Rack(rack) => rack.run(left, right, heard, out, at),
+            DeviceBody::Rack(rack) => rack.run(left, right, heard, out, dev.cells.start, at),
         }
         if flush {
             // The device is gone from the stream now, so what it heard carries on past it.
@@ -609,10 +719,13 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
     input
 }
 
-/// Everything that writes a bus at a control step, in resolve order.
+/// Everything that writes a bus at a control step, in resolve order. Macros run even while a
+/// launched Session clip has punched the lanes out, since they are the mapping, not automation.
+#[allow(clippy::too_many_arguments)]
 fn run_writers(
     hooks: Option<&mut (dyn ControlHooks + 'static)>,
-    routes: Option<&TrackRoutes>,
+    routes: &TrackRoutes,
+    automate: bool,
     bus: &mut ParamBus,
     index: u32,
     offset: usize,
@@ -620,9 +733,10 @@ fn run_writers(
 ) {
     let tick = ctx.tick_at(offset);
     let Some(hooks) = hooks else {
-        if let Some(routes) = routes {
+        if automate {
             routes.automate(tick, bus);
         }
+        routes.run_macros(bus);
         return;
     };
     let step = ControlStep {
@@ -631,9 +745,11 @@ fn run_writers(
         tick,
     };
     hooks.macros(step, bus);
-    if let Some(routes) = routes {
+    if automate {
         routes.automate(tick, bus);
     }
+    // After automation, so a macro's own automated knob is heard at this step.
+    routes.run_macros(bus);
     hooks.automation(step, bus);
     hooks.modulation(step, bus);
 }
@@ -670,6 +786,8 @@ pub struct TrackNode {
     scratch: [Vec<f32>; 2],
     /// Lines the taps of this track are held back through, when a plan delays any.
     pub(crate) lines: TapLines,
+    /// Where this track's rack return chains feed the Set's return tracks, when any do.
+    pub(crate) rack_outs: Option<Box<RackOuts>>,
     /// How far behind this track its readers are: its main output first, then each send.
     edges: [FadingDelay; EDGES],
     /// Which edges the running plan still reads.
@@ -684,6 +802,8 @@ pub struct TrackNode {
     pub(crate) solo_open: bool,
     /// Solo leaves this track's sends on.
     pub(crate) sends_open: bool,
+    /// How fast gain changes settle, handed down by the engine.
+    pub(crate) smooth: f32,
 }
 
 impl TrackNode {
@@ -716,6 +836,7 @@ impl TrackNode {
             sends: SendTaps::new(max_block),
             scratch: [vec![0.0; max_block], vec![0.0; max_block]],
             lines: TapLines::default(),
+            rack_outs: None,
             edges: [FadingDelay::default(); EDGES],
             edge_live: [false; EDGES],
             is_master: false,
@@ -723,6 +844,7 @@ impl TrackNode {
             holds_solo: false,
             solo_open: true,
             sends_open: true,
+            smooth: 1.0,
         }
     }
 
@@ -826,6 +948,9 @@ impl TrackNode {
         }
         self.events.sort_unstable_by_key(|e| e.sort_key());
         self.cursor = ChainCursor::default();
+        if let Some(outs) = &mut self.rack_outs {
+            outs.clear(n);
+        }
         // Anything no send consumed last block: there's no plan edge carrying it.
         for level in &mut self.sends.levels {
             level.settle();
@@ -843,6 +968,9 @@ impl TrackNode {
 
     /// Take one input of the plan: what it taps, and how far behind this track it reads.
     pub(crate) fn want_input(&mut self, input: &BusIn) {
+        if matches!(input.tap, Tap::Aux(..)) {
+            return;
+        }
         let edge = edge_of(input);
         if let Some(edge) = edge {
             self.edge_live[edge] = true;
@@ -931,6 +1059,9 @@ impl TrackNode {
                     param_out: &mut self.param_out,
                     bus: &mut self.bus,
                     on_param: &mut |dev, p, v| on_param(id, dev, p, v),
+                    block: ctx,
+                    coeff: self.smooth,
+                    rack_outs: self.rack_outs.as_deref_mut(),
                     from: from as u32,
                     to: to as u32,
                 },
@@ -952,7 +1083,8 @@ impl TrackNode {
         run_writers(
             self.hooks.as_deref_mut(),
             // A launched Session clip punches a track's automation out until Back to Arrangement.
-            self.follow.then_some(&*self.routes),
+            &self.routes,
+            self.follow,
             &mut self.bus,
             index,
             offset,
@@ -1146,6 +1278,23 @@ impl TrackNode {
         }
         if let Some(line) = &mut l.post {
             line.push(&self.sends.post[0][..frames], &self.sends.post[1][..frames]);
+        }
+    }
+
+    /// Add one of this track's rack outputs to `left` and `right`.
+    pub(crate) fn rack_out_into(
+        &self,
+        slot: usize,
+        left: &mut [f32],
+        right: &mut [f32],
+        frames: usize,
+    ) {
+        let Some((l, r)) = self.rack_outs.as_ref().and_then(|o| o.slot(slot, frames)) else {
+            return;
+        };
+        for i in 0..frames {
+            left[i] += l[i];
+            right[i] += r[i];
         }
     }
 

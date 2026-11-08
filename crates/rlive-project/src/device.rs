@@ -1,5 +1,6 @@
 use crate::defaults::{is_default, yes};
 use crate::FileRef;
+use rlive_core::param::rack::MACRO_COUNT;
 use rlive_core::param::ParamRef;
 use rlive_core::{ChainId, DeviceId, PluginFormat, TrackId};
 use serde::{Deserialize, Serialize};
@@ -34,12 +35,30 @@ pub enum DeviceKind {
         /// Return chains, which the chains send to.
         #[serde(default, skip_serializing_if = "is_default")]
         returns: Vec<Chain>,
-        /// The visible macro controls; how many there are is part of the rack.
+        /// The rack's macro controls, up to 16. Hidden ones keep working: `visible_macros` only
+        /// says how many are shown. Empty means none have been touched yet.
         #[serde(default, skip_serializing_if = "is_default")]
         macros: Vec<Macro>,
+        /// How many Macro Controls are shown, 1 to 16 (manual p. 504). 8 on a new rack.
+        #[serde(
+            default = "default_visible_macros",
+            skip_serializing_if = "is_default_visible"
+        )]
+        visible_macros: u8,
+        /// With this on the Chain Selector filters MIDI other than notes as well (p. 499).
+        #[serde(default, skip_serializing_if = "is_default")]
+        select_filters_ctrl: bool,
         #[serde(default, skip_serializing_if = "is_default")]
         variations: Vec<Variation>,
     },
+}
+
+fn default_visible_macros() -> u8 {
+    rlive_core::param::rack::DEFAULT_VISIBLE_MACROS
+}
+
+fn is_default_visible(n: &u8) -> bool {
+    *n == default_visible_macros()
 }
 
 /// Which of Live's rack types a rack is.
@@ -174,6 +193,7 @@ pub struct ChainSend {
 /// A rack's macro control.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Macro {
+    /// What the user called it. Empty leaves it to its mapping's name, or `Macro n`.
     pub name: String,
     /// 0..127, as on the knob.
     #[serde(default, skip_serializing_if = "is_default")]
@@ -192,6 +212,30 @@ pub struct MacroMapping {
     pub target: ParamRef,
     pub min: f64,
     pub max: f64,
+}
+
+impl Default for Macro {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            value: 0.0,
+            mappings: Vec::new(),
+            exclude_random: false,
+            exclude_variations: false,
+        }
+    }
+}
+
+/// Make sure a rack's macro list holds at least `n` entries. They are created on first touch.
+pub fn grow_macros(macros: &mut Vec<Macro>, n: usize) {
+    let n = n.min(MACRO_COUNT);
+    if macros.len() < n {
+        macros.resize_with(n, Macro::default);
+    }
+}
+
+fn macro_index(param: u32) -> Option<usize> {
+    rlive_core::param::rack::macro_index(rlive_core::ParamId(param))
 }
 
 /// A stored set of macro values, one per macro.
@@ -219,6 +263,25 @@ pub struct Device {
 }
 
 impl Device {
+    /// The value a parameter is saved with: a macro's knob for a rack, otherwise `params`.
+    pub fn stored_param(&self, param: u32) -> Option<f64> {
+        if let (DeviceKind::Rack { macros, .. }, Some(n)) = (&self.kind, macro_index(param)) {
+            return Some(macros.get(n).map_or(0.0, |m| m.value));
+        }
+        self.params.get(&param).copied()
+    }
+
+    /// Save a parameter's value. Returns whether it had none before, which a rack's macros never
+    /// do. See [`stored_param`](Self::stored_param).
+    pub fn store_param(&mut self, param: u32, value: f64) -> bool {
+        if let (DeviceKind::Rack { macros, .. }, Some(n)) = (&mut self.kind, macro_index(param)) {
+            grow_macros(macros, n + 1);
+            macros[n].value = value;
+            return false;
+        }
+        self.params.insert(param, value).is_none()
+    }
+
     fn new(kind: DeviceKind, name: &str) -> Self {
         Self {
             id: DeviceId::new(),
@@ -262,6 +325,8 @@ impl Device {
                 chains: Vec::new(),
                 returns: Vec::new(),
                 macros: Vec::new(),
+                visible_macros: default_visible_macros(),
+                select_filters_ctrl: false,
                 variations: Vec::new(),
             },
             name,

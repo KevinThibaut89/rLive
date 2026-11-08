@@ -22,6 +22,7 @@ pub mod shared;
 pub mod track;
 
 pub use automation::AutomationLane;
+pub use automation::MacroRoute;
 use clip::BlockTime;
 pub use clip::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
 pub use commands::{ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, RecordCmd, TransportCmd};
@@ -36,7 +37,7 @@ pub use params::{
     mix_cell, BusLayout, CellIx, CellSpec, CellState, CellTarget, ControlHooks, ControlStep,
     ParamBus, TrackRoutes, CONTROL_STEP, MAX_SENDS, SEND_MAX_DB, SEND_MIN_DB,
 };
-pub use rack::{ChainNode, RackKind, RackNode, Zones, MAX_CHAINS};
+pub use rack::{ChainMix, ChainNode, DrumPad, RackKind, RackNode, Zone, Zones, MAX_CHAINS};
 use rlive_core::{
     time::{BarMap, TempoRun, TimeMaps},
     DeviceId, MidiMessage, Quantize, TrackId, TransportInfo,
@@ -46,7 +47,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 use track::BlockCtx;
-pub use track::{DeviceBody, DeviceSlot, MixSettings, TrackNode};
+pub use track::{DeviceBody, DeviceSlot, MixSettings, RackOuts, TrackNode};
 
 pub const MAX_TRACKS: usize = 256;
 /// How deep a group can be nested for solo purposes, in case a plan links groups in a loop.
@@ -663,9 +664,12 @@ impl Engine {
 
         let garbage = &mut self.garbage;
         let mut retire_clip = |c: Arc<ClipData>| retire(garbage, Garbage::Shared(c));
+        let smooth = self.smooth_coeff;
         for t in self.tracks.iter_mut() {
+            t.smooth = smooth;
             t.begin_block(time, &transport, &mut retire_clip);
         }
+        self.master.smooth = smooth;
         self.master.begin_block(time, &transport, &mut retire_clip);
 
         let ctx = BlockCtx {
@@ -919,6 +923,10 @@ fn add_input(
     frames: usize,
     coeff: f32,
 ) {
+    if let Tap::Aux(_, slot) = input.tap {
+        from.rack_out_into(slot as usize, left, right, frames);
+        return;
+    }
     if input.gain.is_some() {
         from.send_into(
             input,

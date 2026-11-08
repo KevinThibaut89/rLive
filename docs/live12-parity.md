@@ -761,28 +761,28 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** A8, C15
 
-- `[ ]` Four types: Instrument, Drum, Audio Effect, MIDI Effect, with type rules. XL as a system.
+- `[x]` Four types: Instrument, Drum, Audio Effect, MIDI Effect, with type rules. XL as a system.
 - `[ ]` Parallel chains, summed; unlimited nesting; Group, Group to Drum Rack, Ungroup; bracket UI. L
 - `[ ]` View column; fold; hierarchical device navigator on selector context menu. M
 - `[ ]` Chain List: Activator, Solo, Hot-Swap, volume, pan; multi-select; drop area; arrow-key flip; rename, colour, info text; chain presets; drag across tracks. L
 - `[ ]` Auto Select. S
 - `[ ]` Zones: main range plus fade range, drag-edited. L
-- `[ ]` Key zones. M. Velocity zones (1-127). M. Fades attenuate note velocity.
-- `[ ]` Chain Select zones 0-127, default length 1 at value 0; Filters MIDI Ctrl option. M
-- `[ ]` Chain Select fades attenuate output in audio Racks; without fades tails ring out. M
+- `[x]` Key zones. M. Velocity zones (1-127). M. Fades attenuate note velocity.
+- `[x]` Chain Select zones 0-127, default length 1 at value 0; Filters MIDI Ctrl option. M
+- `[x]` Chain Select fades attenuate output in audio Racks; without fades tails ring out. M
 - `[ ]` Drum Rack chain controls: Receive note, Play note, Choke (16 groups), Preview; All Notes disables Play and Choke. L
-- `[ ]` Up to 6 return chains; post-fader sends; return output to Rack or Set returns. M
+- `[x]` Up to 6 return chains; post-fader sends; return output to Rack or Set returns. M
 - `[ ]` Pad View: 128 notes, scroll by 16 or row; drag anything to a pad. L
 - `[ ]` Sample drop creates Simpler, replaces only source; multi-drop maps chromatically; modifier layers to nested Rack. M. Depends on Simpler.
 - `[ ]` Pad swap and layer; shared Receive notes create Multi pad with reduced controls. M
 - `[ ]` D toggles Hot-Swap target to last pad. S
 - `[ ]` Control surface pads follow scroll. M. [H]
-- `[ ]` Macros: up to 16, 8 by default, visible count saved. M
+- `[x]` Macros: up to 16, 8 by default, visible count saved. M
 - `[ ]` Macro Map Mode with Mapping Browser, Min/Max, inverted range; mapped parameter locked except clip envelopes; auto naming and units; rename, colour, info text. L
-- `[ ]` Rand button; Exclude Macro from Randomization; Volume macros excluded by default in Instrument Rack presets. S
-- `[ ]` Macro Variations: store, launch, overwrite, rename, duplicate, delete; Exclude Macro From Variations. M
+- `[~]` Rand button; Exclude Macro from Randomization; Volume macros excluded by default in Instrument Rack presets. S (logic built and tested; controls arrive in C15)
+- `[~]` Macro Variations: store, launch, overwrite, rename, duplicate, delete; Exclude Macro From Variations. M (logic built and tested; controls arrive in C15)
 - `[ ]` Rack mixer inside Session View, with bidirectional sync and multi-select (mixer side only). L
-- `[ ]` Extract chains; Drum return creates return track; drum chain from mixer carries its MIDI notes. L
+- `[x]` Extract chains; Drum return creates return track; drum chain from mixer carries its MIDI notes. L
 
 
 ## 26. Automation (511-532)

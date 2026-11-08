@@ -11,6 +11,7 @@ mod devices;
 mod export;
 mod graph;
 mod info;
+mod racks;
 mod recording;
 mod routing;
 mod samples;
@@ -29,6 +30,8 @@ mod compensation_tests;
 #[cfg(test)]
 mod golden;
 #[cfg(test)]
+mod rack_tests;
+#[cfg(test)]
 mod routing_tests;
 #[cfg(test)]
 mod sample_tests;
@@ -41,6 +44,7 @@ pub use clips::ClipRef;
 pub use devices::ChainRef;
 pub use graph::compile_plan;
 pub use info::InfoTarget;
+pub use racks::{ExtractNotes, MacroDisplay, ZoneKind};
 pub use rlive_audio_io::SampleCache;
 pub use warping::{ShortSampleMode, WarpDefaults, WarpView, LONG_SAMPLE_SECONDS};
 
@@ -84,6 +88,8 @@ pub struct Session {
     timing: timing::Timing,
     /// Device sample changes waiting for their file to load.
     pending_samples: Vec<samples::PendingSample>,
+    /// Where the Rand button's numbers come from.
+    random: u64,
 }
 
 impl Session {
@@ -108,6 +114,7 @@ impl Session {
             automation: automation::AutomationRecorder::default(),
             timing: timing::Timing::default(),
             pending_samples: Vec::new(),
+            random: racks::random_seed(),
         };
         s.preload_samples();
         s.rebuild();

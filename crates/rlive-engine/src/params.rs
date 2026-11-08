@@ -23,8 +23,8 @@
 
 use crate::shared::AtomicF32;
 use crate::track::MixSettings;
-use rlive_core::param::{mixer, ModMode, ParamFlags, ParamId, ParamRange, ACTIVATOR};
-use rlive_core::{DeviceId, ParamEvent, ParamInfo};
+use rlive_core::param::{chain, mixer, ModMode, ParamFlags, ParamId, ParamRange, ACTIVATOR};
+use rlive_core::{ChainId, DeviceId, ParamEvent, ParamInfo};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
@@ -37,6 +37,8 @@ pub const CONTROL_STEP: usize = 32;
 
 /// Room in a device's parameter queue when nothing says how much it needs.
 const DEFAULT_PARAM_EVENTS: usize = 1024;
+/// A chain has few controls, and racks can have many chains.
+const CHAIN_PARAM_EVENTS: usize = 64;
 /// A device's parameter queue never needs more than this; past it, changes get merged.
 const MAX_PARAM_EVENTS: usize = 8192;
 /// Marks a cell that no device owns.
@@ -254,6 +256,11 @@ pub enum CellTarget {
     Activator {
         device: DeviceId,
     },
+    /// A control of a rack chain's mixer strip.
+    Chain {
+        chain: ChainId,
+        control: ParamId,
+    },
 }
 
 /// The part of a cell the audio thread needs to convert its value.
@@ -287,7 +294,8 @@ impl CellSpec {
             // Solo isn't part of a mix that automation could write.
             automatable: info.flags.contains(ParamFlags::AUTOMATABLE)
                 && !info.flags.contains(ParamFlags::READ_ONLY)
-                && target != CellTarget::Mixer(mixer::SOLO),
+                && target != CellTarget::Mixer(mixer::SOLO)
+                && !matches!(target, CellTarget::Chain { control, .. } if control == chain::SOLO),
         }
     }
 }
@@ -299,6 +307,13 @@ pub(crate) struct Resolved {
     pub activators: bool,
     /// A mixer value changed; only the gain stage cares.
     pub mixer: bool,
+}
+
+/// Who owns a run of cells and the inbox that comes with them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Owner {
+    Device(DeviceId),
+    Chain(ChainId),
 }
 
 /// The flat parameter bus of a track or the Master.
@@ -316,8 +331,8 @@ pub struct ParamBus {
     queued: usize,
     /// Sorted index for parameter changes that come from the device itself.
     by_param: Box<[(DeviceId, u32, CellIx)]>,
-    /// Who owns cells, sorted by device. Each entry's position is its inbox.
-    owners: Box<[(DeviceId, Range<u32>)]>,
+    /// Who owns cells, sorted. Each entry's position is its inbox.
+    owners: Box<[(Owner, Range<u32>)]>,
     /// For each cell, the inbox of its owner, or [`NO_OWNER`].
     owner_of_cell: Box<[u32]>,
     inboxes: Box<[Inbox]>,
@@ -392,6 +407,11 @@ impl ParamBus {
             return;
         }
         let c = &mut self.cells[ix];
+        // A Macro owns this parameter: the user can't take it over, only a clip envelope can
+        // still push it around (manual p. 505).
+        if gesture && c.flags & MACRO != 0 {
+            return;
+        }
         c.base = value;
         if gesture && c.flags & AUTOMATED != 0 {
             self.set_overridden(ix, true);
@@ -407,6 +427,9 @@ impl ParamBus {
             return None;
         }
         let c = &mut self.cells[ix];
+        if c.flags & MACRO != 0 {
+            return None;
+        }
         let before = c.sent;
         c.base = value;
         c.flags |= TOUCHED;
@@ -439,9 +462,28 @@ impl ParamBus {
             return;
         }
         let c = &mut self.cells[ix];
+        if c.flags & MACRO != 0 && c.auto == value {
+            return;
+        }
         c.auto = value;
         c.flags |= MACRO;
         self.touch(ix);
+    }
+
+    /// What a cell is set to right now, in plain units and with its modulation, before it has
+    /// been resolved. A Macro reads its own knob with this, so it is never a step behind.
+    pub(crate) fn current(&self, cell: CellIx) -> f64 {
+        let ix = cell.0 as usize;
+        let c = self.cells[ix];
+        let automated = c.flags & MACRO != 0
+            || (c.flags & AUTOMATED != 0 && c.flags & (OVERRIDDEN | TOUCHED) == 0);
+        let source = if automated { c.auto } else { c.base };
+        if c.add == 0.0 && c.scale == 1.0 {
+            return source;
+        }
+        let range = self.specs[ix].range;
+        let norm = (range.to_normalized(source) * c.scale as f64 + c.add as f64).clamp(0.0, 1.0);
+        range.from_normalized(norm)
     }
 
     pub fn release_macro(&mut self, cell: CellIx) {
@@ -599,18 +641,29 @@ impl ParamBus {
                     id: param,
                     value: plain,
                 }),
+                (CellTarget::Chain { control, .. }, Some(inbox)) => inbox.params.push(ParamEvent {
+                    offset,
+                    id: control,
+                    value: plain,
+                }),
                 _ => {}
             }
         }
     }
 
+    fn owner_cells(&self, owner: Owner) -> Option<Range<u32>> {
+        let found = self.owners.binary_search_by_key(&owner, |(o, _)| *o).ok()?;
+        Some(self.owners[found].1.clone())
+    }
+
     /// The cells `device` owns in this bus.
     pub(crate) fn cells_of(&self, device: DeviceId) -> Option<Range<u32>> {
-        let found = self
-            .owners
-            .binary_search_by_key(&device, |(d, _)| *d)
-            .ok()?;
-        Some(self.owners[found].1.clone())
+        self.owner_cells(Owner::Device(device))
+    }
+
+    /// The cells of a rack chain's mixer strip.
+    pub(crate) fn chain_cells(&self, chain: ChainId) -> Option<Range<u32>> {
+        self.owner_cells(Owner::Chain(chain))
     }
 
     fn inbox(&mut self, cell: u32) -> Option<&mut Inbox> {
@@ -642,11 +695,11 @@ impl ParamBus {
     /// inbox of every device still here.
     pub(crate) fn adopt(&mut self, old: &ParamBus) {
         let mut before = 0;
-        for (at, (device, _)) in self.owners.iter().enumerate() {
-            while before < old.owners.len() && old.owners[before].0 < *device {
+        for (at, (owner, _)) in self.owners.iter().enumerate() {
+            while before < old.owners.len() && old.owners[before].0 < *owner {
                 before += 1;
             }
-            if old.owners.get(before).is_some_and(|(d, _)| d == device) {
+            if old.owners.get(before).is_some_and(|(o, _)| o == owner) {
                 self.inboxes[at].take_over(&old.inboxes[before]);
             }
         }
@@ -711,6 +764,9 @@ pub trait ControlHooks: Send {
     fn modulation(&mut self, _step: ControlStep, _bus: &mut ParamBus) {}
 }
 
+/// How many cells a rack chain's strip takes. See [`chain`].
+const CHAIN_CELLS: u32 = chain::CONTROLS as u32;
+
 struct DeviceCells {
     activator: CellIx,
     /// Activator included.
@@ -725,6 +781,8 @@ pub struct BusLayout {
     base: Vec<f64>,
     free: Vec<(u32, u32)>,
     devices: HashMap<DeviceId, DeviceCells>,
+    /// Where each rack chain's strip starts.
+    chains: HashMap<ChainId, u32>,
     effective: Arc<[AtomicF32]>,
     states: Arc<[AtomicU8]>,
     overridden: Arc<AtomicU32>,
@@ -744,6 +802,7 @@ impl BusLayout {
             base,
             free: Vec::new(),
             devices: HashMap::new(),
+            chains: HashMap::new(),
             effective: Arc::from([]),
             states: Arc::from([]),
             overridden: Arc::new(AtomicU32::new(0)),
@@ -865,6 +924,42 @@ impl BusLayout {
         }
     }
 
+    /// Give a rack chain's mixer strip its cells, seeded with `values` in [`chain`]'s cell order.
+    /// Returns whether the engine needs a new bus built from this layout.
+    pub fn place_chain(&mut self, id: ChainId, values: &[f64; chain::CONTROLS]) -> bool {
+        if self.chains.contains_key(&id) {
+            return false;
+        }
+        let start = self.take_range(CHAIN_CELLS);
+        for (i, info) in chain::infos().iter().enumerate() {
+            let ix = start as usize + i;
+            self.specs[ix] = CellSpec::of(
+                info,
+                CellTarget::Chain {
+                    chain: id,
+                    control: info.param_id(),
+                },
+            );
+            self.base[ix] = values[i];
+        }
+        self.chains.insert(id, start);
+        true
+    }
+
+    /// Release a chain's cells. The bus keeps them idle until a later bus reuses them.
+    pub fn remove_chain(&mut self, id: ChainId) {
+        if let Some(start) = self.chains.remove(&id) {
+            self.give_back(start, CHAIN_CELLS);
+        }
+    }
+
+    /// The cell of a control on a rack chain's strip.
+    pub fn chain_cell(&self, id: ChainId, control: ParamId) -> Option<CellIx> {
+        let start = *self.chains.get(&id)?;
+        let at = chain::control_index(control)? as u32;
+        Some(CellIx(start + at))
+    }
+
     /// The cell of a device parameter.
     pub fn device_cell(&self, device: DeviceId, param: u32) -> Option<CellIx> {
         self.devices.get(&device)?.params.get(&param).copied()
@@ -948,23 +1043,30 @@ impl BusLayout {
             })
             .collect();
         by_param.sort_unstable();
-        let mut owners: Vec<(DeviceId, Range<u32>)> = self
+        let mut owners: Vec<(Owner, Range<u32>)> = self
             .devices
             .iter()
-            .map(|(id, d)| (*id, d.activator.0..d.activator.0 + d.len))
+            .map(|(id, d)| (Owner::Device(*id), d.activator.0..d.activator.0 + d.len))
+            .chain(
+                self.chains
+                    .iter()
+                    .map(|(id, start)| (Owner::Chain(*id), *start..*start + CHAIN_CELLS)),
+            )
             .collect();
         owners.sort_unstable_by_key(|(id, _)| *id);
         let mut owner_of_cell = vec![NO_OWNER; cells.len()].into_boxed_slice();
         let inboxes = owners
             .iter()
             .enumerate()
-            .map(|(owner, (_, range))| {
-                owner_of_cell[range.start as usize..range.end as usize].fill(owner as u32);
+            .map(|(at, (owner, range))| {
+                owner_of_cell[range.start as usize..range.end as usize].fill(at as u32);
                 let params = (range.len() - 1).max(8) * (self.max_block / CONTROL_STEP + 1);
+                let floor = match owner {
+                    Owner::Device(_) => DEFAULT_PARAM_EVENTS,
+                    Owner::Chain(_) => CHAIN_PARAM_EVENTS,
+                };
                 Inbox {
-                    params: ParamQueue::with_capacity(
-                        params.clamp(DEFAULT_PARAM_EVENTS, MAX_PARAM_EVENTS),
-                    ),
+                    params: ParamQueue::with_capacity(params.clamp(floor, MAX_PARAM_EVENTS)),
                     switch: None,
                 }
             })

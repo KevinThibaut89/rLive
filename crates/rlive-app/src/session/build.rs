@@ -4,9 +4,10 @@ use super::automation::routes_for;
 use super::ChainRef;
 use rlive_audio_io::{SampleCache, SampleStatus};
 use rlive_core::envelope::segment_value;
+use rlive_core::param::{chain as chain_controls, rack as rack_params};
 use rlive_core::time::{BarMap, TempoMap, TempoPoint, TimeMaps};
 use rlive_core::warp::{self, WarpMap};
-use rlive_core::{DeviceId, ParamInfo, Ports, Processor, ScaleInfo, Section, ViewChannel};
+use rlive_core::{ChainId, DeviceId, ParamInfo, Ports, Processor, ScaleInfo, Section, ViewChannel};
 use rlive_devices::devices::b1::common::SCALES;
 use rlive_devices::{DeviceInit, DeviceRole};
 use rlive_engine::shared::TrackShared;
@@ -19,7 +20,8 @@ use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
 use rlive_project::{
     ArrangementClip, BeatsPreserve, Breakpoint, Chain, Clip, ClipContent, ClipScale, Device,
-    DeviceKind, Project, RackKind, Track, TrackKind, Warp, WarpMode as ProjectWarpMode,
+    DeviceKind, DrumPad as ProjectPad, Project, RackKind, Track, TrackKind, Warp,
+    WarpMode as ProjectWarpMode, Zone as ProjectZone, Zones as ProjectZones,
 };
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
@@ -345,6 +347,7 @@ impl Builder<'_> {
             kind,
             chains,
             returns,
+            select_filters_ctrl,
             ..
         } = &dev.kind
         else {
@@ -357,14 +360,19 @@ impl Builder<'_> {
             RackKind::Drum => (EngineRackKind::Drum, DeviceRole::Instrument),
         };
         let mut node = Box::new(RackNode::new(kind));
+        node.select_filters_ctrl = *select_filters_ctrl;
+        node.seed_selector(dev.stored_param(rack_params::CHAIN_SELECT.0).unwrap_or(0.0) as f32);
         for c in chains {
-            let chain = self.chain(c, depth + 1, runtimes);
+            let mut chain = self.chain(c, depth + 1, runtimes);
+            chain.seed_mix(engine_mix(c, returns));
             node.chains.push(chain);
         }
         for c in returns {
-            let chain = self.chain(c, depth + 1, runtimes);
+            let mut chain = self.chain(c, depth + 1, runtimes);
+            chain.seed_mix(engine_mix(c, returns));
             node.returns.push(chain);
         }
+        node.seed_gates();
         let mut slot = DeviceSlot::rack(dev.id, node);
         slot.bypass = dev.bypass;
         let latency = Arc::new(AtomicU32::new(0));
@@ -372,7 +380,7 @@ impl Builder<'_> {
         runtimes.insert(
             dev.id,
             DeviceRuntime {
-                params: Vec::new(),
+                params: rack_params::infos(),
                 plugin: None,
                 error: None,
                 role,
@@ -394,6 +402,7 @@ impl Builder<'_> {
         runtimes: &mut HashMap<DeviceId, DeviceRuntime>,
     ) -> Box<ChainNode> {
         let mut node = Box::new(ChainNode::new(chain.id, self.max_block));
+        node.zones = engine_zones(&chain.zones);
         for d in &chain.devices {
             let slot = self.device(d, depth, runtimes);
             node.devices.push(slot);
@@ -511,7 +520,12 @@ impl Builder<'_> {
             place_device_tree(&mut layout, d, runtimes);
         }
         node.bus = layout.build();
-        node.routes = routes_for(&track.automation, ChainRef::Track(track.id), &layout);
+        node.routes = routes_for(
+            &track.automation,
+            &track.devices,
+            ChainRef::Track(track.id),
+            &layout,
+        );
         layouts.insert(ChainRef::Track(track.id), layout);
         for (i, c) in track.clips.iter().enumerate() {
             if let Some(data) = c.as_ref().and_then(|c| self.clip(c)) {
@@ -540,7 +554,12 @@ impl Builder<'_> {
             place_device_tree(&mut layout, d, runtimes);
         }
         node.bus = layout.build();
-        node.routes = routes_for(&project.master.automation, ChainRef::Master, &layout);
+        node.routes = routes_for(
+            &project.master.automation,
+            &project.master.devices,
+            ChainRef::Master,
+            &layout,
+        );
         layouts.insert(ChainRef::Master, layout);
         Box::new(node)
     }
@@ -550,12 +569,90 @@ impl Builder<'_> {
 /// Returns whether the engine needs a bus built from the layout.
 fn place_device(layout: &mut BusLayout, dev: &Device, rt: &DeviceRuntime) -> bool {
     layout.place_device(dev.id, !dev.bypass, &rt.params, |p| {
-        dev.params
-            .get(&p.id)
-            .copied()
+        dev.stored_param(p.id)
             .or_else(|| rt.plugin.as_ref().and_then(|h| h.param_value(p.id)))
             .unwrap_or(p.default)
     })
+}
+
+/// The engine's copy of a chain's zones.
+pub(super) fn engine_zones(z: &ProjectZones) -> rlive_engine::Zones {
+    fn zone(z: &ProjectZone) -> rlive_engine::Zone {
+        rlive_engine::Zone {
+            low: z.low,
+            high: z.high,
+            fade_low: z.fade_low,
+            fade_high: z.fade_high,
+        }
+    }
+    rlive_engine::Zones {
+        key: zone(&z.key),
+        velocity: zone(&z.velocity),
+        select: zone(&z.select),
+        drum: z.drum.map(|p: ProjectPad| rlive_engine::DrumPad {
+            receive: p.receive,
+            play: p.play,
+            choke: p.choke,
+        }),
+    }
+}
+
+/// The level of a chain's send to each return chain, by position, in dB.
+fn send_levels(c: &Chain, returns: &[Chain]) -> [f32; chain_controls::MAX_RETURNS] {
+    let mut levels = [rlive_engine::SEND_MIN_DB as f32; chain_controls::MAX_RETURNS];
+    for (i, ret) in returns.iter().take(chain_controls::MAX_RETURNS).enumerate() {
+        if let Some(send) = c.mix.sends.iter().find(|s| s.to == ret.id) {
+            levels[i] = send.level_db;
+        }
+    }
+    levels
+}
+
+/// A chain's strip for the engine: volume, pan, switches, and its sends by position.
+pub(super) fn engine_mix(c: &Chain, returns: &[Chain]) -> rlive_engine::ChainMix {
+    rlive_engine::ChainMix {
+        volume_db: c.mix.volume_db,
+        pan: c.mix.pan,
+        active: c.mix.active,
+        solo: c.mix.solo,
+        sends: send_levels(c, returns),
+        output: c.mix.output,
+    }
+}
+
+/// A chain's strip in the cell order of its [`chain_controls`].
+pub(super) fn chain_values(c: &Chain, returns: &[Chain]) -> [f64; chain_controls::CONTROLS] {
+    let mut values = [0.0; chain_controls::CONTROLS];
+    values[0] = c.mix.volume_db as f64;
+    values[1] = c.mix.pan as f64;
+    values[2] = c.mix.active as u8 as f64;
+    values[3] = c.mix.solo as u8 as f64;
+    for (i, level) in send_levels(c, returns).iter().enumerate() {
+        values[4 + i] = *level as f64;
+    }
+    values
+}
+
+/// The cells of a rack's chains and return chains. Returns whether any were new.
+pub(super) fn place_chains(layout: &mut BusLayout, rack: &Device) -> bool {
+    let DeviceKind::Rack {
+        chains, returns, ..
+    } = &rack.kind
+    else {
+        return false;
+    };
+    let mut needs_bus = false;
+    for c in chains.iter().chain(returns) {
+        needs_bus |= layout.place_chain(c.id, &chain_values(c, returns));
+    }
+    needs_bus
+}
+
+/// Every chain under a device, the device's own and any nested deeper.
+pub(super) fn chains_of(dev: &Device) -> Vec<ChainId> {
+    let mut chains = Vec::new();
+    dev.for_each(&mut |d| chains.extend(d.chains().map(|c| c.id)));
+    chains
 }
 
 /// [`place_device`] for a device and everything nested in it.
@@ -569,6 +666,7 @@ pub(super) fn place_device_tree(
         if let Some(rt) = runtimes.get(&d.id) {
             needs_bus |= place_device(layout, d, rt);
         }
+        needs_bus |= place_chains(layout, d);
     });
     needs_bus
 }

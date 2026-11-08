@@ -13,20 +13,21 @@
 use super::devices::mixer_cell_of;
 use super::{ChainRef, Session};
 use rlive_core::param::{EnvTarget, ParamOwner, ParamRef, ACTIVATOR};
-use rlive_core::{DeviceId, ParamRange, TrackId};
+use rlive_core::{ChainId, DeviceId, ParamRange, TrackId};
 use rlive_engine::{
-    AutomationLane, BusLayout, CellIx, CellState, CellTarget, EngineCommand, GraphOp, ParamCmd,
-    RecordCmd, TrackRef, TrackRoutes,
+    AutomationLane, BusLayout, CellIx, CellState, CellTarget, EngineCommand, GraphOp, MacroRoute,
+    ParamCmd, RecordCmd, TrackRef, TrackRoutes,
 };
-use rlive_project::{Breakpoint, EnvMode, Envelope};
+use rlive_project::{Breakpoint, Device, DeviceKind, EnvMode, Envelope};
 use std::collections::HashMap;
 use std::mem::take;
 use std::sync::Arc;
 
-/// Compiles a track's envelopes for the engine, addressed to the cells of its layout. Envelopes
-/// for something without a cell (yet) are left out and kept in the project.
+/// Compiles a track's envelopes and Macro mappings for the engine, addressed to the cells of its
+/// layout. Envelopes for something without a cell (yet) are left out and kept in the project.
 pub(super) fn routes_for(
     envelopes: &[Envelope],
+    devices: &[Device],
     owner: ChainRef,
     layout: &BusLayout,
 ) -> Arc<TrackRoutes> {
@@ -41,7 +42,40 @@ pub(super) fn routes_for(
             AutomationLane::new(cell, layout.spec(cell)?.range, points)
         })
         .collect();
-    Arc::new(TrackRoutes::new(lanes))
+    let mut macros = Vec::new();
+    collect_macro_routes(devices, owner, layout, &mut macros);
+    Arc::new(TrackRoutes::new(lanes).with_macros(macros))
+}
+
+/// Every Macro mapping under these devices, outer racks before the racks nested in them.
+fn collect_macro_routes(
+    devices: &[Device],
+    owner: ChainRef,
+    layout: &BusLayout,
+    out: &mut Vec<MacroRoute>,
+) {
+    for dev in devices {
+        if let DeviceKind::Rack { macros, .. } = &dev.kind {
+            for (n, m) in macros.iter().enumerate() {
+                let Some(source) = layout.device_cell(dev.id, n as u32) else {
+                    continue;
+                };
+                for map in &m.mappings {
+                    let Some(target) = cell_of(map.target, owner, layout) else {
+                        continue;
+                    };
+                    if let Some(spec) = layout.spec(target) {
+                        out.push(MacroRoute::new(
+                            source, target, spec.range, map.min, map.max,
+                        ));
+                    }
+                }
+            }
+        }
+        for chain in dev.chains() {
+            collect_macro_routes(&chain.devices, owner, layout, out);
+        }
+    }
 }
 
 /// The cell of a parameter under `owner`, in O(1). Devices are found through the owner's layout,
@@ -50,6 +84,7 @@ pub(super) fn cell_of(target: ParamRef, owner: ChainRef, layout: &BusLayout) -> 
     match target.owner {
         ParamOwner::Device(device) if target.id == ACTIVATOR => layout.activator_cell(device),
         ParamOwner::Device(device) => layout.device_cell(device, target.id.0),
+        ParamOwner::Chain(chain) => layout.chain_cell(chain, target.id),
         ParamOwner::Track(t) if owner == ChainRef::Track(t) => mixer_cell_of(owner, target.id),
         ParamOwner::Master if owner == ChainRef::Master => mixer_cell_of(owner, target.id),
         _ => None,
@@ -74,6 +109,10 @@ fn param_of(owner: TrackRef, target: CellTarget) -> Option<ParamRef> {
         CellTarget::Activator { device } => ParamRef {
             owner: ParamOwner::Device(device),
             id: ACTIVATOR,
+        },
+        CellTarget::Chain { chain, control } => ParamRef {
+            owner: ParamOwner::Chain(chain),
+            id: control,
         },
     })
 }
@@ -265,10 +304,18 @@ impl Session {
         }
     }
 
+    fn track_devices(&self, track: TrackRef) -> Option<&Vec<Device>> {
+        match track {
+            TrackRef::Master => Some(&self.project.master.devices),
+            TrackRef::Track(id) => self.project.track(id).map(|t| &t.devices),
+        }
+    }
+
     fn compiled_routes(&self, track: TrackRef) -> Option<Arc<TrackRoutes>> {
         let owner = owner_of(track);
         Some(routes_for(
             self.envelopes(track)?,
+            self.track_devices(track)?,
             owner,
             self.layouts.get(&owner)?,
         ))
@@ -313,12 +360,9 @@ impl Session {
         }
         swapped
             .into_iter()
-            .filter(|t| self.envelopes(*t).is_some_and(|e| !e.is_empty()))
             .filter_map(|target| {
-                Some(GraphOp::SetRoutes {
-                    target,
-                    routes: self.compiled_routes(target)?,
-                })
+                let routes = self.compiled_routes(target)?;
+                (!routes.is_empty()).then_some(GraphOp::SetRoutes { target, routes })
             })
             .collect()
     }
@@ -332,6 +376,21 @@ impl Session {
         let before = envelopes.len();
         envelopes.retain(|e| {
             !matches!(e.target, EnvTarget::Param(ParamRef { owner: ParamOwner::Device(d), .. }) if ids.contains(&d))
+        });
+        if envelopes.len() != before {
+            self.send_routes(track);
+        }
+    }
+
+    /// Envelopes of rack chains leaving the project leave with them.
+    pub(super) fn forget_chain_automation(&mut self, chain: ChainRef, ids: &[ChainId]) {
+        let track: TrackRef = chain.into();
+        let Some(envelopes) = self.envelopes_mut(track) else {
+            return;
+        };
+        let before = envelopes.len();
+        envelopes.retain(|e| {
+            !matches!(e.target, EnvTarget::Param(ParamRef { owner: ParamOwner::Chain(c), .. }) if ids.contains(&c))
         });
         if envelopes.len() != before {
             self.send_routes(track);

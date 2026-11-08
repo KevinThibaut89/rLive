@@ -7,6 +7,7 @@
 
 use crate::params::{CellIx, ParamBus};
 use rlive_core::envelope::{value_at, EnvPoint, Interp};
+use rlive_core::param::rack;
 use rlive_core::ParamRange;
 
 /// A point of a compiled lane, in knob position, which is the space segments run straight in.
@@ -79,12 +80,49 @@ impl AutomationLane {
     }
 }
 
+/// One parameter a Macro drives: where the macro's knob is, what it owns, and the range it sweeps
+/// in knob position. `max` below `min` inverts the sweep.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MacroRoute {
+    source: CellIx,
+    target: CellIx,
+    range: ParamRange,
+    min: f64,
+    max: f64,
+}
+
+impl MacroRoute {
+    /// A route over a target's plain values `min..=max`.
+    pub fn new(source: CellIx, target: CellIx, range: ParamRange, min: f64, max: f64) -> Self {
+        Self {
+            source,
+            target,
+            range,
+            min: range.to_normalized(min),
+            max: range.to_normalized(max),
+        }
+    }
+
+    /// The target's plain value for this macro value (0..127).
+    pub fn target_value(&self, macro_value: f64) -> f64 {
+        let x = (macro_value / rack::SCALE).clamp(0.0, 1.0);
+        self.range
+            .from_normalized(self.min + (self.max - self.min) * x)
+    }
+
+    pub fn target(&self) -> CellIx {
+        self.target
+    }
+}
+
 /// Everything that feeds a track's cells on the audio thread. Immutable once built: changing any
-/// of it means building another and swapping it in. Modulation and Macro sources join it later.
+/// of it means building another and swapping it in.
 #[derive(Debug, Default, PartialEq)]
 pub struct TrackRoutes {
     /// Sorted by cell, one per cell.
     lanes: Box<[AutomationLane]>,
+    /// In the order they must run: a macro comes before anything it maps a nested macro onto.
+    macros: Box<[MacroRoute]>,
 }
 
 impl TrackRoutes {
@@ -96,7 +134,18 @@ impl TrackRoutes {
         lanes.reverse();
         Self {
             lanes: lanes.into_boxed_slice(),
+            macros: Box::default(),
         }
+    }
+
+    /// These routes with Macro mappings as well, outermost racks first.
+    pub fn with_macros(mut self, macros: Vec<MacroRoute>) -> Self {
+        self.macros = macros.into_boxed_slice();
+        self
+    }
+
+    pub fn macros(&self) -> &[MacroRoute] {
+        &self.macros
     }
 
     pub fn lanes(&self) -> &[AutomationLane] {
@@ -104,7 +153,7 @@ impl TrackRoutes {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.lanes.is_empty()
+        self.lanes.is_empty() && self.macros.is_empty()
     }
 
     /// Step 2 of the resolve order: write every lane's value for this tick.
@@ -114,8 +163,22 @@ impl TrackRoutes {
         }
     }
 
+    /// Step 1 of the resolve order: every mapping takes its macro's value. A macro can be mapped
+    /// onto a macro of a rack nested in it, so outer racks go first.
+    pub(crate) fn run_macros(&self, bus: &mut ParamBus) {
+        for route in self.macros.iter() {
+            let value = bus.current(route.source);
+            bus.write_macro(route.target, route.target_value(value));
+        }
+    }
+
     /// Hand the cells that `next` no longer automates back to their knobs.
     pub(crate) fn release_dropped(&self, next: &TrackRoutes, bus: &mut ParamBus) {
+        for route in self.macros.iter() {
+            if !next.macros.iter().any(|m| m.target == route.target) {
+                bus.release_macro(route.target);
+            }
+        }
         let mut kept = next.lanes.iter().peekable();
         for lane in self.lanes.iter() {
             while kept.next_if(|l| l.cell < lane.cell).is_some() {}

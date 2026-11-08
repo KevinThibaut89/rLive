@@ -6,9 +6,10 @@
 
 use super::{ChainRef, Session};
 use rlive_core::{ChainId, DeviceId, TrackId};
+use rlive_engine::GraphOp;
 use rlive_engine::{mix_cell, EngineCommand, TrackRef, TransportCmd};
 use rlive_project::history::{ChainSnap, DeviceSnap, ParkedDevice, Snapshot, TrackSnap};
-use rlive_project::{Chain, Device, DeviceKind, Project, Track};
+use rlive_project::{Chain, Device, DeviceKind, Macro, Project, Track};
 use std::collections::HashSet;
 use std::mem::take;
 use std::sync::Arc;
@@ -386,10 +387,28 @@ impl Session {
         if bypass != s.shell.bypass {
             self.write_bypass(chain, id, s.shell.bypass, false);
         }
-        if let DeviceKind::Rack { .. } = &s.shell.kind {
+        let options_were = match self
+            .devices(chain)
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| &d.kind)
+        {
+            Some(DeviceKind::Rack {
+                select_filters_ctrl,
+                ..
+            }) => Some(*select_filters_ctrl),
+            _ => None,
+        };
+        let macros_changed = if let DeviceKind::Rack { .. } = &s.shell.kind {
             self.restore_rack(chain, id, s);
-        }
+            self.restore_macro_values(chain, id, s)
+        } else {
+            false
+        };
         self.adopt_device_shell(chain, s);
+        if let DeviceKind::Rack { .. } = &s.shell.kind {
+            self.after_rack_restored(chain, id, macros_changed, options_were);
+        }
         if rebuild {
             self.rebuild_device(chain, id);
         }
@@ -436,6 +455,62 @@ impl Session {
         false
     }
 
+    /// Brings a rack's macro knobs to the target. Returns whether its macros differ at all.
+    fn restore_macro_values(&mut self, chain: ChainRef, id: DeviceId, s: &DeviceSnap) -> bool {
+        let DeviceKind::Rack { macros: want, .. } = &s.shell.kind else {
+            return false;
+        };
+        let Some(DeviceKind::Rack { macros: now, .. }) = self
+            .devices(chain)
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| &d.kind)
+        else {
+            return false;
+        };
+        let changed = now != want;
+        let current: Vec<f64> = now.iter().map(|m: &Macro| m.value).collect();
+        for (n, value) in want.iter().map(|m| m.value).enumerate() {
+            if current.get(n).copied().unwrap_or(0.0) != value {
+                self.write_param(chain, id, n as u32, value, false);
+            }
+        }
+        changed
+    }
+
+    /// Everything a restored rack still has to tell the engine, now its shell matches the target.
+    fn after_rack_restored(
+        &mut self,
+        chain: ChainRef,
+        id: DeviceId,
+        macros_changed: bool,
+        options_were: Option<bool>,
+    ) {
+        if macros_changed {
+            self.send_routes(chain.into());
+        }
+        let filters = match self
+            .devices(chain)
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| &d.kind)
+        {
+            Some(DeviceKind::Rack {
+                select_filters_ctrl,
+                ..
+            }) => *select_filters_ctrl,
+            _ => false,
+        };
+        if options_were != Some(filters) {
+            self.send_edits(vec![GraphOp::SetRackOptions {
+                target: chain.into(),
+                device: id,
+                select_filters_ctrl: filters,
+            }]);
+        }
+        self.push_rack_mix(chain, id);
+    }
+
     /// Brings the rack's chains and return chains to the target, keeping those that stay.
     fn restore_rack(&mut self, chain: ChainRef, id: DeviceId, s: &DeviceSnap) {
         let Some(DeviceKind::Rack {
@@ -452,12 +527,12 @@ impl Session {
         };
         let now_ids: Vec<ChainId> = now.iter().map(|c| c.id).collect();
         let now_returns: Vec<ChainId> = returns.iter().map(|c| c.id).collect();
-        let same_returns = now_returns
-            .iter()
-            .copied()
-            .eq(s.returns.iter().map(|c| c.shell.id));
         let wanted = |c: &ChainId| s.chains.iter().any(|t| t.shell.id == *c);
+        let return_wanted = |c: &ChainId| s.returns.iter().any(|t| t.shell.id == *c);
         for c in now_ids.iter().filter(|c| !wanted(c)) {
+            self.remove_rack_chain(chain, id, *c);
+        }
+        for c in now_returns.iter().filter(|c| !return_wanted(c)) {
             self.remove_rack_chain(chain, id, *c);
         }
         for (i, t) in s.chains.iter().enumerate() {
@@ -466,32 +541,24 @@ impl Session {
                 self.insert_rack_chain(chain, id, i, new);
             }
         }
-        self.restore_chains(chain, id, &s.chains);
-        if let Some(chains) = self.rack_chains_mut(chain, id) {
-            chains.sort_by_key(|c| s.chains.iter().position(|t| t.shell.id == c.id));
-        }
-        if !same_returns {
-            // Return chains can't be added on their own yet, so this rack is rebuilt. Its
-            // chains already match the target, and a rebuild keeps them.
-            let order: Vec<ChainId> = s.returns.iter().map(|c| c.shell.id).collect();
-            let added: Vec<Chain> = s
-                .returns
-                .iter()
-                .filter(|t| !now_returns.contains(&t.shell.id))
-                .map(|t| t.to_chain(&|d| self.parked_of(d)))
-                .collect();
-            if let Some(DeviceKind::Rack { returns, .. }) = self
-                .chain_mut(chain)
-                .and_then(|v| v.iter_mut().find(|d| d.id == id))
-                .map(|d| &mut d.kind)
-            {
-                returns.retain(|c| order.contains(&c.id));
-                returns.extend(added);
-                returns.sort_by_key(|c| order.iter().position(|id| *id == c.id));
+        for (i, t) in s.returns.iter().enumerate() {
+            if !now_returns.contains(&t.shell.id) {
+                let new = t.to_chain(&|d| self.parked_of(d));
+                self.insert_return_chain(chain, id, i, new);
             }
-            self.rebuild_device(chain, id);
         }
+        self.restore_chains(chain, id, &s.chains);
         self.restore_chains(chain, id, &s.returns);
+        if let Some(DeviceKind::Rack {
+            chains, returns, ..
+        }) = self
+            .chain_mut(chain)
+            .and_then(|v| v.iter_mut().find(|d| d.id == id))
+            .map(|d| &mut d.kind)
+        {
+            chains.sort_by_key(|c| s.chains.iter().position(|t| t.shell.id == c.id));
+            returns.sort_by_key(|c| s.returns.iter().position(|t| t.shell.id == c.id));
+        }
     }
 
     /// Restores the contents of chains both sides have.
@@ -504,7 +571,7 @@ impl Session {
         }
     }
 
-    /// Copies the parts of a chain that have no engine side yet.
+    /// Copies a chain's settings, telling the engine about any whose zones or routing changed.
     fn adopt_chain_shell(&mut self, chain: ChainRef, rack: DeviceId, shell: &Chain) {
         let Some(c) = self
             .chain_mut(chain)
@@ -513,6 +580,8 @@ impl Session {
         else {
             return;
         };
+        let zones_changed = c.zones != shell.zones;
+        let output_changed = c.mix.output != shell.mix.output;
         let Chain {
             id: _,
             name,
@@ -527,6 +596,23 @@ impl Session {
         *mix = shell.mix.clone();
         *color = shell.color;
         *info = shell.info.clone();
+        if zones_changed {
+            let zones = super::build::engine_zones(&shell.zones);
+            self.send_edits(vec![GraphOp::SetChainZones {
+                target: chain.into(),
+                device: rack,
+                chain: shell.id,
+                zones,
+            }]);
+        }
+        if output_changed {
+            self.send_track_edits(vec![GraphOp::SetReturnOutput {
+                target: chain.into(),
+                device: rack,
+                chain: shell.id,
+                output: shell.mix.output,
+            }]);
+        }
     }
 
     /// Makes the project's copy of a device match the target, leaving what undo doesn't cover.
@@ -592,6 +678,8 @@ impl Session {
                     chains: _,
                     returns: _,
                     macros,
+                    visible_macros,
+                    select_filters_ctrl,
                     variations,
                 },
                 DeviceKind::Rack {
@@ -599,11 +687,15 @@ impl Session {
                     chains: _,
                     returns: _,
                     macros: m,
+                    visible_macros: vm,
+                    select_filters_ctrl: sf,
                     variations: v,
                 },
             ) => {
                 *kind = *k;
                 macros.clone_from(m);
+                *visible_macros = *vm;
+                *select_filters_ctrl = *sf;
                 variations.clone_from(v);
             }
             _ => {}

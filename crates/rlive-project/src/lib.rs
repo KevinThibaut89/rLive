@@ -26,8 +26,8 @@ pub use clip::{
     WarpMarker, WarpMode, WarpParams,
 };
 pub use device::{
-    Chain, ChainMix, ChainSend, Device, DeviceKind, DrumPad, Macro, MacroMapping, RackKind,
-    Variation, Zone, Zones,
+    grow_macros, Chain, ChainMix, ChainSend, Device, DeviceKind, DrumPad, Macro, MacroMapping,
+    RackKind, Variation, Zone, Zones,
 };
 pub use envelope::{Breakpoint, ClipEnvelope, EnvLoop, EnvMode, Envelope};
 pub use file_ref::FileRef;

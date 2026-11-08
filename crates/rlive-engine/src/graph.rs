@@ -194,7 +194,8 @@ pub enum Tap {
     PostMixer,
     /// A tap inside a chain of a rack, by the chain's id.
     Chain(ChainId, Box<Tap>),
-    /// A device's extra output bus.
+    /// A device's extra output bus. For a rack, the return chains routed to the Set's return
+    /// tracks come out of slot `n` of the track's rack outputs.
     Aux(DeviceId, u8),
 }
 
@@ -302,7 +303,8 @@ impl RenderPlan {
                     s.inputs.iter().all(|i| {
                         let from = i.from as usize;
                         from < tracks
-                            && matches!(i.tap, Tap::PostMixer | Tap::PostFx)
+                            && matches!(i.tap, Tap::PostMixer | Tap::PostFx | Tap::Aux(..))
+                            && !(matches!(i.tap, Tap::Aux(..)) && i.delay != 0)
                             // A feedback tap is already as late as it can be.
                             && (i.delay == 0 || !i.feedback)
                             // Rendered already, unless it is explicitly a feedback tap.

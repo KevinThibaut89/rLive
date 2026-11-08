@@ -21,7 +21,7 @@ use super::build::DeviceRuntime;
 use rlive_core::{ChainId, DeviceId};
 use rlive_devices::DeviceRole;
 use rlive_engine::{
-    ChainAddr, GraphOp, RenderPlan, Step, StereoLine, TapLines, MAX_COMPENSATION_FRAMES,
+    ChainAddr, GraphOp, RenderPlan, Step, StereoLine, Tap, TapLines, MAX_COMPENSATION_FRAMES,
 };
 use rlive_project::{Device, DeviceKind, Monitor, Project, Track, TrackDelay, TrackKind};
 use std::collections::HashMap;
@@ -66,6 +66,14 @@ pub(super) struct ChainTiming {
     pub delay: u32,
 }
 
+/// How far a rack holds its summed chains back, to meet its slowest return chain.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct RackTiming {
+    pub target: ChainAddr,
+    pub device: DeviceId,
+    pub delay: u32,
+}
+
 /// How late a device is while bypassed.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct BypassTiming {
@@ -84,6 +92,7 @@ pub struct Timing {
     /// Tracks excused from compensation: monitored inputs under Reduced Latency.
     exempt: Vec<bool>,
     pub(super) chains: Vec<ChainTiming>,
+    pub(super) racks: Vec<RackTiming>,
     pub(super) bypass: Vec<BypassTiming>,
 }
 
@@ -124,6 +133,7 @@ impl Timing {
         timing.own.push(if on { own } else { 0 });
         if !on {
             timing.chains.iter_mut().for_each(|c| c.delay = 0);
+            timing.racks.iter_mut().for_each(|r| r.delay = 0);
             timing.bypass.iter_mut().for_each(|d| d.delay = 0);
         }
         timing
@@ -143,14 +153,14 @@ impl Timing {
             let arrival = step
                 .inputs
                 .iter()
-                .filter(|i| !i.feedback && !exempt(i.from as usize))
+                .filter(|i| !i.feedback && !exempt(i.from as usize) && !is_rack_out(i))
                 .map(|i| out[i.from as usize] - shift(i.from as usize))
                 .max()
                 .unwrap_or(0)
                 .max(0);
             for input in &mut step.inputs {
                 let from = input.from as usize;
-                input.delay = if input.feedback || exempt(from) {
+                input.delay = if input.feedback || exempt(from) || is_rack_out(input) {
                     0
                 } else {
                     (arrival + shift(from) - out[from]).clamp(0, MAX) as u32
@@ -166,6 +176,12 @@ impl Timing {
             output_latency: out[master] as u32,
         }
     }
+}
+
+/// A rack return chain feeding a return track directly. It leaves the source track partway through
+/// its devices, so it isn't compared with the track's main output and takes no delay.
+fn is_rack_out(input: &rlive_engine::BusIn) -> bool {
+    matches!(input.tap, Tap::Aux(..))
 }
 
 /// Is this track's input heard live right now?
@@ -192,7 +208,9 @@ fn walk(devices: &[Device], addr: ChainAddr, source: &impl LatencySource, out: &
     let mut total = 0u32;
     for d in devices {
         let latency = match &d.kind {
-            DeviceKind::Rack { chains, .. } => {
+            DeviceKind::Rack {
+                chains, returns, ..
+            } => {
                 let lens: Vec<_> = chains
                     .iter()
                     .map(|c| Some((addr.child(d.id, c.id)?, c)))
@@ -207,8 +225,40 @@ fn walk(devices: &[Device], addr: ChainAddr, source: &impl LatencySource, out: &
                         delay: longest - len,
                     });
                 }
-                source.report_rack(d.id, longest);
-                longest
+                // Return chains that come back into the rack hold up everything else in it. Their
+                // own latency adds to the chains'; ones routed out take their own way to the Set.
+                let return_lens: Vec<_> = returns
+                    .iter()
+                    .filter_map(|r| {
+                        Some((r, walk(&r.devices, addr.child(d.id, r.id)?, source, out)))
+                    })
+                    .collect();
+                let slowest_return = return_lens
+                    .iter()
+                    .filter(|(r, _)| r.mix.output.is_none())
+                    .map(|(_, len)| *len)
+                    .max()
+                    .unwrap_or(0);
+                for (r, len) in &return_lens {
+                    if r.mix.output.is_none() {
+                        out.chains.push(ChainTiming {
+                            target: addr,
+                            device: d.id,
+                            chain: r.id,
+                            delay: slowest_return - len,
+                        });
+                    }
+                }
+                if !returns.is_empty() {
+                    out.racks.push(RackTiming {
+                        target: addr,
+                        device: d.id,
+                        delay: slowest_return,
+                    });
+                }
+                let total = longest + slowest_return;
+                source.report_rack(d.id, total);
+                total
             }
             _ => source.device_latency(d).min(MAX_COMPENSATION_FRAMES),
         };
@@ -271,6 +321,14 @@ pub(super) fn compensation_ops(
             chain: c.chain,
             delay: c.delay,
             line: line(c.delay),
+        });
+    }
+    for r in &timing.racks {
+        ops.push(GraphOp::SetRackDelay {
+            target: r.target,
+            device: r.device,
+            delay: r.delay,
+            line: line(r.delay),
         });
     }
     for d in &timing.bypass {

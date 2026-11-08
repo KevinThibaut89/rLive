@@ -6,8 +6,9 @@
 use crate::delay::{offer_line, StereoLine, TapLines};
 use crate::graph::{ChainAddr, RenderPlan, TrackRef, MAX_RACK_DEPTH};
 use crate::params::{ParamBus, TrackRoutes};
-use crate::rack::ChainNode;
+use crate::rack::{ChainNode, Zones};
 use crate::track::bind_chain;
+use crate::track::RackOuts;
 use crate::{retire, DeviceSlot, Engine, Garbage, TrackNode};
 use rlive_core::{ChainId, DeviceId, Resource, TrackId};
 use std::sync::Arc;
@@ -51,10 +52,61 @@ pub enum GraphOp {
         index: usize,
         chain: Box<ChainNode>,
     },
+    /// Add a return chain to the rack `device` found in the chain at `target`.
+    InsertReturn {
+        target: ChainAddr,
+        device: DeviceId,
+        index: usize,
+        chain: Box<ChainNode>,
+    },
+    /// Remove a chain or a return chain.
     RemoveChain {
         target: ChainAddr,
         device: DeviceId,
         chain: ChainId,
+    },
+    /// Move a chain of the rack `from_device` to the rack `to_device`, on the same track. Grouping
+    /// chains and moving one between racks are both this.
+    TransferChain {
+        from: ChainAddr,
+        from_device: DeviceId,
+        chain: ChainId,
+        to: ChainAddr,
+        to_device: DeviceId,
+        index: usize,
+    },
+    /// Change which notes and Chain Selector values reach a chain, its Drum Rack note mapping
+    /// included.
+    SetChainZones {
+        target: ChainAddr,
+        device: DeviceId,
+        chain: ChainId,
+        zones: Zones,
+    },
+    /// Whether the Chain Selector filters MIDI other than notes as well.
+    SetRackOptions {
+        target: ChainAddr,
+        device: DeviceId,
+        select_filters_ctrl: bool,
+    },
+    /// Route a return chain to the Set's return track, or back to the rack's own output.
+    SetReturnOutput {
+        target: ChainAddr,
+        device: DeviceId,
+        chain: ChainId,
+        output: Option<TrackId>,
+    },
+    /// Hold a rack's summed chains back, to line up with its slowest return chain.
+    SetRackDelay {
+        target: ChainAddr,
+        device: DeviceId,
+        delay: u32,
+        line: Option<Box<StereoLine>>,
+    },
+    /// Give a track room to feed return tracks from its racks. A track that has room keeps it.
+    SetRackOuts {
+        track: TrackId,
+        outs: Box<RackOuts>,
     },
     /// Give a chain owner a new parameter bus, after its layout changed. Cells that kept their
     /// owner keep their live state.
@@ -293,13 +345,109 @@ impl Engine {
                 let fits = target.path.len() + 1 + nesting <= MAX_RACK_DEPTH;
                 if let Some(bus) = self.bus_mut(target.owner) {
                     bind_chain(&mut chain.devices, bus);
+                    chain.cells = bus.chain_cells(chain.id).unwrap_or(0..0);
                 }
                 match self.rack_mut(target, device) {
                     Some(rack) if fits && rack.chains.len() < rack.chains.capacity() => {
                         let index = index.min(rack.chains.len());
                         rack.chains.insert(index, chain);
+                        rack.invalidate_gates();
                     }
                     _ => retire(&mut self.garbage, Garbage::Boxed(chain)),
+                }
+            }
+            C::InsertReturn {
+                target,
+                device,
+                index,
+                mut chain,
+            } => {
+                let nesting = chain.devices.iter().map(|d| d.nesting()).max().unwrap_or(0);
+                let fits = target.path.len() + 1 + nesting <= MAX_RACK_DEPTH;
+                if let Some(bus) = self.bus_mut(target.owner) {
+                    bind_chain(&mut chain.devices, bus);
+                    chain.cells = bus.chain_cells(chain.id).unwrap_or(0..0);
+                }
+                match self.rack_mut(target, device) {
+                    Some(rack) if fits && rack.returns.len() < rack.returns.capacity() => {
+                        let index = index.min(rack.returns.len());
+                        rack.returns.insert(index, chain);
+                        rack.invalidate_gates();
+                    }
+                    _ => retire(&mut self.garbage, Garbage::Boxed(chain)),
+                }
+            }
+            C::TransferChain {
+                from,
+                from_device,
+                chain,
+                to,
+                to_device,
+                index,
+            } => self.transfer_chain(from, from_device, chain, to, to_device, index),
+            C::SetChainZones {
+                target,
+                device,
+                chain,
+                zones,
+            } => {
+                if let Some(rack) = self.rack_mut(target, device) {
+                    if let Some(c) = rack.chains.iter_mut().find(|c| c.id == chain) {
+                        c.zones = zones;
+                    }
+                    rack.invalidate_gates();
+                }
+            }
+            C::SetRackOptions {
+                target,
+                device,
+                select_filters_ctrl,
+            } => {
+                if let Some(rack) = self.rack_mut(target, device) {
+                    rack.select_filters_ctrl = select_filters_ctrl;
+                }
+            }
+            C::SetReturnOutput {
+                target,
+                device,
+                chain,
+                output,
+            } => {
+                if let Some(rack) = self.rack_mut(target, device) {
+                    if let Some(c) = rack.returns.iter_mut().find(|c| c.id == chain) {
+                        c.set_output(output);
+                    }
+                }
+            }
+            C::SetRackDelay {
+                target,
+                device,
+                delay,
+                line,
+            } => {
+                let spare = match self.rack_mut(target, device) {
+                    Some(rack) => {
+                        let (slot, dry_delay) = rack.dry_line_mut();
+                        let spare = offer_line(slot, line);
+                        dry_delay.set_target(fit_delay(delay, slot.as_deref()));
+                        spare
+                    }
+                    None => line,
+                };
+                self.retire_line(spare);
+            }
+            C::SetRackOuts { track, outs } => {
+                let mut outs = Some(outs);
+                if let Some(t) = self.track_mut(track) {
+                    let same = t.rack_outs.as_ref().is_some_and(|o| {
+                        o.tracks() == outs.as_ref().map_or(&[][..], |n| n.tracks())
+                    });
+                    if !same {
+                        std::mem::swap(&mut t.rack_outs, &mut outs);
+                    }
+                }
+                if let Some(old) = outs {
+                    retire(&mut self.garbage, Garbage::Boxed(old));
                 }
             }
             C::RemoveChain {
@@ -308,8 +456,16 @@ impl Engine {
                 chain,
             } => {
                 let removed = self.rack_mut(target, device).and_then(|rack| {
-                    let i = rack.chains.iter().position(|c| c.id == chain)?;
-                    Some(rack.chains.remove(i))
+                    let removed = match rack.chains.iter().position(|c| c.id == chain) {
+                        Some(i) => Some(rack.chains.remove(i)),
+                        None => rack
+                            .returns
+                            .iter()
+                            .position(|c| c.id == chain)
+                            .map(|i| rack.returns.remove(i)),
+                    };
+                    rack.invalidate_gates();
+                    removed
                 });
                 if let Some(mut chain) = removed {
                     for d in chain.devices.iter_mut() {
@@ -342,9 +498,12 @@ impl Engine {
                 delay,
                 line,
             } => {
-                let found = self
-                    .rack_mut(target, device)
-                    .and_then(|rack| rack.chains.iter_mut().find(|c| c.id == chain));
+                let found = self.rack_mut(target, device).and_then(|rack| {
+                    rack.chains
+                        .iter_mut()
+                        .chain(rack.returns.iter_mut())
+                        .find(|c| c.id == chain)
+                });
                 let spare = match found {
                     Some(c) => {
                         let spare = offer_line(&mut c.line, line);
@@ -466,6 +625,45 @@ impl Engine {
         if let (Some(moved), Some(chain)) = (moved, self.chain_mut(to)) {
             let index = index.min(chain.len());
             chain.insert(index, moved);
+        }
+    }
+
+    /// Move a chain between racks on one track, or leave it where it is if it can't go.
+    #[allow(clippy::too_many_arguments)]
+    fn transfer_chain(
+        &mut self,
+        from: ChainAddr,
+        from_device: DeviceId,
+        chain: ChainId,
+        to: ChainAddr,
+        to_device: DeviceId,
+        index: usize,
+    ) {
+        if from.owner != to.owner || to.path.steps().iter().any(|s| s.chain == chain) {
+            return;
+        }
+        let Some((position, nesting)) = self.rack_mut(from, from_device).and_then(|rack| {
+            let i = rack.chains.iter().position(|c| c.id == chain)?;
+            let nesting = rack.chains[i].devices.iter().map(|d| d.nesting()).max();
+            Some((i, nesting.unwrap_or(0)))
+        }) else {
+            return;
+        };
+        let room = self
+            .rack_mut(to, to_device)
+            .is_some_and(|rack| rack.chains.len() < rack.chains.capacity());
+        if !room || to.path.len() + 1 + nesting > MAX_RACK_DEPTH {
+            return;
+        }
+        let moved = self.rack_mut(from, from_device).map(|rack| {
+            let moved = rack.chains.remove(position);
+            rack.invalidate_gates();
+            moved
+        });
+        if let (Some(moved), Some(rack)) = (moved, self.rack_mut(to, to_device)) {
+            let index = index.min(rack.chains.len());
+            rack.chains.insert(index, moved);
+            rack.invalidate_gates();
         }
     }
 

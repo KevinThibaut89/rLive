@@ -163,6 +163,8 @@ fn device_shell(d: &Device) -> Device {
         DeviceKind::Rack {
             kind,
             macros,
+            visible_macros,
+            select_filters_ctrl,
             variations,
             ..
         } => DeviceKind::Rack {
@@ -170,6 +172,8 @@ fn device_shell(d: &Device) -> Device {
             chains: Vec::new(),
             returns: Vec::new(),
             macros: macros.clone(),
+            visible_macros: *visible_macros,
+            select_filters_ctrl: *select_filters_ctrl,
             variations: variations.clone(),
         },
     };
