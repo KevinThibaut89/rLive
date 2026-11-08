@@ -123,6 +123,15 @@ fn arc_points(center: Pos2, radius: f32, from: f32, to: f32) -> Vec<Pos2> {
         .collect()
 }
 
+/// How a knob is drawn.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum KnobTone {
+    Normal,
+    Active,
+    /// Greyed out: something else owns the value, or the user can't touch it.
+    Disabled,
+}
+
 /// Paint a knob arc at `center`. `bipolar` arcs grow from the middle.
 pub fn paint_knob(
     p: &egui::Painter,
@@ -130,41 +139,80 @@ pub fn paint_knob(
     radius: f32,
     norm: f32,
     bipolar: bool,
-    active: bool,
+    tone: KnobTone,
 ) {
     p.add(Shape::line(
         arc_points(center, radius, 0.0, 1.0),
         Stroke::new(3.0, KNOB_TRACK),
     ));
     let (a, b) = if bipolar { (0.5, norm) } else { (0.0, norm) };
+    let arc = match tone {
+        KnobTone::Normal => KNOB_ARC,
+        KnobTone::Active => hex(0xffc070),
+        KnobTone::Disabled => TEXT_FAINT,
+    };
     if (b - a).abs() > 0.001 {
         p.add(Shape::line(
             arc_points(center, radius, a.min(b), a.max(b)),
-            Stroke::new(3.0, if active { hex(0xffc070) } else { KNOB_ARC }),
+            Stroke::new(3.0, arc),
         ));
     }
+    let needle = if tone == KnobTone::Disabled {
+        TEXT_DIM
+    } else {
+        hex(0xf0f0f0)
+    };
     let ang = std::f32::consts::PI * 0.75 + std::f32::consts::PI * 1.5 * norm;
     p.line_segment(
         [
             center + Vec2::angled(ang) * (radius * 0.25),
             center + Vec2::angled(ang) * (radius + 1.0),
         ],
-        Stroke::new(1.6, hex(0xf0f0f0)),
+        Stroke::new(1.6, needle),
     );
 }
 
-/// Device parameter knob: name above, value below (Live style). `effective` is the normalized
-/// value the parameter is sounding at, which modulation can move away from the knob.
-/// Drag vertically (Shift = fine), double-click resets. Returns the new plain value.
+/// Paint the stretch of a knob's travel that modulation is covering, outside the arc.
+pub fn paint_mod_ring(p: &egui::Painter, center: Pos2, radius: f32, span: (f32, f32)) {
+    p.add(Shape::line(
+        arc_points(center, radius + 3.0, span.0, span.1),
+        Stroke::new(1.5, SOLO_BLUE),
+    ));
+}
+
+/// The stretch of a control's travel that modulation is covering. `None` when it hasn't moved
+/// the value enough to see.
+pub fn mod_ring_span(base: f32, effective: f32) -> Option<(f32, f32)> {
+    ((effective - base).abs() > 0.002).then(|| (base.min(effective), base.max(effective)))
+}
+
+/// What a device control knows beyond its value.
+#[derive(Clone, Copy, Default)]
+pub struct ControlState {
+    /// The normalized value it is sounding at, which modulation can move off the control.
+    pub effective: Option<f32>,
+    /// A Macro owns the value, so the control is greyed out and can't be moved.
+    pub disabled: bool,
+}
+
+/// Device parameter knob: name above, value below (Live style). The ring around the knob shows
+/// where modulation has taken the value, away from the needle. A disabled knob is greyed out and
+/// can't be moved. Drag vertically (Shift = fine), double-click resets. Returns the new plain
+/// value.
 pub fn knob(
     ui: &mut Ui,
     param: &ParamInfo,
     value: f64,
     display: &str,
-    effective: Option<f32>,
+    state: ControlState,
 ) -> Option<f64> {
     let size = Vec2::new(58.0, 62.0);
-    let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    let sense = if state.disabled {
+        Sense::hover()
+    } else {
+        Sense::click_and_drag()
+    };
+    let (rect, resp) = ui.allocate_exact_size(size, sense);
     let mut norm = param.to_normalized(value);
     let mut changed = None;
     let toggle = matches!(param.kind, ParamKind::Toggle);
@@ -189,18 +237,30 @@ pub fn knob(
     let active = resp.hovered() || resp.dragged();
     let p = ui.painter_at(rect.expand(2.0));
     let name: String = param.name.chars().take(12).collect();
+    let name_color = if state.disabled {
+        TEXT_FAINT
+    } else if active {
+        TEXT
+    } else {
+        hex(0xb8b8b8)
+    };
     p.text(
         Pos2::new(rect.center().x, rect.top() + 6.0),
         Align2::CENTER_CENTER,
         name,
         font(10.0),
-        if active { TEXT } else { hex(0xb8b8b8) },
+        name_color,
     );
     let center = Pos2::new(rect.center().x, rect.top() + 29.0);
     if toggle {
         let r = Rect::from_center_size(center, Vec2::new(30.0, 15.0));
         let on = value >= 0.5;
-        p.rect_filled(r, 1.0, if on { ACCENT } else { RAISED });
+        let fill = match (on, state.disabled) {
+            (true, false) => ACCENT,
+            (true, true) => TEXT_FAINT,
+            (false, _) => RAISED,
+        };
+        p.rect_filled(r, 1.0, fill);
         p.text(
             r.center(),
             Align2::CENTER_CENTER,
@@ -210,18 +270,28 @@ pub fn knob(
         );
     } else {
         let bipolar = param.min < 0.0 && param.max > 0.0;
-        paint_knob(&p, center, 11.0, norm as f32, bipolar, active);
-        if let Some(effective) = effective.filter(|e| (e - norm as f32).abs() > 0.002) {
-            // Where the value really is, when modulation has moved it off the knob.
-            let ang = std::f32::consts::PI * 0.75 + std::f32::consts::PI * 1.5 * effective;
-            p.circle_filled(center + Vec2::angled(ang) * 11.0, 2.0, ACCENT);
+        let tone = if state.disabled {
+            KnobTone::Disabled
+        } else if active {
+            KnobTone::Active
+        } else {
+            KnobTone::Normal
+        };
+        paint_knob(&p, center, 11.0, norm as f32, bipolar, tone);
+        // Hidden while dragging: the engine is a block behind the hand, not modulating.
+        let span = state
+            .effective
+            .filter(|_| !resp.dragged())
+            .and_then(|e| mod_ring_span(norm as f32, e));
+        if let Some(span) = span {
+            paint_mod_ring(&p, center, 11.0, span);
         }
     }
     let val = Rect::from_center_size(
         Pos2::new(rect.center().x, rect.bottom() - 8.0),
         Vec2::new(54.0, 13.0),
     );
-    if active && !toggle {
+    if active && !toggle && !state.disabled {
         p.rect_filled(val, 1.0, FIELD_BG);
     }
     // Toggles already show their state on the button.
@@ -231,16 +301,236 @@ pub fn knob(
         Align2::CENTER_CENTER,
         display,
         font(10.0),
-        if active { ACCENT } else { TEXT_DIM },
+        if active && !state.disabled {
+            ACCENT
+        } else {
+            TEXT_DIM
+        },
     );
-    info(
-        resp,
-        format!(
-            "{}: {display}  —  drag to change, Shift = fine, double-click resets",
-            param.name
-        ),
-    );
+    let hint = if state.disabled {
+        "controlled by a Macro"
+    } else {
+        "drag to change, Shift = fine, double-click resets"
+    };
+    info(resp, format!("{}: {display}  —  {hint}", param.name));
     changed
+}
+
+/// Device parameter slider: name and value above a flat horizontal bar. Same gestures as a knob.
+pub fn slider(
+    ui: &mut Ui,
+    param: &ParamInfo,
+    value: f64,
+    display: &str,
+    state: ControlState,
+) -> Option<f64> {
+    let sense = if state.disabled {
+        Sense::hover()
+    } else {
+        Sense::click_and_drag()
+    };
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(116.0, 30.0), sense);
+    let mut norm = param.to_normalized(value) as f32;
+    let mut changed = None;
+    if resp.dragged() {
+        let fine = ui.input(|i| i.modifiers.shift);
+        let delta = resp.drag_delta().x / if fine { 900.0 } else { rect.width() };
+        norm = (norm + delta).clamp(0.0, 1.0);
+        let v = param.from_normalized(norm as f64);
+        if v != value {
+            changed = Some(v);
+        }
+    }
+    if resp.double_clicked() {
+        changed = Some(param.default);
+        norm = param.to_normalized(param.default) as f32;
+    }
+    let active = !state.disabled && (resp.hovered() || resp.dragged());
+    let p = ui.painter();
+    let (name_color, value_color) = if state.disabled {
+        (TEXT_FAINT, TEXT_FAINT)
+    } else if active {
+        (TEXT, ACCENT)
+    } else {
+        (hex(0xb8b8b8), TEXT_DIM)
+    };
+    p.text(
+        rect.left_top(),
+        Align2::LEFT_TOP,
+        &param.name,
+        font(10.0),
+        name_color,
+    );
+    p.text(
+        rect.right_top(),
+        Align2::RIGHT_TOP,
+        display,
+        font(10.0),
+        value_color,
+    );
+    let bar = Rect::from_min_size(
+        Pos2::new(rect.left(), rect.bottom() - 9.0),
+        Vec2::new(rect.width(), 5.0),
+    );
+    p.rect_filled(bar, 0.0, KNOB_TRACK);
+    let fill = Rect::from_min_size(bar.min, Vec2::new(bar.width() * norm, bar.height()));
+    p.rect_filled(
+        fill,
+        0.0,
+        if state.disabled {
+            TEXT_FAINT
+        } else if active {
+            hex(0xffc070)
+        } else {
+            KNOB_ARC
+        },
+    );
+    if let Some(span) = state
+        .effective
+        .filter(|_| !resp.dragged())
+        .and_then(|e| mod_ring_span(norm, e))
+    {
+        let ring = Rect::from_min_max(
+            Pos2::new(bar.left() + bar.width() * span.0, bar.bottom() + 1.0),
+            Pos2::new(bar.left() + bar.width() * span.1, bar.bottom() + 3.0),
+        );
+        p.rect_filled(ring, 0.0, SOLO_BLUE);
+    }
+    let hint = if state.disabled {
+        "controlled by a Macro"
+    } else {
+        "drag to change, Shift = fine, double-click resets"
+    };
+    info(resp, format!("{}: {display}  —  {hint}", param.name));
+    changed
+}
+
+/// Flat on/off button labelled with a parameter's name. Returns the new plain value.
+pub fn toggle(ui: &mut Ui, param: &ParamInfo, value: f64, state: ControlState) -> Option<f64> {
+    let mid = (param.min + param.max) / 2.0;
+    let on = value > mid;
+    let sense = if state.disabled {
+        Sense::hover()
+    } else {
+        Sense::click()
+    };
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(56.0, 18.0), sense);
+    let fill = match (on, state.disabled) {
+        (true, false) => ACCENT,
+        (true, true) => TEXT_FAINT,
+        (false, _) if resp.hovered() => RAISED_HOVER,
+        (false, _) => RAISED,
+    };
+    let p = ui.painter();
+    p.rect_filled(rect, 1.0, fill);
+    let name: String = param.name.chars().take(9).collect();
+    p.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        name,
+        font(10.0),
+        if on { theme::text_on(fill) } else { TEXT },
+    );
+    let hint = if state.disabled {
+        "controlled by a Macro"
+    } else {
+        "click to switch"
+    };
+    let word = if on { "On" } else { "Off" };
+    let resp = info(resp, format!("{}: {word}  —  {hint}", param.name));
+    (resp.clicked() && !state.disabled).then_some(if on { param.min } else { param.max })
+}
+
+/// Drop-down for a stepped parameter, with its name above. Returns the new plain value.
+pub fn menu(ui: &mut Ui, param: &ParamInfo, value: f64, state: ControlState) -> Option<f64> {
+    let (labels, offset) = menu_entries(param);
+    let selected = (value - offset).round().max(0.0) as usize;
+    let current = labels.get(selected).map_or("?", String::as_str);
+    let mut chosen = selected;
+    let name_color = if state.disabled {
+        TEXT_FAINT
+    } else {
+        hex(0xb8b8b8)
+    };
+    ui.add_enabled_ui(!state.disabled, |ui| {
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 1.0;
+            ui.label(
+                egui::RichText::new(&param.name)
+                    .font(font(10.0))
+                    .color(name_color),
+            );
+            egui::ComboBox::from_id_salt(param.id)
+                .width(92.0)
+                .selected_text(egui::RichText::new(current).font(font(10.5)))
+                .show_ui(ui, |ui| {
+                    for (i, label) in labels.iter().enumerate() {
+                        ui.selectable_value(&mut chosen, i, label);
+                    }
+                });
+        });
+    });
+    (chosen != selected && !state.disabled).then_some(chosen as f64 + offset)
+}
+
+/// The entries of a menu, and what to add to an entry's position to get its plain value. A
+/// parameter with no labels of its own is listed by value.
+fn menu_entries(param: &ParamInfo) -> (Vec<String>, f64) {
+    if let ParamKind::Stepped { labels } = &param.kind {
+        return (labels.clone(), 0.0);
+    }
+    let (low, high) = (param.min.round(), param.max.round());
+    let steps = (high - low).max(0.0) as usize;
+    (
+        (0..=steps).map(|i| param.format(low + i as f64)).collect(),
+        low,
+    )
+}
+
+/// Paint a scope's view data: samples in -1..1, spectrum bins in 0..1, or left/right pairs.
+pub fn paint_scope(p: &egui::Painter, rect: Rect, kind: rlive_core::ScopeKind, data: &[f32]) {
+    p.rect_filled(rect, 0.0, hex(0x121212));
+    p.rect_stroke(rect, 0.0, Stroke::new(1.0, SEPARATOR), StrokeKind::Inside);
+    let inner = rect.shrink(2.0);
+    let points: Vec<Pos2> = match kind {
+        rlive_core::ScopeKind::Waveform => data
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let x = inner.left() + inner.width() * i as f32 / data.len().max(2) as f32;
+                let y = inner.center().y - v.clamp(-1.0, 1.0) * inner.height() * 0.5;
+                Pos2::new(x, y)
+            })
+            .collect(),
+        rlive_core::ScopeKind::Spectrum => data
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let x = inner.left() + inner.width() * i as f32 / data.len().max(2) as f32;
+                Pos2::new(x, inner.bottom() - v.clamp(0.0, 1.0) * inner.height())
+            })
+            .collect(),
+        rlive_core::ScopeKind::Vectorscope => data
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| {
+                inner.center()
+                    + Vec2::new(
+                        pair[0].clamp(-1.0, 1.0) * inner.width() * 0.5,
+                        -pair[1].clamp(-1.0, 1.0) * inner.height() * 0.5,
+                    )
+            })
+            .collect(),
+    };
+    let clipped = p.with_clip_rect(rect);
+    if points.len() > 1 && kind != rlive_core::ScopeKind::Vectorscope {
+        clipped.add(Shape::line(points, Stroke::new(1.0, ACCENT)));
+    } else {
+        for point in points {
+            clipped.circle_filled(point, 0.75, ACCENT);
+        }
+    }
 }
 
 /// Small bipolar pan knob (-1..1). Returns the new value.
@@ -264,7 +554,11 @@ pub fn pan_knob(ui: &mut Ui, pan: f32) -> Option<f32> {
         9.5,
         (v + 1.0) / 2.0,
         true,
-        active,
+        if active {
+            KnobTone::Active
+        } else {
+            KnobTone::Normal
+        },
     );
     let label = if v.abs() < 0.005 {
         "C".to_string()
@@ -441,6 +735,14 @@ pub fn stop_square(p: &egui::Painter, rect: Rect, color: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_ring_shows_only_a_visible_difference_and_runs_low_to_high() {
+        assert_eq!(mod_ring_span(0.5, 0.5), None);
+        assert_eq!(mod_ring_span(0.5, 0.501), None);
+        assert_eq!(mod_ring_span(0.25, 0.75), Some((0.25, 0.75)));
+        assert_eq!(mod_ring_span(0.75, 0.25), Some((0.25, 0.75)));
+    }
 
     #[test]
     fn fader_curve_roundtrip() {

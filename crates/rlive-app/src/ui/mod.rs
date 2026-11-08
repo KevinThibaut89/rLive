@@ -7,6 +7,7 @@ mod devices;
 mod icons;
 #[cfg(target_os = "macos")]
 mod mac_menu;
+pub(crate) mod panels;
 mod piano_roll;
 mod session_view;
 pub mod theme;
@@ -65,6 +66,7 @@ pub struct UiState {
     pub browser_category: browser::Category,
     pub meters: HashMap<TrackId, MeterState>,
     pub master_meter: MeterState,
+    pub devices: devices::DeviceViewState,
     pub renaming: Option<(TrackId, String)>,
     pub piano: piano_roll::PianoState,
     pub layout: session_view::SessionLayout,
@@ -147,6 +149,7 @@ impl RliveApp {
             browser_category: browser::Category::Instruments,
             meters: HashMap::new(),
             master_meter: MeterState::default(),
+            devices: devices::DeviceViewState::default(),
             renaming: None,
             piano: piano_roll::PianoState::default(),
             layout: session_view::SessionLayout::default(),
@@ -1132,6 +1135,7 @@ impl eframe::App for RliveApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.ui.devices.begin_frame();
         let meters_moving = self.update_meters();
         // Repaint continuously only while something animates; otherwise egui repaints on input.
         if self.session.is_playing() || meters_moving || self.ui.scan_rx.is_some() {
@@ -1201,6 +1205,7 @@ impl eframe::App for RliveApp {
             || ctx.text_edit_focused()
             || self.session.is_recording();
         self.session.commit_edits(busy);
+        self.ui.devices.end_frame();
         #[cfg(target_os = "macos")]
         if let Some(menu) = &self.mac_menu {
             menu.publish(self.menu_state(&ctx));

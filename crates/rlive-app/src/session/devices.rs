@@ -387,7 +387,18 @@ impl Session {
     /// Change the sample of a built-in sampler. Playing voices carry on with the new sample; a
     /// file that won't load leaves the current one in place and reports why.
     pub fn set_device_sample(&mut self, chain: ChainRef, id: DeviceId, path: PathBuf) {
-        if self.write_device_sample(chain, id, 0, FileRef::new(path)) {
+        self.set_device_sample_at(chain, id, 0, path);
+    }
+
+    /// [`set_device_sample`](Self::set_device_sample) for a device with more than one slot.
+    pub fn set_device_sample_at(
+        &mut self,
+        chain: ChainRef,
+        id: DeviceId,
+        slot: usize,
+        path: PathBuf,
+    ) {
+        if self.write_device_sample(chain, id, slot, FileRef::new(path)) {
             self.mark_edit("Change Sample");
         }
     }

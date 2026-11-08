@@ -1270,3 +1270,69 @@ fn a_sample_that_will_not_load_leaves_the_current_one_in_place() {
     assert!(s.project.tracks[0].devices[1].sample(0).is_none());
     render(&mut engine, &mut s, 512);
 }
+
+// ------------------------------------------------------------- device views
+
+#[test]
+fn only_devices_whose_layout_reads_one_get_a_view_channel() {
+    let (_engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    let plain = s.devices(chain)[0].id;
+    s.add_builtin(chain, "rlive.compressor");
+    s.add_builtin(chain, "rlive.cc_control");
+    let find = |name: &str| {
+        let found = s.devices(chain).iter().find(|d| d.name == name);
+        found.expect(name).id
+    };
+    let (comp, stub) = (find("Compressor"), find("CC Control"));
+
+    assert!(s.runtimes[&plain].view.is_none(), "auto layout");
+    assert!(s.runtimes[&stub].view.is_none(), "stub");
+    let channel = s.runtimes[&comp].view.as_ref().expect("compressor");
+    assert_eq!(channel.len(), rlive_devices::effects::comp::VIEW_LEN);
+}
+
+#[test]
+fn a_racks_view_channel_is_the_device_inside_it() {
+    let (_engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    s.add_device(chain, None, Device::rack(RackKind::Audio, "Rack"));
+    let rack = s.devices(chain)[1].id;
+    let mut c = Chain::new("A");
+    let comp = Device::builtin("rlive.compressor", "Compressor");
+    let comp_id = comp.id;
+    c.devices.push(comp);
+    s.insert_rack_chain(chain, rack, 0, c);
+    assert!(s.runtimes[&comp_id].view.is_some());
+    assert!(
+        s.runtimes[&rack].view.is_none(),
+        "the rack itself shows nothing"
+    );
+}
+
+#[test]
+fn a_compressor_publishes_to_its_panel_without_allocating() {
+    use rlive_core::ViewId;
+    use rlive_devices::effects::comp;
+    let (mut engine, mut s) = session();
+    let t = s.project.tracks[0].id;
+    let chain = ChainRef::Track(t);
+    s.add_builtin(chain, "rlive.compressor");
+    let comp_id = s.devices(chain)[1].id;
+    render(&mut engine, &mut s, 1_024);
+
+    let reader = s.runtimes[&comp_id].view.as_ref().unwrap().attach();
+    s.play_midi(t, on(60));
+    for _ in 0..20 {
+        let (mut l, mut r) = ([0.0; 512], [0.0; 512]);
+        rlive_testkit::assert_no_alloc(|| engine.process_stereo(&mut l, &mut r));
+        s.idle();
+    }
+
+    let mut view = [0.0; comp::VIEW_LEN];
+    assert!(reader.read(ViewId(0), &mut view));
+    assert!(view[1] > 0.0 && view[2] > 0.0, "output level: {view:?}");
+    assert!(view[0] > 0.0, "gain reduction: {view:?}");
+}

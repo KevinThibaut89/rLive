@@ -21,7 +21,8 @@ pub enum Status {
 pub struct DeviceDesc {
     pub params: Vec<ParamInfo>,
     pub ports: Ports,
-    /// Sections of the generic device UI. Empty until milestone K7 builds that UI.
+    /// Sections of the device's panel. Empty gets one untitled section of knobs, one for each
+    /// parameter, like a plugin's.
     pub layout: Vec<Section>,
     /// What can be loaded into the device. An entry's position is its resource slot.
     pub samples: Vec<SampleSlot>,
@@ -53,10 +54,12 @@ pub enum Item {
     Slider(ParamId),
     Toggle(ParamId),
     Menu(ParamId),
+    /// A stereo level meter, reading [`METER_VALUES`](crate::METER_VALUES) values at its view.
     Meter(ViewId),
+    /// A scope, reading [`SCOPE_VALUES`](crate::SCOPE_VALUES) values at its view.
     Scope(ViewId, ScopeKind),
     Row(Vec<Item>),
-    /// A custom panel, drawn by name.
+    /// A custom panel, found by name in the table in `rlive-app`'s `ui/panels`.
     Panel(&'static str),
 }
 

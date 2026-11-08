@@ -11,6 +11,13 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ViewId(pub u32);
 
+/// How many values [`Item::Meter`](crate::Item::Meter) reads at its view: linear left and right.
+pub const METER_VALUES: usize = 2;
+
+/// How many values [`Item::Scope`](crate::Item::Scope) reads at its view: `[-1, 1]` samples for
+/// a waveform, `[0, 1]` magnitudes for a spectrum, `[l, r]` pairs for a vectorscope.
+pub const SCOPE_VALUES: usize = 128;
+
 /// The storage shared between one device and its UI.
 pub struct ViewChannel {
     seq: AtomicU32,

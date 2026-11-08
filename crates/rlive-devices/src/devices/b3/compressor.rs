@@ -11,6 +11,7 @@ pub static INFO: BuiltinInfo = BuiltinInfo {
     status: Status::Beta,
     desc: || DeviceDesc {
         params: crate::effects::compressor_params(),
+        layout: crate::effects::compressor::compressor_layout(),
         ..Default::default()
     },
     create: |_| Box::<crate::effects::Compressor>::default(),

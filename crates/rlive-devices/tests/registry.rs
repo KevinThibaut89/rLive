@@ -175,7 +175,31 @@ fn midi_effects_declare_midi_out_and_only_they_do() {
             "{}",
             b.id
         );
-        assert!(desc.layout.is_empty(), "{}: layouts land in K7", b.id);
+    }
+}
+
+#[test]
+fn a_declared_layout_only_names_the_devices_own_parameters() {
+    fn check(item: &rlive_core::Item, params: &[rlive_core::ParamInfo], device: &str) {
+        use rlive_core::Item;
+        match item {
+            Item::Knob(p) | Item::Slider(p) | Item::Toggle(p) | Item::Menu(p) => assert!(
+                params.iter().any(|x| x.param_id() == *p),
+                "{device}: layout names parameter {} it does not declare",
+                p.0
+            ),
+            Item::Row(items) => items.iter().for_each(|i| check(i, params, device)),
+            Item::Meter(_) | Item::Scope(..) | Item::Panel(_) => {}
+        }
+    }
+    for b in builtins() {
+        let desc = (b.desc)();
+        for section in &desc.layout {
+            section
+                .items
+                .iter()
+                .for_each(|i| check(i, &desc.params, b.id));
+        }
     }
 }
 

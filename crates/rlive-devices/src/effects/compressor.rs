@@ -1,6 +1,7 @@
 use super::defaults;
 use rlive_core::{
-    db_to_gain, gain_to_db, AudioBuffer, BlockStep, ModMode, ParamInfo, ProcessContext, Processor,
+    db_to_gain, gain_to_db, AudioBuffer, BlockStep, Item, ModMode, ParamId, ParamInfo,
+    ProcessContext, Processor, Section, ViewId, METER_VALUES,
 };
 
 // ---------------------------------------------------------------- Compressor
@@ -13,6 +14,13 @@ pub const KNEE: u32 = 4;
 pub const MAKEUP: u32 = 5;
 pub const MIX: u32 = 6;
 
+/// The current gain reduction, in dB (never negative), read by the `gain_reduction` panel.
+pub const GAIN_REDUCTION: ViewId = ViewId(0);
+/// The output level, left and right, as a [`METER_VALUES`] meter.
+pub const OUTPUT: ViewId = ViewId(1);
+/// How many view values the Compressor publishes.
+pub const VIEW_LEN: usize = 1 + METER_VALUES;
+
 pub fn compressor_params() -> Vec<ParamInfo> {
     vec![
         ParamInfo::continuous(THRESHOLD, "Threshold", -60.0, 0.0, -18.0, "dB"),
@@ -22,6 +30,31 @@ pub fn compressor_params() -> Vec<ParamInfo> {
         ParamInfo::continuous(KNEE, "Knee", 0.0, 18.0, 6.0, "dB"),
         ParamInfo::continuous(MAKEUP, "Makeup", 0.0, 24.0, 0.0, "dB").with_mod_mode(ModMode::Scale),
         ParamInfo::continuous(MIX, "Dry/Wet", 0.0, 1.0, 1.0, ""),
+    ]
+}
+
+/// The Compressor's panel: how it responds on the left, what it does to the signal on the right.
+pub fn compressor_layout() -> Vec<Section> {
+    let knob = |id| Item::Knob(ParamId(id));
+    vec![
+        Section {
+            title: "Dynamics",
+            items: vec![
+                knob(THRESHOLD),
+                knob(RATIO),
+                knob(ATTACK),
+                knob(RELEASE),
+                knob(KNEE),
+            ],
+        },
+        Section {
+            title: "Output",
+            items: vec![
+                knob(MAKEUP),
+                knob(MIX),
+                Item::Row(vec![Item::Panel("gain_reduction"), Item::Meter(OUTPUT)]),
+            ],
+        },
     ]
 }
 
@@ -89,6 +122,12 @@ impl Processor for Compressor {
             BlockStep::Audio(audio) => self.render(audio),
             BlockStep::Midi(_) => {}
         });
+        if ctx.view.is_active() {
+            let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+            let (left, right) = (peak(ctx.audio.left), peak(ctx.audio.right));
+            ctx.view
+                .publish(GAIN_REDUCTION, &[self.env_db.max(0.0), left, right]);
+        }
     }
 
     fn set_param(&mut self, id: u32, value: f64) {

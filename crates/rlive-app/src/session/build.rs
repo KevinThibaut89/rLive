@@ -4,7 +4,7 @@ use super::ChainRef;
 use crate::peaks::Peaks;
 use rlive_core::time::{BarMap, TempoMap, TempoPoint, TimeMaps};
 use rlive_core::warp::{self, WarpMap};
-use rlive_core::{DeviceId, ParamInfo, Ports, Processor};
+use rlive_core::{DeviceId, ParamInfo, Ports, Processor, Section, ViewChannel};
 use rlive_devices::{DeviceInit, DeviceRole, SampleBuffer};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
@@ -36,6 +36,10 @@ pub struct DeviceRuntime {
     /// Where parameters that the project has no value for started out, so undo can put them
     /// back. A plugin's values come from its own state, not its defaults.
     pub unmoved: HashMap<u32, f64>,
+    /// The sections its panel is drawn from. Empty lays one out from `params`.
+    pub layout: Vec<Section>,
+    /// Where it publishes data for its panel, if what its layout shows reads any.
+    pub view: Option<Arc<ViewChannel>>,
 }
 
 impl DeviceRuntime {
@@ -182,6 +186,7 @@ impl Builder<'_> {
             return self.rack(dev, depth, runtimes);
         }
         let mut ports = Ports::default();
+        let mut view = None;
         let (processor, runtime) = match &dev.kind {
             DeviceKind::Builtin {
                 type_id,
@@ -215,6 +220,9 @@ impl Builder<'_> {
                     }
                     let latency = Arc::new(AtomicU32::new(p.latency()));
                     ports = desc.ports;
+                    // Only for what its layout shows: a device nobody can see measures nothing.
+                    let view_len = crate::ui::panels::view_len(&desc.layout);
+                    view = (view_len > 0).then(|| Arc::new(ViewChannel::new(view_len)));
                     (
                         p,
                         DeviceRuntime {
@@ -225,6 +233,8 @@ impl Builder<'_> {
                             latency,
                             sample_slots,
                             unmoved: HashMap::new(),
+                            layout: desc.layout,
+                            view: view.clone(),
                         },
                     )
                 }
@@ -256,6 +266,8 @@ impl Builder<'_> {
                                 latency,
                                 sample_slots: 0,
                                 unmoved: HashMap::new(),
+                                layout: Vec::new(),
+                                view: None,
                             },
                         )
                     }
@@ -269,6 +281,7 @@ impl Builder<'_> {
         slot.latency = runtime.latency.clone();
         slot.mod_out = vec![0.0; ports.mod_out.len()].into_boxed_slice();
         slot.ports = ports;
+        slot.view = view;
         runtimes.insert(dev.id, runtime);
         Box::new(slot)
     }
@@ -326,6 +339,8 @@ impl Builder<'_> {
                 latency,
                 sample_slots: 0,
                 unmoved: HashMap::new(),
+                layout: Vec::new(),
+                view: None,
             },
         );
         Box::new(slot)
@@ -520,6 +535,8 @@ fn placeholder(error: String) -> (Box<dyn Processor>, DeviceRuntime) {
             latency: Arc::new(AtomicU32::new(0)),
             sample_slots: 0,
             unmoved: HashMap::new(),
+            layout: Vec::new(),
+            view: None,
         },
     )
 }

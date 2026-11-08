@@ -33,7 +33,7 @@ pub use sample::SampleBuffer;
 pub use time::{
     BarMap, Quantize, TempoMap, TempoPoint, TimeMaps, TimeSignature, TransportInfo, PPQ,
 };
-pub use view::{ViewChannel, ViewId, ViewReader, ViewWriter};
+pub use view::{ViewChannel, ViewId, ViewReader, ViewWriter, METER_VALUES, SCOPE_VALUES};
 
 /// Third-party plugin formats rLive can host.
 #[derive(
