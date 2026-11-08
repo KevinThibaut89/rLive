@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 rlive-core.workspace = true
+rlive-stretch.workspace = true
 rtrb.workspace = true
 
 [dev-dependencies]

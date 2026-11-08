@@ -15,6 +15,7 @@ use crate::decoding_cache::{CacheConfig, Cleanup, DecodingCache, Stored};
 use crate::fingerprint::{fingerprint, Fingerprint};
 use crate::peaks::Peaks;
 use rlive_core::SampleBuffer;
+use rlive_stretch::detect_transients;
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -91,6 +92,8 @@ struct Entry {
     /// Known ahead of the audio when an analysis file exists.
     peaks: Option<(Arc<Peaks>, f64)>,
     fingerprint: Option<Fingerprint>,
+    /// In seconds, ascending. `None` until the analysis has finished.
+    transients: Option<Arc<Vec<f64>>>,
 }
 
 struct Loaded {
@@ -98,6 +101,7 @@ struct Loaded {
     peaks: Arc<Peaks>,
     fingerprint: Fingerprint,
     notices: Vec<String>,
+    extras: AnalysisExtras,
 }
 
 enum Report {
@@ -107,11 +111,14 @@ enum Report {
         peaks: Arc<Peaks>,
         sample_rate: f64,
         fingerprint: Fingerprint,
+        extras: AnalysisExtras,
     },
     Finished {
         path: PathBuf,
         result: Result<Loaded, String>,
     },
+    /// The transients of a sample that had none stored.
+    Transients { path: PathBuf, seconds: Vec<f64> },
 }
 
 struct Workers {
@@ -125,6 +132,8 @@ pub struct SampleCache {
     config: Arc<RwLock<LoaderConfig>>,
     workers: Option<Workers>,
     events: Vec<SampleEvent>,
+    /// Files whose transients have arrived since the last [`SampleCache::poll_transients`].
+    new_transients: Vec<PathBuf>,
 }
 
 impl Default for SampleCache {
@@ -140,6 +149,7 @@ impl SampleCache {
             config: Arc::new(RwLock::new(config)),
             workers: None,
             events: Vec::new(),
+            new_transients: Vec::new(),
         }
     }
 
@@ -157,6 +167,7 @@ impl SampleCache {
                     state: State::Loading,
                     peaks: None,
                     fingerprint: None,
+                    transients: None,
                 },
             );
             self.start_workers();
@@ -208,6 +219,64 @@ impl SampleCache {
         self.entries.get(path)?.peaks.clone()
     }
 
+    /// Where the transients of a file are, in seconds, once its analysis has finished.
+    pub fn transients(&self, path: &Path) -> Option<Arc<Vec<f64>>> {
+        self.entries.get(path)?.transients.clone()
+    }
+
+    /// Hands back the files whose transients arrived since the last call. Never waits.
+    pub fn poll_transients(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.new_transients)
+    }
+
+    /// Whether the audio of `path` is here but its transients aren't known yet.
+    fn analysing(&self, path: &Path) -> bool {
+        self.entries
+            .get(path)
+            .is_some_and(|e| matches!(e.state, State::Ready(_)) && e.transients.is_none())
+    }
+
+    /// Stores `settings` as the default for new clips of `path`, in its analysis file.
+    pub fn save_default_clip(
+        &mut self,
+        path: &Path,
+        settings: serde_json::Value,
+    ) -> Result<(), String> {
+        let entry = self
+            .entries
+            .get(path)
+            .ok_or_else(|| "the sample isn't loaded".to_string())?;
+        let fingerprint = entry
+            .fingerprint
+            .clone()
+            .ok_or_else(|| "the sample hasn't finished loading".to_string())?;
+        let change = |extras: &mut AnalysisExtras| extras.default_clip = Some(settings.clone());
+        if analysis::update_extras(path, &fingerprint, change).is_ok() {
+            return Ok(());
+        }
+        // Analysis files are turned off, or this one went away: this one is asked for.
+        let (peaks, sample_rate) = entry
+            .peaks
+            .clone()
+            .ok_or_else(|| "the sample hasn't finished loading".to_string())?;
+        let mut extras = AnalysisExtras::default();
+        if let Some(seconds) = &entry.transients {
+            extras.set_transients(seconds);
+        }
+        extras.default_clip = Some(settings);
+        analysis::write(
+            path,
+            &Analysis {
+                fingerprint,
+                frames: peaks.frames() as u64,
+                sample_rate,
+                peaks,
+                extras,
+            },
+        )
+        .map_err(|e| format!("couldn't write the analysis file: {e}"))
+    }
+
     /// What the file was, content-wise, when it was loaded.
     pub fn fingerprint(&self, path: &Path) -> Option<&Fingerprint> {
         self.entries.get(path)?.fingerprint.as_ref()
@@ -239,15 +308,18 @@ impl SampleCache {
         std::mem::take(&mut self.events)
     }
 
-    /// Requests `paths` and blocks until each has finished loading or failed. Only for callers
-    /// that must have the audio and aren't on a thread anything is waiting for, such as an
-    /// offline render.
+    /// Requests `paths` and blocks until each has finished loading or failed, transients included,
+    /// so a render doesn't depend on how far the analysis has got. Only for callers that must have
+    /// the audio and aren't on a thread anything is waiting for, such as an offline render.
     pub fn wait_for<'a>(&mut self, paths: impl IntoIterator<Item = &'a Path>) {
         let paths: Vec<&Path> = paths.into_iter().collect();
         for path in &paths {
             self.request(path);
         }
-        while paths.iter().any(|p| self.is_loading(p)) {
+        while paths
+            .iter()
+            .any(|p| self.is_loading(p) || self.analysing(p))
+        {
             let Some(report) = self.workers.as_ref().and_then(|w| w.reports.recv().ok()) else {
                 self.fail_everything_loading();
                 return;
@@ -256,9 +328,15 @@ impl SampleCache {
         }
     }
 
-    /// Blocks until nothing is loading.
+    /// Blocks until nothing is loading or being analysed.
     pub fn wait_idle(&mut self) {
-        while self.any_loading() {
+        let waiting = |c: &Self| {
+            c.any_loading()
+                || c.entries
+                    .values()
+                    .any(|e| matches!(e.state, State::Ready(_)) && e.transients.is_none())
+        };
+        while waiting(self) {
             let Some(report) = self.workers.as_ref().and_then(|w| w.reports.recv().ok()) else {
                 self.fail_everything_loading();
                 return;
@@ -290,10 +368,21 @@ impl SampleCache {
                 peaks,
                 sample_rate,
                 fingerprint,
+                extras,
             } => {
                 if let Some(e) = self.entries.get_mut(&path) {
                     e.peaks = Some((peaks, sample_rate));
                     e.fingerprint = Some(fingerprint);
+                    if let Some(seconds) = extras.transients() {
+                        e.transients = Some(Arc::new(seconds));
+                        self.new_transients.push(path);
+                    }
+                }
+            }
+            Report::Transients { path, seconds } => {
+                if let Some(e) = self.entries.get_mut(&path) {
+                    e.transients = Some(Arc::new(seconds));
+                    self.new_transients.push(path);
                 }
             }
             Report::Finished { path, result } => {
@@ -378,8 +467,35 @@ fn worker(
         let result = catch_unwind(AssertUnwindSafe(|| load(&path, &config, &report)))
             .unwrap_or_else(|_| Err("the decoder crashed on this file".to_string()));
         let result = result.map_err(|reason| format!("{}: {reason}", path.display()));
-        if report.send(Report::Finished { path, result }).is_err() {
+        // The audio can be played from here on; finding transients doesn't hold that up.
+        let to_analyse = result
+            .as_ref()
+            .ok()
+            .filter(|l| l.extras.transients().is_none())
+            .map(|l| (l.buffer.clone(), l.fingerprint.clone()));
+        let finished = Report::Finished {
+            path: path.clone(),
+            result,
+        };
+        if report.send(finished).is_err() {
             return;
+        }
+        if let Some((buffer, fingerprint)) = to_analyse {
+            let seconds = catch_unwind(AssertUnwindSafe(|| {
+                detect_transients(&buffer.left, Some(&buffer.right), buffer.sample_rate)
+            }))
+            .unwrap_or_default();
+            if config.create_analysis_files {
+                let stored = analysis::update_extras(&path, &fingerprint, |extras| {
+                    extras.set_transients(&seconds);
+                });
+                if let Err(e) = stored {
+                    log::debug!("{}: transients not stored: {e}", path.display());
+                }
+            }
+            if report.send(Report::Transients { path, seconds }).is_err() {
+                return;
+            }
         }
     }
 }
@@ -400,18 +516,26 @@ fn load(path: &Path, config: &LoaderConfig, report: &Sender<Report>) -> Result<L
             peaks: a.peaks.clone(),
             sample_rate: a.sample_rate,
             fingerprint: fingerprint.clone(),
+            extras: a.extras.clone(),
         });
     }
     let mut notices = Vec::new();
     let audio = read_audio(path, &fingerprint, config, &mut notices).map_err(describe)?;
-    let peaks = match analysis {
-        Some(a) if a.peaks.frames() == audio.frames() => a.peaks,
+    let (peaks, extras) = match analysis {
+        Some(a) if a.peaks.frames() == audio.frames() => (a.peaks, a.extras),
         _ => {
             let peaks = Arc::new(if audio.is_stereo() {
                 Peaks::stereo(&audio.left, &audio.right)
             } else {
                 Peaks::mono(&audio.left)
             });
+            // What was found in the old audio is gone, but saved markers stay if they still fit.
+            let mut extras = AnalysisExtras::default();
+            if let Some((frames, old)) = analysis::read_stale(path) {
+                if frames == audio.frames() as u64 {
+                    extras.default_clip = old.default_clip;
+                }
+            }
             if config.create_analysis_files {
                 let written = analysis::write(
                     path,
@@ -420,14 +544,14 @@ fn load(path: &Path, config: &LoaderConfig, report: &Sender<Report>) -> Result<L
                         frames: audio.frames() as u64,
                         sample_rate: audio.sample_rate as f64,
                         peaks: peaks.clone(),
-                        extras: AnalysisExtras::default(),
+                        extras: extras.clone(),
                     },
                 );
                 if let Err(e) = written {
                     log::debug!("{}: no analysis file written: {e}", path.display());
                 }
             }
-            peaks
+            (peaks, extras)
         }
     };
     Ok(Loaded {
@@ -443,6 +567,7 @@ fn load(path: &Path, config: &LoaderConfig, report: &Sender<Report>) -> Result<L
         peaks,
         fingerprint,
         notices,
+        extras,
     })
 }
 

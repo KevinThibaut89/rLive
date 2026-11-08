@@ -2,7 +2,7 @@
 
 use super::data::{AudioClip, WarpedClip};
 use super::BlockTime;
-use rlive_core::warp::{StretchBank, StretchKind, StretchSpan};
+use rlive_core::warp::{StretchBank, StretchKind, StretchSpan, WarpMap, WarpMode};
 
 /// Length of the anti-click ramps applied to audio at discontinuities, in frames.
 pub(crate) const FADE_FRAMES: u32 = 64;
@@ -27,6 +27,8 @@ pub(crate) struct AudioCursor {
     voice: usize,
     /// The voice doesn't know where the next render starts.
     needs_seek: bool,
+    /// The voice has rendered for this cursor, so it may be holding sound worth fading out.
+    in_progress: bool,
 }
 
 impl AudioCursor {
@@ -38,6 +40,7 @@ impl AudioCursor {
             region_end: f64::INFINITY,
             voice,
             needs_seek: true,
+            in_progress: false,
         }
     }
 
@@ -45,17 +48,17 @@ impl AudioCursor {
     pub fn enter(&mut self, region_end: f64) {
         self.next_local = f64::NEG_INFINITY;
         self.region_end = region_end;
+        self.in_progress = false;
     }
 }
 
 /// Render `[a, seg_end)` of an audio clip through its stretcher. `warp` is `None` for warp off.
 ///
-/// This is the seam for tempo-following (A9, A10). Warp off plays the source at its native speed,
-/// so what the timeline says about the source only matters at discontinuities and loop ends; a
-/// warped clip takes those from its [`WarpMap`](rlive_core::warp::WarpMap). Every stretcher is a
-/// passthrough for now, so the span's end is the native-speed one and a warped clip does not yet
-/// follow the tempo. Once a real stretcher exists the `span` below must instead cover the clip
-/// range the output frames play, `map.tick_to_src(local)` at each end.
+/// Warp off plays the source at its native speed, so what the timeline says about the source only
+/// matters at discontinuities and loop ends. A warped clip whose mode has a real stretcher goes
+/// through [`render_following`] instead, where the timeline says where the source is at every
+/// moment. The rest of the warp modes still read at native speed, as they did before those
+/// stretchers existed.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_audio(
     clip: &AudioClip,
@@ -69,6 +72,12 @@ pub(super) fn render_audio(
     r: &mut [f32],
     stretch: &mut StretchBank,
 ) {
+    if let Some((w, map)) = warp.and_then(|w| w.map.as_ref().map(|m| (w, m))) {
+        if w.mode.kind().follows_timeline() {
+            render_following(clip, w, map, origin, a, seg_end, time, audio, l, r, stretch);
+            return;
+        }
+    }
     let sample = &*clip.sample;
     let len = clip.length as f64;
     let ticks_per_src_frame = rlive_core::time::ticks_per_sample(time.tempo, sample.sample_rate);
@@ -103,7 +112,12 @@ pub(super) fn render_audio(
     } else {
         audio.region_end.min(len)
     };
-    let (kind, transpose) = warp.map_or((StretchKind::Off, 0.0), |w| (w.mode.kind(), w.transpose));
+    // A warped clip with too few markers has no timeline to follow and plays like warp off, as a
+    // mode with a real stretcher would otherwise be rendered through the wrong kind of span.
+    let (kind, transpose, mode) = match warp {
+        Some(w) if !w.mode.kind().follows_timeline() => (w.mode.kind(), w.transpose, w.mode),
+        _ => (StretchKind::Off, 0.0, WarpMode::Complex),
+    };
     let (voice, voice_l, voice_r) = stretch.voice(kind, audio.voice);
     if std::mem::take(&mut audio.needs_seek) {
         voice.seek(audio.src);
@@ -131,6 +145,8 @@ pub(super) fn render_audio(
                 src_start: audio.src,
                 src_end: src,
                 transpose,
+                mode,
+                slices: &[],
             },
             &mut voice_l[i..i + count],
             &mut voice_r[i..i + count],
@@ -154,11 +170,138 @@ pub(super) fn render_audio(
     }
 }
 
+/// While the tempo is ramping, a span is at most this long, so the read position stays close to
+/// the curve between its exact ends.
+const RAMP_CHUNK: usize = 32;
+/// How many source frames apart the read head and the timeline can be and still count as one
+/// continuous reading.
+const CONTINUOUS_FRAMES: f64 = 2.0;
+
+/// Renders a warped clip whose source position comes from the timeline, through its map.
+///
+/// The output frames are cut into stretches, each playing at one rate: a stretch ends at a warp
+/// marker and at the end of the loop, and its span is the exact source range between the map's
+/// positions at each end. Nothing accumulates from block to block, so however the tempo moves
+/// the clip stays where the song position says.
+#[allow(clippy::too_many_arguments)]
+fn render_following(
+    clip: &AudioClip,
+    warp: &WarpedClip,
+    map: &WarpMap,
+    origin: f64,
+    a: f64,
+    seg_end: f64,
+    time: BlockTime,
+    audio: &mut AudioCursor,
+    l: &mut [f32],
+    r: &mut [f32],
+    stretch: &mut StretchBank,
+) {
+    let sample = &*clip.sample;
+    let len = clip.length as f64;
+    let local_a = a - origin;
+    let jumped = (local_a - audio.next_local).abs() > time.ticks_per_sample * 0.5;
+    audio.next_local = seg_end - origin;
+
+    let from = time.offset(a);
+    let to = time.offset(seg_end).min(l.len()).min(r.len());
+    if from >= to {
+        return;
+    }
+    let fade_end = if clip.looped || audio.region_end.is_infinite() {
+        audio.region_end
+    } else {
+        audio.region_end.min(len)
+    };
+    let (voice, voice_l, voice_r) = stretch.voice(warp.mode.kind(), audio.voice);
+    if !audio.in_progress {
+        voice.reset();
+    }
+
+    // The local tick frame `f` plays, measured from the block so a mid-block start (a launch) is
+    // exact.
+    let local_at = |f: usize| {
+        if f == from {
+            local_a
+        } else {
+            time.tick_at(f) - origin
+        }
+    };
+    let markers = map.markers();
+    let mut f = from;
+    while f < to {
+        let local = local_at(f);
+        let (position, cycle_start) = if clip.looped {
+            let cycle = (local / len).floor();
+            (local - cycle * len, cycle * len)
+        } else {
+            (local.max(0.0), 0.0)
+        };
+        let want = map.tick_to_src(position);
+        if audio.needs_seek || jumped && f == from || (want - audio.src).abs() > CONTINUOUS_FRAMES {
+            voice.seek(want);
+            audio.needs_seek = false;
+        }
+
+        // How far this stretch can run at one rate.
+        let next_marker = markers.partition_point(|m| m.tick <= position);
+        let mut boundary = markers.get(next_marker).map_or(f64::INFINITY, |m| m.tick);
+        if clip.looped && boundary > len {
+            boundary = len;
+        }
+        let limit = if time.ramp != 0.0 {
+            (f + RAMP_CHUNK).min(to)
+        } else {
+            to
+        };
+        let end = if boundary.is_finite() {
+            // The first frame that is at or past the boundary.
+            let ticks = boundary + cycle_start + origin - time.t0;
+            let frame = time.run().frames_to(ticks).ceil();
+            (frame.max(f as f64 + 1.0) as usize).min(limit)
+        } else {
+            limit
+        };
+        let count = end - f;
+        let end_position = local_at(end) - cycle_start;
+        let src_end = map.tick_to_src(end_position);
+        voice.render(
+            sample,
+            StretchSpan {
+                src_start: want,
+                src_end,
+                transpose: warp.transpose,
+                mode: warp.mode,
+                slices: &warp.slices,
+            },
+            &mut voice_l[f..end],
+            &mut voice_r[f..end],
+        );
+        let tps = time.ticks_per_sample;
+        for i in f..end {
+            let mut gain = clip.gain;
+            if !voice.declicks() && audio.fade_in > 0 {
+                gain *= 1.0 - audio.fade_in as f32 / FADE_FRAMES as f32;
+                audio.fade_in -= 1;
+            }
+            let frames_left = (fade_end - (local_a + (i - from) as f64 * tps)) / tps;
+            if frames_left < FADE_FRAMES as f64 {
+                gain *= (frames_left / FADE_FRAMES as f64).max(0.0) as f32;
+            }
+            l[i] += voice_l[i] * gain;
+            r[i] += voice_r[i] * gain;
+        }
+        audio.src = src_end;
+        f += count;
+    }
+    audio.in_progress = true;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::clip::data::WarpedClip;
-    use rlive_core::warp::{WarpMap, WarpMarker, WarpMode};
+    use rlive_core::warp::{WarpMarker, WarpMode};
     use rlive_core::SampleBuffer;
     use std::sync::Arc;
 
@@ -371,6 +514,7 @@ mod tests {
             map: WarpMap::new([WarpMarker::new(0.0, 0.0), WarpMarker::new(24_000.0, 3840.0)]),
             mode: WarpMode::Complex,
             transpose: 0.0,
+            slices: Arc::from(Vec::new()),
             audio,
         };
         let mut bank = StretchBank::new(256);

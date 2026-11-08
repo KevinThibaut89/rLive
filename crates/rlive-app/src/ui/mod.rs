@@ -11,6 +11,7 @@ pub mod keymap;
 mod mac_menu;
 pub(crate) mod panels;
 mod piano_roll;
+mod sample_editor;
 mod session_view;
 mod settings_window;
 pub mod theme;
@@ -79,6 +80,7 @@ pub struct UiState {
     pub devices: devices::DeviceViewState,
     pub renaming: Option<(TrackId, String)>,
     pub piano: piano_roll::PianoState,
+    pub sample: sample_editor::SampleState,
     pub layout: session_view::SessionLayout,
     pub arr: arrangement::ArrangementState,
     pub show_browser: bool,
@@ -185,6 +187,7 @@ impl RliveApp {
             devices: devices::DeviceViewState::default(),
             renaming: None,
             piano: piano_roll::PianoState::default(),
+            sample: sample_editor::SampleState::new(),
             layout: session_view::SessionLayout::default(),
             arr: arrangement::ArrangementState::default(),
             show_browser: settings.show_browser.unwrap_or(true),
@@ -462,6 +465,7 @@ impl RliveApp {
                 .selected_track_ids()
                 .iter()
                 .any(|t| self.session.project.track(*t).is_some_and(|t| t.is_group())),
+            warp_selected: self.ui.sample.has_selection(),
         }
     }
 
@@ -1101,6 +1105,7 @@ impl eframe::App for RliveApp {
         theme::begin_frame(ctx, &self.settings.theme);
         widgets::info_begin_frame(ctx);
         self.session.colors = self.settings.colors;
+        self.session.warp_defaults = self.settings.warp;
         self.session.idle();
         self.poll_scan();
         if std::mem::take(&mut self.ui.request_scan) && self.ui.scan_rx.is_none() {

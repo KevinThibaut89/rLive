@@ -235,6 +235,8 @@ pub struct KeyContext {
     pub dialog_open: bool,
     /// A Group Track is selected.
     pub group_selected: bool,
+    /// A Warp Marker, transient or time selection is selected in the Sample tab.
+    pub warp_selected: bool,
 }
 
 impl KeyContext {
@@ -244,6 +246,7 @@ impl KeyContext {
             When::ComputerKeys => self.computer_keys,
             When::DialogOpen => self.dialog_open,
             When::GroupTrack => self.group_selected,
+            When::WarpMarker => self.warp_selected,
             // The rest are built by the milestones that need them.
             _ => false,
         }

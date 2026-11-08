@@ -1,0 +1,13 @@
+[package]
+name = "rlive-stretch"
+description = "rLive: audio stretching and transient detection for warped clips"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rlive-core.workspace = true
+realfft.workspace = true
+
+[dev-dependencies]
+rlive-testkit.workspace = true

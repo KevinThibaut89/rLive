@@ -5,11 +5,13 @@
 
 use super::commands::{options::Options, MenuCommand};
 use super::theme::{pal, Appearance, ThemeName, ThemeSettings, Tone};
-use super::{session_view, widgets, RliveApp};
+use super::{sample_editor, session_view, widgets, RliveApp};
 use crate::audio;
 use crate::midi_input::{self, MidiInput};
+use crate::session::{ShortSampleMode, WarpDefaults};
 use crate::settings::{ClipColor, ScrollBars};
 use egui::{Color32, RichText, Sense, Stroke, StrokeKind, Vec2};
+use rlive_project::WarpMode;
 
 /// A page of the Settings window.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -135,7 +137,9 @@ impl RliveApp {
                             Tab::FileFolder => self.file_folder_tab(ui),
                             Tab::Library => self.library_tab(ui),
                             Tab::PlugIns => self.plugins_tab(ui),
-                            Tab::RecordWarpLaunch => record_warp_launch_tab(ui),
+                            Tab::RecordWarpLaunch => {
+                                record_warp_launch_tab(ui, &mut self.settings.warp)
+                            }
                             Tab::Licenses => licenses_tab(ui),
                         });
                     });
@@ -615,7 +619,7 @@ fn link_tab(ui: &mut egui::Ui) {
     });
 }
 
-fn record_warp_launch_tab(ui: &mut egui::Ui) {
+fn record_warp_launch_tab(ui: &mut egui::Ui, warp: &mut WarpDefaults) {
     widgets::section_label(ui, "RECORD");
     grid(ui, "record", |ui| {
         soon(ui, "File Type", "WAV", "A11");
@@ -628,8 +632,32 @@ fn record_warp_launch_tab(ui: &mut egui::Ui) {
     ui.add_space(10.0);
     widgets::section_label(ui, "WARP");
     grid(ui, "warp", |ui| {
-        soon_check(ui, "Auto-Warp Long Samples", true, "A9");
-        soon(ui, "Default Warp Mode", "Beats", "A9");
+        soon_check(ui, "Auto-Warp Long Samples", true, "A10");
+        ui.label("Loop/Warp Short Samples");
+        egui::ComboBox::from_id_salt("short_samples")
+            .selected_text(warp.short_samples.label())
+            .show_ui(ui, |ui| {
+                for mode in ShortSampleMode::ALL {
+                    ui.selectable_value(&mut warp.short_samples, mode, mode.label());
+                }
+            });
+        ui.end_row();
+        ui.label("Default Warp Mode");
+        egui::ComboBox::from_id_salt("default_warp_mode")
+            .selected_text(sample_editor::mode_label(warp.mode))
+            .show_ui(ui, |ui| {
+                for mode in [
+                    WarpMode::Beats,
+                    WarpMode::Tones,
+                    WarpMode::Texture,
+                    WarpMode::RePitch,
+                    WarpMode::Complex,
+                    WarpMode::ComplexPro,
+                ] {
+                    ui.selectable_value(&mut warp.mode, mode, sample_editor::mode_label(mode));
+                }
+            });
+        ui.end_row();
         soon_check(ui, "Create Fades on Clip Edges", true, "C5");
     });
     ui.add_space(10.0);

@@ -2,6 +2,8 @@
 
 mod audio;
 mod data;
+#[cfg(test)]
+mod following_tests;
 mod launcher;
 mod midi;
 
@@ -47,7 +49,7 @@ impl BlockTime {
         self.t0 + self.run().advance(offset as f64)
     }
 
-    fn run(&self) -> TempoRun {
+    pub(crate) fn run(&self) -> TempoRun {
         TempoRun {
             ticks_per_sample: self.ticks_per_sample,
             ramp: self.ramp,

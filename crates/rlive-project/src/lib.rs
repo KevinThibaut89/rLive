@@ -15,14 +15,15 @@ mod project;
 mod routing;
 mod scene;
 mod track;
+pub mod warp_edit;
 
 pub use arrangement::{
     Arrangement, ArrangementClip, Locator, SignatureMarker, TakeLane, TempoAutomation,
 };
 pub use clip::{
     BeatsLoop, BeatsPreserve, Clip, ClipContent, ClipScale, Fades, FollowAction, FollowActions,
-    LaunchMode, LaunchSettings, MidiProgram, NoteData, NoteExpression, Warp, WarpMarker, WarpMode,
-    WarpParams,
+    LaunchMode, LaunchSettings, MidiProgram, NoteData, NoteExpression, TransientEdits, Warp,
+    WarpMarker, WarpMode, WarpParams,
 };
 pub use device::{
     Chain, ChainMix, ChainSend, Device, DeviceKind, DrumPad, Macro, MacroMapping, RackKind,

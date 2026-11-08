@@ -22,6 +22,7 @@ fn cx(focus: FocusArea) -> KeyContext {
         keyboard_taken: false,
         dialog_open: false,
         group_selected: false,
+        warp_selected: false,
     }
 }
 
@@ -89,9 +90,31 @@ fn the_sample_and_note_editors_are_separate_focus_areas() {
     // Cmd+J joins notes, and means nothing in the sample editor.
     assert_eq!(resolve(cmd(Key::J), &notes), Resolution::Pending);
     assert_eq!(resolve(cmd(Key::J), &sample), Resolution::Unbound);
-    // Cmd+I inserts a Warp Marker in the sample editor, and means nothing for notes.
-    assert_eq!(resolve(cmd(Key::I), &sample), Resolution::Pending);
+    // Cmd+I inserts a Warp Marker in the sample editor, which is a widget's job, so here it is
+    // simply not a command; it means nothing for notes either.
+    assert_eq!(resolve(cmd(Key::I), &sample), Resolution::Unbound);
     assert_eq!(resolve(cmd(Key::I), &notes), Resolution::Unbound);
+}
+
+#[test]
+fn delete_goes_to_the_warp_marker_when_one_is_selected() {
+    let nothing = KeyContext {
+        clip_is_midi: false,
+        ..cx(FocusArea::Clip)
+    };
+    let selected = KeyContext {
+        warp_selected: true,
+        ..nothing
+    };
+    assert_ne!(
+        resolve(bare(Key::Delete), &selected),
+        Resolution::Run(MenuCommand::Edit(Edit::Delete)),
+        "the widget acts on the selection"
+    );
+    assert_eq!(
+        resolve(bare(Key::Delete), &nothing),
+        Resolution::Run(MenuCommand::Edit(Edit::Delete))
+    );
 }
 
 #[test]

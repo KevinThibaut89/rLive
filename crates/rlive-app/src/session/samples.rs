@@ -29,6 +29,9 @@ impl Session {
         for event in self.samples.poll() {
             self.sample_finished(event);
         }
+        for path in self.samples.poll_transients() {
+            self.send_clips_using(&path);
+        }
     }
 
     fn sample_finished(&mut self, event: SampleEvent) {
@@ -108,11 +111,10 @@ impl Session {
             });
     }
 
-    /// Sends a finished sample to everything in the engine that was waiting for it.
-    fn swap_in_sample(&mut self, path: &Path, sample: &Arc<rlive_core::SampleBuffer>) {
+    /// Sends every clip that plays `path` to the engine again.
+    fn send_clips_using(&mut self, path: &Path) {
         let mut slots = Vec::new();
         let mut lanes = Vec::new();
-        let mut ops = Vec::new();
         for t in self.project.tracks.iter().chain(&self.project.returns) {
             for (slot, clip) in t.clips.iter().enumerate() {
                 if clip.as_ref().is_some_and(|c| uses(&c.content, path)) {
@@ -122,6 +124,19 @@ impl Session {
             if t.arrangement.iter().any(|c| uses(&c.clip.content, path)) {
                 lanes.push(t.id);
             }
+        }
+        for (track, slot) in slots {
+            self.send_clip(track, slot);
+        }
+        for track in lanes {
+            self.sync_lane(track);
+        }
+    }
+
+    /// Sends a finished sample to everything in the engine that was waiting for it.
+    fn swap_in_sample(&mut self, path: &Path, sample: &Arc<rlive_core::SampleBuffer>) {
+        let mut ops = Vec::new();
+        for t in self.project.tracks.iter().chain(&self.project.returns) {
             device_sample_ops(&t.devices, ChainRef::Track(t.id), path, sample, &mut ops);
         }
         device_sample_ops(
@@ -131,12 +146,7 @@ impl Session {
             sample,
             &mut ops,
         );
-        for (track, slot) in slots {
-            self.send_clip(track, slot);
-        }
-        for track in lanes {
-            self.sync_lane(track);
-        }
+        self.send_clips_using(path);
         if !ops.is_empty() {
             self.send_edits(ops);
         }

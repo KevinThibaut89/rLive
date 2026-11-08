@@ -315,27 +315,27 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Phase Nudge Up/Down [S]
 - `[ ]` Tempo Leader clips (Arrangement): Set follows markers, field disabled, bottom track wins [L]
 - `[ ]` Leader-generated non-editable automation; Unfollow Tempo Automation; overrides Tempo Follower; disabled under EXT [M]
-- `[ ]` Warp toggle; beat-synced follow [XL] → stretch engine, tempo map
-- `[ ]` Short sample default: Unwarped One Shot, Warped One Shot, Warped Loop, Auto (default) [M]
+- `[x]` Warp toggle; beat-synced follow [XL] → stretch engine, tempo map
+- `[~]` Short sample default: Unwarped One Shot, Warped One Shot, Warped Loop, Auto (default) [M]
 - `[ ]` Auto-Warp Long Samples default on; marker on each bar [XL PROP] → tempo/beat tracking
-- `[ ]` Default Warp Mode, Beats initially [S]
+- `[x]` Default Warp Mode, Beats initially [S]
 - `[ ]` Import Audio File command [S]
-- `[ ]` Warp Markers: add, move, arrow nudge, delete, Shift moves waveform under marker [L]
-- `[ ]` Transient detection with visible markers; manual add, delete, reset [L]
-- `[ ]` Pseudo-markers on hover, modifier creates adjacent ones, Shift moves transient [M]
-- `[ ]` Insert Warp Markers from selection transients [S]
-- `[ ]` Save markers with sample; not for Core/Pack content [S CONTENT]
-- `[ ]` Even-length loop assumption 1-16 bars, two markers [M]
+- `[~]` Warp Markers: add, move, arrow nudge, delete, Shift moves waveform under marker [L]
+- `[~]` Transient detection with visible markers; manual add, delete, reset [L]
+- `[~]` Pseudo-markers on hover, modifier creates adjacent ones, Shift moves transient [M]
+- `[~]` Insert Warp Markers from selection transients [S]
+- `[x]` Save markers with sample; not for Core/Pack content [S CONTENT]
+- `[x]` Even-length loop assumption 1-16 bars, two markers [M]
 - `[ ]` BPM field, fine drag, x2/÷2, Shift-drag clip edge stretches tempo [S]
-- `[ ]` Set 1.1.1 Here [S]
-- `[ ]` Multi-clip warping across same-length clips [M]
-- `[ ]` Warp Sample As, Warp Selection As with suggested length [M] → Auto-Warp
-- `[ ]` Warp From Here, Start At, Straight, BPM From Here [M] → Auto-Warp
-- `[ ]` Audio quantize: nearest transient to grid, Amount, triplets [M] → transients, markers
-- `[ ]` Beats mode: Preserve transients or grid; Loop Off/Forward/Back-and-Forth with zero-crossing; Transient Envelope 0-100 [L PROP]
+- `[x]` Set 1.1.1 Here [S]
+- `[~]` Multi-clip warping across same-length clips [M]
+- `[~]` Warp Sample As, Warp Selection As with suggested length [M] → Auto-Warp
+- `[~]` Warp From Here, Start At, Straight, BPM From Here [M] → Auto-Warp
+- `[x]` Audio quantize: nearest transient to grid, Amount, triplets [M] → transients, markers
+- `[~]` Beats mode: Preserve transients or grid; Loop Off/Forward/Back-and-Forth with zero-crossing; Transient Envelope 0-100 [L PROP]
 - `[ ]` Tones mode: pitch-adaptive grain size [L PROP]
 - `[ ]` Texture mode: grain size, Fluctuation [M PROP]
-- `[ ]` Re-Pitch: rate change, transpose disabled [S]
+- `[x]` Re-Pitch: rate change, transpose disabled [S]
 - `[ ]` Complex [XL PROP]; Complex Pro: Formants 0-100%, Envelope default 128 [XL PROP]. Exact sound is not reproducible; substitutes are a licensed or open-source stretcher.
 
 
@@ -1276,7 +1276,7 @@ Benchmark: match those jitter figures.
 - `[ ]` Session keyboard flows: title bars, slots, scenes, mixer [L]
 - `[ ]` Arrangement flows: locators, clip edges, selections, export [L]
 - `[ ]` MIDI editing by keyboard: selection, transpose, length, velocity, probability [M]
-- `[ ]` Audio editing: warp markers and transients by keyboard [M]
+- `[~]` Audio editing: warp markers and transients by keyboard [M]
 - `[ ]` Device and Browser keyboard flows, preview, multi-select [M]
 - `[ ]` Keyboard breakpoint create, jump, select, value entry, focus and undo colours [M]
 - `[ ]` Switching automation lanes by keyboard [S]
@@ -1334,7 +1334,7 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **A17:** Hide/show plug-in windows; Keep several plug-in windows open
 - `[ ]` **A19:** Next similar sample; Previous similar sample; Return to reference; Save as similarity reference; Show similar-sample swap controls; Similarity search
 - `[ ]` **A5:** Audio engine on/off; Hide/show In/Out
-- `[ ]` **A9:** Delete Warp Marker; Delete transient; Insert Warp Marker; Insert transient; Move Warp Marker left; Move Warp Marker right; Quantize; Quantize settings; Reverse audio selection; Select next Warp Marker; Select previous Warp Marker; Stretch warped clip
+- `[ ]` **A9:** Reverse audio selection; Stretch warped clip
 - `[ ]` **C10:** MPE tab
 - `[ ]` **C11:** Apply MIDI Tool settings
 - `[ ]` **C12:** Add device from browser; Assign colour 1; Assign colour 2; Assign colour 3; Assign colour 4; Assign colour 5; Assign colour 6; Assign colour 7; Browser history back; Browser history forward; Close folder; Drop browser clips as a scene; Hide/show Filter View; Hide/show Tag Editor; Hot-swap selected device; Jump to search results; Load selected device; Load selected item; Open folder; Preview selected file; Reset assigned colour; Scroll down; Scroll up; Search in Browser; Toggle Hot-Swap Mode

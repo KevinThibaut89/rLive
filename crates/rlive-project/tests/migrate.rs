@@ -505,6 +505,7 @@ fn the_v2_schema_round_trips_when_it_is_used() {
                 beats_loop: BeatsLoop::BackAndForth,
                 ..WarpParams::default()
             },
+            ..Warp::default()
         },
     };
     p.tracks[2].clips[0] = Some(audio);

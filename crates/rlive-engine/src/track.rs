@@ -701,7 +701,7 @@ impl TrackNode {
             player: ClipPlayer::new(),
             lane: LanePlayer::new(Arc::new(ArrangementLane::default())),
             follow: true,
-            stretch: StretchBank::new(max_block),
+            stretch: rlive_stretch::bank(max_block),
             left: vec![0.0; max_block],
             right: vec![0.0; max_block],
             events: Vec::with_capacity(MAX_EVENTS),

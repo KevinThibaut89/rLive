@@ -175,13 +175,15 @@ impl Session {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        Ok(Clip {
+        let mut clip = Clip {
             name,
             color: self.new_clip_color(track),
             length: (beats as u64) * rlive_core::PPQ,
             looped: true,
             content: ClipContent::audio(path, 0.0),
             ..Clip::default()
-        })
+        };
+        self.apply_new_clip_defaults(&mut clip, path, seconds);
+        Ok(clip)
     }
 }

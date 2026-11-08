@@ -113,6 +113,8 @@ pub struct WarpedClip {
     pub mode: WarpMode,
     /// Semitones.
     pub transpose: f32,
+    /// Where Beats slices the source, in source frames, ascending. Empty for other modes.
+    pub slices: Arc<[f64]>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

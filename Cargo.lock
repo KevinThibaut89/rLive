@@ -2632,6 +2632,7 @@ dependencies = [
  "libc",
  "log",
  "rlive-core",
+ "rlive-stretch",
  "rlive-testkit",
  "serde",
  "serde_json",
@@ -2663,6 +2664,7 @@ version = "0.1.0"
 dependencies = [
  "rlive-core",
  "rlive-devices",
+ "rlive-stretch",
  "rlive-testkit",
  "rtrb",
 ]
@@ -2695,6 +2697,15 @@ dependencies = [
  "ron",
  "serde",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "rlive-stretch"
+version = "0.1.0"
+dependencies = [
+ "realfft",
+ "rlive-core",
+ "rlive-testkit",
 ]
 
 [[package]]

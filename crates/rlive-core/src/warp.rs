@@ -1,8 +1,8 @@
 //! How audio clips are read against the timeline: warp maps and the stretching seam.
 //!
-//! The engine asks a [`Stretcher`] to render a source range into output frames. Only the
-//! [`Passthrough`] exists so far, which ignores the range length and plays at native speed:
-//! the real algorithms are milestones A9 and A10.
+//! The engine asks a [`Stretcher`] to render a source range into output frames. The
+//! [`Passthrough`] here ignores the range length and plays at native speed; the real algorithms
+//! are in `rlive-stretch`, which fills in a [`StretchBank`]'s rows.
 
 use crate::sample::SampleBuffer;
 use serde::{Deserialize, Serialize};
@@ -148,15 +148,35 @@ pub enum StretchKind {
 
 impl StretchKind {
     const COUNT: usize = 7;
+
+    /// Every kind, in the order of a [`StretchBank`]'s rows.
+    pub const ALL: [StretchKind; Self::COUNT] = [
+        StretchKind::Off,
+        StretchKind::Beats,
+        StretchKind::Tones,
+        StretchKind::Texture,
+        StretchKind::RePitch,
+        StretchKind::Complex,
+        StretchKind::ComplexPro,
+    ];
+
+    /// Whether this kind has a real stretcher, so a clip in it plays where the timeline says.
+    /// The others still read at native speed; A10 adds them here as it builds them.
+    pub fn follows_timeline(self) -> bool {
+        matches!(self, StretchKind::Beats | StretchKind::RePitch)
+    }
 }
 
-/// The source range one render call covers.
+/// The source range one render call covers, and how to play it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct StretchSpan {
+pub struct StretchSpan<'a> {
     pub src_start: f64,
     pub src_end: f64,
     /// Semitones.
     pub transpose: f32,
+    pub mode: WarpMode,
+    /// Where Beats slices the source, in source frames, ascending. Empty for other modes.
+    pub slices: &'a [f64],
 }
 
 /// Reads a source range into output frames, stretching it to fit. One instance plays one clip
@@ -166,8 +186,15 @@ pub trait Stretcher: Send {
     fn prepare(&mut self, sample_rate: f64);
     /// Jump to source frame `src`: the next render doesn't continue from the last.
     fn seek(&mut self, src: f64);
+    /// Forget anything still sounding: what comes next is unrelated to what came before.
+    fn reset(&mut self) {}
+    /// Whether this stretcher smooths its own discontinuities, so the engine shouldn't ramp over
+    /// them too.
+    fn declicks(&self) -> bool {
+        false
+    }
     /// Write `l.len()` frames of `s` over `span` to `l` and `r`, which have the same length.
-    fn render(&mut self, s: &SampleBuffer, span: StretchSpan, l: &mut [f32], r: &mut [f32]);
+    fn render(&mut self, s: &SampleBuffer, span: StretchSpan<'_>, l: &mut [f32], r: &mut [f32]);
     /// How many output frames the output runs behind the source.
     fn latency(&self) -> u32;
 }
@@ -192,7 +219,7 @@ impl Stretcher for Passthrough {
 
     fn seek(&mut self, _src: f64) {}
 
-    fn render(&mut self, s: &SampleBuffer, span: StretchSpan, l: &mut [f32], r: &mut [f32]) {
+    fn render(&mut self, s: &SampleBuffer, span: StretchSpan<'_>, l: &mut [f32], r: &mut [f32]) {
         let n = s.len();
         let step = s.sample_rate / self.sample_rate;
         let mut pos = span.src_start;
@@ -226,11 +253,19 @@ pub struct StretchBank {
 }
 
 impl StretchBank {
-    /// A bank whose every voice is a passthrough. A9 and A10 replace the rows they implement.
+    /// A bank whose every voice is a passthrough.
     pub fn new(max_block: usize) -> Self {
+        Self::with_rows(max_block, |_| {
+            Box::new(Passthrough::default()) as Box<dyn Stretcher>
+        })
+    }
+
+    /// A bank whose voices `make` builds, called for each voice of each kind.
+    pub fn with_rows(max_block: usize, make: impl Fn(StretchKind) -> Box<dyn Stretcher>) -> Self {
         Self {
-            voices: (0..StretchKind::COUNT * VOICES_PER_MODE)
-                .map(|_| Box::new(Passthrough::default()) as Box<dyn Stretcher>)
+            voices: StretchKind::ALL
+                .iter()
+                .flat_map(|kind| (0..VOICES_PER_MODE).map(|_| make(*kind)))
                 .collect(),
             left: vec![0.0; max_block],
             right: vec![0.0; max_block],
@@ -331,6 +366,8 @@ mod tests {
             src_start: 100.0,
             src_end: 999.0,
             transpose: 7.0,
+            mode: WarpMode::Complex,
+            slices: &[],
         };
         p.render(&s, span, &mut l, &mut r);
         // Half speed, linear interpolation.
@@ -351,6 +388,8 @@ mod tests {
             src_start: 1998.0,
             src_end: 2002.0,
             transpose: 0.0,
+            mode: WarpMode::Complex,
+            slices: &[],
         };
         p.render(&s, span, &mut l, &mut r);
         assert!(l[0] > 1.9);

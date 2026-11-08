@@ -149,6 +149,18 @@ pub struct Warp {
     pub markers: Vec<WarpMarker>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub params: WarpParams,
+    /// The user's changes to the transients found in the file.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub transients: TransientEdits,
+}
+
+/// Changes a clip makes to the transients analysed from its file, in seconds.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct TransientEdits {
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub added: Vec<f64>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub removed: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

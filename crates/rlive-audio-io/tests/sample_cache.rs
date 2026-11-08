@@ -179,6 +179,112 @@ fn wait_for_blocks_until_named_files_are_done() {
     assert_eq!(cache.poll().len(), 2, "the events are not lost");
 }
 
+// -------------------------------------------------------------------- transients
+
+/// Bursts of a clicking tone at each of `at`, in seconds.
+fn clicks(at: &[f64], rate: u32, seconds: f64) -> Vec<f32> {
+    let mut out = vec![0.0; (seconds * rate as f64) as usize];
+    for t in at {
+        let start = (t * rate as f64) as usize;
+        for (i, s) in out[start..].iter_mut().take(2_000).enumerate() {
+            *s += (-(i as f32) / 300.0).exp() * if i % 3 == 0 { 0.7 } else { -0.35 };
+        }
+    }
+    out
+}
+
+#[test]
+fn transients_are_found_in_the_background_and_stored() {
+    let dir = Dir::new();
+    let path = dir.file("a.wav");
+    let hits = [0.5, 1.0, 1.5, 2.0];
+    let audio = clicks(&hits, 44_100, 2.5);
+    write_wav(&path, &audio, &audio, 44_100);
+    let mut cache = dir.cache();
+    cache.request(&path);
+    cache.wait_idle();
+    let found = cache.transients(&path).expect("the analysis finished");
+    assert_eq!(found.len(), hits.len(), "{found:?}");
+    for (f, t) in found.iter().zip(hits) {
+        assert!((f - t).abs() < 0.01, "{f} {t}");
+    }
+    assert_eq!(cache.poll_transients(), vec![path.clone()]);
+    let a = analysis::read(&path, &fingerprint(&path).unwrap()).unwrap();
+    let stored = a.extras.transients().unwrap();
+    assert_eq!(stored.len(), found.len());
+    for (s, f) in stored.iter().zip(found.iter()) {
+        assert!((s - f).abs() < 2e-6, "{s} {f}");
+    }
+}
+
+#[test]
+fn stored_transients_are_reused_without_analysing_again() {
+    let dir = Dir::new();
+    let path = dir.file("a.wav");
+    let audio = clicks(&[0.5, 1.0], 44_100, 1.5);
+    write_wav(&path, &audio, &audio, 44_100);
+    let mut cache = dir.cache();
+    cache.request(&path);
+    cache.wait_idle();
+    // Doctor the sidecar: if the transients come back changed, nothing recomputed them.
+    let fp = fingerprint(&path).unwrap();
+    analysis::update_extras(&path, &fp, |e| e.set_transients(&[0.123])).unwrap();
+    let mut cache = dir.cache();
+    cache.request(&path);
+    cache.wait_idle();
+    assert_eq!(cache.transients(&path).unwrap().as_slice(), &[0.123]);
+}
+
+#[test]
+fn a_changed_file_is_analysed_again_and_keeps_saved_settings_if_it_is_as_long() {
+    let dir = Dir::new();
+    let path = dir.file("a.wav");
+    let audio = clicks(&[0.5, 1.0], 44_100, 1.5);
+    write_wav(&path, &audio, &audio, 44_100);
+    let mut cache = dir.cache();
+    cache.request(&path);
+    cache.wait_idle();
+    let saved = serde_json::json!({ "markers": 2 });
+    cache.save_default_clip(&path, saved.clone()).unwrap();
+
+    // Same length, different audio: the markers stay, as the old transients must not.
+    let audio = clicks(&[0.25, 0.75, 1.25], 44_100, 1.5);
+    write_wav(&path, &audio, &audio, 44_100);
+    let mut cache = dir.cache();
+    cache.request(&path);
+    cache.wait_idle();
+    assert_eq!(cache.transients(&path).unwrap().len(), 3, "analysed anew");
+    let fp = fingerprint(&path).unwrap();
+    let a = analysis::read(&path, &fp).unwrap();
+    assert_eq!(a.extras.default_clip, Some(saved));
+    assert_eq!(a.extras.transients().unwrap().len(), 3);
+
+    // A different length: nothing saved against the old audio survives.
+    let audio = clicks(&[0.25], 44_100, 2.5);
+    write_wav(&path, &audio, &audio, 44_100);
+    let mut cache = dir.cache();
+    cache.request(&path);
+    cache.wait_idle();
+    let a = analysis::read(&path, &fingerprint(&path).unwrap()).unwrap();
+    assert_eq!(a.extras.default_clip, None);
+}
+
+#[test]
+fn saved_settings_survive_the_transients_being_stored() {
+    let dir = Dir::new();
+    let path = dir.file("a.wav");
+    let audio = clicks(&[0.5], 44_100, 1.0);
+    write_wav(&path, &audio, &audio, 44_100);
+    let mut cache = dir.cache();
+    cache.request(&path);
+    cache.wait_idle();
+    let saved = serde_json::json!(true);
+    cache.save_default_clip(&path, saved.clone()).unwrap();
+    assert_eq!(analysis::default_clip_of(&path), Some(saved));
+    let a = analysis::read(&path, &fingerprint(&path).unwrap()).unwrap();
+    assert!(a.extras.transients().is_some(), "still there");
+}
+
 // -------------------------------------------------------------------- analysis files
 
 #[test]

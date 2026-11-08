@@ -18,8 +18,8 @@ use rlive_engine::{
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
 use rlive_project::{
-    ArrangementClip, Breakpoint, Chain, Clip, ClipContent, ClipScale, Device, DeviceKind, Project,
-    RackKind, Track, TrackKind, Warp, WarpMode as ProjectWarpMode,
+    ArrangementClip, BeatsPreserve, Breakpoint, Chain, Clip, ClipContent, ClipScale, Device,
+    DeviceKind, Project, RackKind, Track, TrackKind, Warp, WarpMode as ProjectWarpMode,
 };
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
@@ -111,6 +111,39 @@ fn warp_map(warp: &Warp, sample_rate: f64) -> Option<WarpMap> {
             .iter()
             .map(|m| warp::WarpMarker::new(m.seconds * sample_rate, m.tick)),
     )
+}
+
+/// Where Beats mode slices a clip, in source frames: the transients, or the grid it asks for. A
+/// sample whose transients aren't known yet is sliced on sixteenths, close enough to play until
+/// the analysis finishes.
+fn beats_slices(
+    warp: &Warp,
+    map: Option<&WarpMap>,
+    sample_rate: f64,
+    length: u64,
+    found: Option<&[f64]>,
+) -> Arc<[f64]> {
+    if warp.mode != ProjectWarpMode::Beats {
+        return Arc::from(Vec::new());
+    }
+    let transients: Vec<f64> = found
+        .map(|f| rlive_project::warp_edit::resolve_transients(f, &warp.transients))
+        .unwrap_or_default();
+    let grid = match (warp.params.preserve, map) {
+        (BeatsPreserve::Transients, _) if !transients.is_empty() => {
+            return transients.iter().map(|s| s * sample_rate).collect();
+        }
+        (BeatsPreserve::Grid(ticks), _) if ticks > 0 => ticks as u64,
+        _ => rlive_core::PPQ / 4,
+    };
+    let Some(map) = map else {
+        return Arc::from(Vec::new());
+    };
+    (0..)
+        .map(|i| i * grid)
+        .take_while(|t| *t < length)
+        .map(|t| map.tick_to_src(t as f64))
+        .collect()
 }
 
 fn warp_mode(warp: &Warp) -> warp::WarpMode {
@@ -411,9 +444,18 @@ impl Builder<'_> {
                     scale: clip_scale(&clip.scale),
                 };
                 if warp.enabled {
+                    let map = warp_map(warp, sample_rate);
+                    let found = self.samples.transients(&file.path);
                     ClipData::Warped(WarpedClip {
+                        slices: beats_slices(
+                            warp,
+                            map.as_ref(),
+                            sample_rate,
+                            clip.length,
+                            found.as_ref().map(|f| f.as_slice()),
+                        ),
                         audio,
-                        map: warp_map(warp, sample_rate),
+                        map,
                         mode: warp_mode(warp),
                         transpose: *transpose as f32 + *detune_cents / 100.0,
                     })
@@ -604,7 +646,7 @@ mod tests {
     }
 
     use super::*;
-    use rlive_core::warp::{BeatsLoop, BeatsPreserve, WarpMode as CoreWarpMode};
+    use rlive_core::warp::{BeatsLoop, WarpMode as CoreWarpMode};
     use rlive_core::{TimeSignature, PPQ};
     use rlive_project::{SignatureMarker, WarpMarker as ProjectMarker, WarpParams};
     use std::path::Path;
@@ -685,6 +727,7 @@ mod tests {
                 grain_size: 40.0,
                 flux: 7.0,
             },
+            ..Warp::default()
         };
         assert_eq!(
             warp_mode(&warp),

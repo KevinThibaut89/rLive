@@ -18,6 +18,9 @@ mod timing;
 mod tracks;
 mod transport;
 mod undo;
+mod warping;
+#[cfg(test)]
+mod warping_tests;
 
 #[cfg(test)]
 mod automation_tests;
@@ -39,6 +42,7 @@ pub use devices::ChainRef;
 pub use graph::compile_plan;
 pub use info::InfoTarget;
 pub use rlive_audio_io::SampleCache;
+pub use warping::{ShortSampleMode, WarpDefaults, WarpView, LONG_SAMPLE_SECONDS};
 
 use crate::recording::Recording;
 use crate::settings::ColorSettings;
@@ -73,6 +77,7 @@ pub struct Session {
     pub history: History,
     /// How new tracks and clips are coloured.
     pub colors: ColorSettings,
+    pub warp_defaults: WarpDefaults,
     recording: Option<Recording>,
     automation: automation::AutomationRecorder,
     /// The compensation the running plan was compiled for.
@@ -98,6 +103,7 @@ impl Session {
             dirty: false,
             history,
             colors: ColorSettings::default(),
+            warp_defaults: WarpDefaults::default(),
             recording: None,
             automation: automation::AutomationRecorder::default(),
             timing: timing::Timing::default(),

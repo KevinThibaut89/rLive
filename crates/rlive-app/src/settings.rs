@@ -1,5 +1,6 @@
 //! Persistent user preferences, as set in the Settings window.
 
+use crate::session::WarpDefaults;
 use crate::ui::theme::ThemeSettings;
 use rlive_audio_io::{CacheConfig, LoaderConfig};
 use rlive_project::{Project, PALETTE};
@@ -125,6 +126,7 @@ pub struct Settings {
     pub outline_focus: bool,
     pub scroll_bars: ScrollBars,
     pub samples: SampleSettings,
+    pub warp: WarpDefaults,
 }
 
 impl Default for Settings {
@@ -143,6 +145,7 @@ impl Default for Settings {
             outline_focus: false,
             scroll_bars: ScrollBars::default(),
             samples: SampleSettings::default(),
+            warp: WarpDefaults::default(),
         }
     }
 }
@@ -185,7 +188,9 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::ShortSampleMode;
     use crate::ui::theme::{Appearance, ThemeName, Tone};
+    use rlive_project::WarpMode;
 
     fn temp_file(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("rlive-settings-{}-{name}", std::process::id()))
@@ -226,6 +231,10 @@ mod tests {
                 limit_cache_size: false,
                 maximum_cache_size_gb: 40.0,
                 cache_folder: Some(PathBuf::from("/fast/cache")),
+            },
+            warp: WarpDefaults {
+                short_samples: ShortSampleMode::WarpedOneShot,
+                mode: WarpMode::RePitch,
             },
         };
         let path = temp_file("round-trip.json");
