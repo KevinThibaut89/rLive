@@ -128,13 +128,8 @@ fn sample(left: Vec<f32>) -> Arc<SampleBuffer> {
 }
 
 fn run(engine: &mut Engine, frames: usize) -> (Vec<f32>, Vec<f32>) {
-    let mut l = vec![0.0; frames];
-    let mut r = vec![0.0; frames];
     // Use an odd host buffer size to exercise block splitting.
-    for (cl, cr) in l.chunks_mut(300).zip(r.chunks_mut(300)) {
-        engine.process(cl, cr);
-    }
-    (l, r)
+    rlive_testkit::render_chunks(frames, 300, |l, r| engine.process(l, r))
 }
 
 fn track_with(device: Box<dyn Processor>) -> (TrackId, Box<TrackNode>) {
@@ -153,23 +148,25 @@ fn quantized_launch_switches_on_next_bar() {
     // Clip 0: one long note; clip 1: note at its start.
     track.set_slot(0, Some(midi_clip(3840, &[(0, 3840, 60)])));
     track.set_slot(1, Some(midi_clip(3840, &[(0, 480, 72)])));
-    h.send(EngineCommand::AddTrack { index: 0, track })
+    h.send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
         .ok()
         .unwrap();
-    h.send(EngineCommand::SetQuantize(Quantize::Bar))
-        .ok()
-        .unwrap();
-    h.send(EngineCommand::LaunchClip {
+    h.send(EngineCommand::Transport(TransportCmd::SetQuantize(
+        Quantize::Bar,
+    )))
+    .ok()
+    .unwrap();
+    h.send(EngineCommand::Launch(LaunchCmd::LaunchClip {
         track: tid,
         slot: 0,
-    })
+    }))
     .ok()
     .unwrap();
     run(&mut engine, 10_000);
-    h.send(EngineCommand::LaunchClip {
+    h.send(EngineCommand::Launch(LaunchCmd::LaunchClip {
         track: tid,
         slot: 1,
-    })
+    }))
     .ok()
     .unwrap();
     run(&mut engine, 100_000);
@@ -199,13 +196,13 @@ fn loop_wrap_sends_off_before_on() {
     let (tid, mut track) = track_with(Box::new(Recorder { log: log.clone() }));
     // One-beat clip, note fills the whole beat.
     track.set_slot(0, Some(midi_clip(960, &[(0, 960, 64)])));
-    h.send(EngineCommand::AddTrack { index: 0, track })
+    h.send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
         .ok()
         .unwrap();
-    h.send(EngineCommand::LaunchClip {
+    h.send(EngineCommand::Launch(LaunchCmd::LaunchClip {
         track: tid,
         slot: 0,
-    })
+    }))
     .ok()
     .unwrap();
     run(&mut engine, 50_000);
@@ -228,17 +225,19 @@ fn stop_releases_notes() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let (tid, mut track) = track_with(Box::new(Recorder { log: log.clone() }));
     track.set_slot(0, Some(midi_clip(3840, &[(0, 3840, 60)])));
-    h.send(EngineCommand::AddTrack { index: 0, track })
+    h.send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
         .ok()
         .unwrap();
-    h.send(EngineCommand::LaunchClip {
+    h.send(EngineCommand::Launch(LaunchCmd::LaunchClip {
         track: tid,
         slot: 0,
-    })
+    }))
     .ok()
     .unwrap();
     run(&mut engine, 1000);
-    h.send(EngineCommand::Stop).ok().unwrap();
+    h.send(EngineCommand::Transport(TransportCmd::Stop))
+        .ok()
+        .unwrap();
     run(&mut engine, 1000);
     let log = log.lock().unwrap();
     assert!(log
@@ -251,41 +250,41 @@ fn mute_and_solo() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
     let (a, ta) = track_with(Box::new(Dc(0.25)));
     let (b, tb) = track_with(Box::new(Dc(0.5)));
-    h.send(EngineCommand::AddTrack {
+    h.send(EngineCommand::Graph(GraphCmd::AddTrack {
         index: 0,
         track: ta,
-    })
+    }))
     .ok()
     .unwrap();
-    h.send(EngineCommand::AddTrack {
+    h.send(EngineCommand::Graph(GraphCmd::AddTrack {
         index: 1,
         track: tb,
-    })
+    }))
     .ok()
     .unwrap();
     let (l, _) = run(&mut engine, 4800);
     assert!((l[4799] - 0.75).abs() < 1e-3, "{}", l[4799]);
 
-    h.send(EngineCommand::SetMix {
+    h.send(EngineCommand::Param(ParamCmd::SetMix {
         track: b,
         mix: MixSettings {
             solo: true,
             ..Default::default()
         },
-    })
+    }))
     .ok()
     .unwrap();
     let (l, _) = run(&mut engine, 4800);
     assert!((l[4799] - 0.5).abs() < 1e-3, "{}", l[4799]);
 
-    h.send(EngineCommand::SetMix {
+    h.send(EngineCommand::Param(ParamCmd::SetMix {
         track: b,
         mix: MixSettings {
             mute: true,
             solo: false,
             ..Default::default()
         },
-    })
+    }))
     .ok()
     .unwrap();
     let (l, r) = run(&mut engine, 4800);
@@ -298,19 +297,19 @@ fn mute_and_solo() {
 fn pan_hard_left() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
     let (a, ta) = track_with(Box::new(Dc(0.5)));
-    h.send(EngineCommand::AddTrack {
+    h.send(EngineCommand::Graph(GraphCmd::AddTrack {
         index: 0,
         track: ta,
-    })
+    }))
     .ok()
     .unwrap();
-    h.send(EngineCommand::SetMix {
+    h.send(EngineCommand::Param(ParamCmd::SetMix {
         track: a,
         mix: MixSettings {
             pan: -1.0,
             ..Default::default()
         },
-    })
+    }))
     .ok()
     .unwrap();
     let (l, r) = run(&mut engine, 4800);
@@ -324,38 +323,40 @@ fn removed_devices_come_back_as_garbage() {
     let dev = DeviceId::new();
     let tid = TrackId::new();
     let track = Box::new(TrackNode::new(tid, BLOCK));
-    h.send(EngineCommand::AddTrack { index: 0, track })
+    h.send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
         .ok()
         .unwrap();
-    h.send(EngineCommand::InsertDevice {
+    h.send(EngineCommand::Graph(GraphCmd::InsertDevice {
         target: ChainTarget::Track(tid),
         index: 0,
         device: Box::new(DeviceSlot::new(dev, Box::new(Dc(0.1)))),
-    })
+    }))
     .ok()
     .unwrap();
     let (l, _) = run(&mut engine, 2400);
     assert!(l[2399] > 0.09);
-    h.send(EngineCommand::SetParam {
+    h.send(EngineCommand::Param(ParamCmd::SetParam {
         target: ChainTarget::Track(tid),
         device: dev,
         param: 0,
         value: 0.2,
-    })
+    }))
     .ok()
     .unwrap();
     let (l, _) = run(&mut engine, 2400);
     assert!((l[2399] - 0.2).abs() < 1e-3);
-    h.send(EngineCommand::RemoveDevice {
+    h.send(EngineCommand::Graph(GraphCmd::RemoveDevice {
         target: ChainTarget::Track(tid),
         device: dev,
-    })
+    }))
     .ok()
     .unwrap();
     let (l, _) = run(&mut engine, 2400);
     assert!(l[2399].abs() < 1e-6);
     assert_eq!(h.collect_garbage(), 1);
-    h.send(EngineCommand::RemoveTrack(tid)).ok().unwrap();
+    h.send(EngineCommand::Graph(GraphCmd::RemoveTrack(tid)))
+        .ok()
+        .unwrap();
     run(&mut engine, 256);
     assert_eq!(h.collect_garbage(), 1);
 }
@@ -373,16 +374,16 @@ fn audio_clip_plays_and_loops() {
         gain: 1.0,
     };
     track.set_slot(0, Some(Arc::new(ClipData::Audio(clip))));
-    h.send(EngineCommand::AddTrack {
+    h.send(EngineCommand::Graph(GraphCmd::AddTrack {
         index: 0,
         track: Box::new(track),
-    })
+    }))
     .ok()
     .unwrap();
-    h.send(EngineCommand::LaunchClip {
+    h.send(EngineCommand::Launch(LaunchCmd::LaunchClip {
         track: tid,
         slot: 0,
-    })
+    }))
     .ok()
     .unwrap();
     let (l, _) = run(&mut engine, 60_000);
@@ -395,10 +396,14 @@ fn audio_clip_plays_and_loops() {
 #[test]
 fn metronome_clicks_when_playing() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
-    h.send(EngineCommand::SetMetronome(true)).ok().unwrap();
+    h.send(EngineCommand::Transport(TransportCmd::SetMetronome(true)))
+        .ok()
+        .unwrap();
     let (l, _) = run(&mut engine, 4800);
     assert!(l.iter().all(|s| *s == 0.0), "silent while stopped");
-    h.send(EngineCommand::Play).ok().unwrap();
+    h.send(EngineCommand::Transport(TransportCmd::Play))
+        .ok()
+        .unwrap();
     let (l, _) = run(&mut engine, 4800);
     assert!(l.iter().any(|s| s.abs() > 0.05));
 }
@@ -407,20 +412,20 @@ fn metronome_clicks_when_playing() {
 fn replace_all_swaps_session() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
     let (_, ta) = track_with(Box::new(Dc(0.25)));
-    h.send(EngineCommand::AddTrack {
+    h.send(EngineCommand::Graph(GraphCmd::AddTrack {
         index: 0,
         track: ta,
-    })
+    }))
     .ok()
     .unwrap();
     run(&mut engine, 2400);
     let (_, tb) = track_with(Box::new(Dc(0.5)));
     let mut tracks = Vec::with_capacity(MAX_TRACKS);
     tracks.push(tb);
-    h.send(EngineCommand::ReplaceAll {
+    h.send(EngineCommand::Graph(GraphCmd::ReplaceAll {
         tracks: Box::new(tracks),
         master: Box::new(MasterNode::new(BLOCK)),
-    })
+    }))
     .ok()
     .unwrap();
     let (l, _) = run(&mut engine, 2400);
@@ -443,24 +448,28 @@ fn tempo_change_during_audio_is_seamless() {
         gain: 1.0,
     };
     track.set_slot(0, Some(Arc::new(ClipData::Audio(clip))));
-    h.send(EngineCommand::AddTrack {
+    h.send(EngineCommand::Graph(GraphCmd::AddTrack {
         index: 0,
         track: Box::new(track),
-    })
+    }))
     .ok()
     .unwrap();
-    h.send(EngineCommand::SetQuantize(Quantize::None))
-        .ok()
-        .unwrap();
-    h.send(EngineCommand::LaunchClip {
+    h.send(EngineCommand::Transport(TransportCmd::SetQuantize(
+        Quantize::None,
+    )))
+    .ok()
+    .unwrap();
+    h.send(EngineCommand::Launch(LaunchCmd::LaunchClip {
         track: tid,
         slot: 0,
-    })
+    }))
     .ok()
     .unwrap();
     let mut out = run(&mut engine, 10_000).0;
     for tempo in [97.0, 143.5, 120.0] {
-        h.send(EngineCommand::SetTempo(tempo)).ok().unwrap();
+        h.send(EngineCommand::Transport(TransportCmd::SetTempo(tempo)))
+            .ok()
+            .unwrap();
         out.extend(run(&mut engine, 10_000).0);
     }
     assert!(out[0] < 1e-3);
@@ -488,14 +497,20 @@ fn long_note_ends_past_later_short_notes() {
     let (rec, log) = FrameRecorder::new();
     let (tid, mut track) = track_with(Box::new(rec));
     track.set_slot(0, Some(clip_with_long_note()));
-    send(&mut h, EngineCommand::AddTrack { index: 0, track });
-    send(&mut h, EngineCommand::SetQuantize(Quantize::None));
     send(
         &mut h,
-        EngineCommand::LaunchClip {
+        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+    );
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetQuantize(Quantize::None)),
+    );
+    send(
+        &mut h,
+        EngineCommand::Launch(LaunchCmd::LaunchClip {
             track: tid,
             slot: 0,
-        },
+        }),
     );
     run(&mut engine, 60_000);
     let log = log.lock().unwrap();
@@ -507,8 +522,8 @@ fn long_note_ends_past_later_short_notes() {
 fn chase_finds_a_long_note_past_later_short_notes() {
     let lane = lane_of(vec![lane_clip(0, 3840, 0, clip_with_long_note())]);
     let (mut engine, mut h, _, log) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Seek(1900.0));
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(1900.0)));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 2_560);
     let log = log.lock().unwrap();
     assert_eq!(ons(&log, 60), [0], "chased at the play position");
@@ -518,12 +533,12 @@ fn chase_finds_a_long_note_past_later_short_notes() {
 #[test]
 fn seek_while_stopped_moves_marker_and_playhead() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
-    send(&mut h, EngineCommand::Seek(1920.0));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(1920.0)));
     run(&mut engine, 256);
     assert_eq!(tick(&h), 1920.0);
     assert_eq!(h.shared.insert_marker.load(), 1920.0);
 
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 2400);
     assert!((tick(&h) - (1920.0 + 2400.0 * TPS)).abs() < 1e-6);
     assert_eq!(h.shared.insert_marker.load(), 1920.0);
@@ -532,16 +547,16 @@ fn seek_while_stopped_moves_marker_and_playhead() {
 #[test]
 fn stop_returns_to_marker_then_to_zero() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
-    send(&mut h, EngineCommand::Seek(960.0));
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(960.0)));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 4800);
-    send(&mut h, EngineCommand::Stop);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Stop));
     run(&mut engine, 256);
     assert_eq!(tick(&h), 960.0, "first stop returns to the marker");
     assert_eq!(h.shared.insert_marker.load(), 960.0);
     assert!(!h.shared.playing.load(std::sync::atomic::Ordering::Relaxed));
 
-    send(&mut h, EngineCommand::Stop);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Stop));
     run(&mut engine, 256);
     assert_eq!(tick(&h), 0.0, "second stop rewinds");
     assert_eq!(h.shared.insert_marker.load(), 0.0);
@@ -550,9 +565,9 @@ fn stop_returns_to_marker_then_to_zero() {
 #[test]
 fn seek_while_playing_moves_tick_and_marker() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 2400);
-    send(&mut h, EngineCommand::Seek(5000.0));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(5000.0)));
     run(&mut engine, 256);
     assert!((tick(&h) - (5000.0 + 256.0 * TPS)).abs() < 1e-6);
     assert_eq!(h.shared.insert_marker.load(), 5000.0);
@@ -563,10 +578,16 @@ fn loop_wraps_sample_accurately() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
     let (rec, log) = FrameRecorder::new();
     let (_, track) = track_with(Box::new(rec));
-    send(&mut h, EngineCommand::AddTrack { index: 0, track });
-    send(&mut h, EngineCommand::SetLoop(Some((960.0, 1920.0))));
-    send(&mut h, EngineCommand::Seek(960.0));
-    send(&mut h, EngineCommand::Play);
+    send(
+        &mut h,
+        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+    );
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetLoop(Some((960.0, 1920.0)))),
+    );
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(960.0)));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 100_000);
 
     let log = log.lock().unwrap();
@@ -584,9 +605,12 @@ fn loop_wraps_sample_accurately() {
 #[test]
 fn seeking_past_the_loop_does_not_snap_back() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
-    send(&mut h, EngineCommand::SetLoop(Some((0.0, 960.0))));
-    send(&mut h, EngineCommand::Seek(5000.0));
-    send(&mut h, EngineCommand::Play);
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetLoop(Some((0.0, 960.0)))),
+    );
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(5000.0)));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 50_000);
     assert!((tick(&h) - (5000.0 + 50_000.0 * TPS)).abs() < 1e-6);
 }
@@ -594,9 +618,12 @@ fn seeking_past_the_loop_does_not_snap_back() {
 #[test]
 fn seeking_exactly_onto_the_loop_end_does_not_snap_back() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
-    send(&mut h, EngineCommand::SetLoop(Some((0.0, 960.0))));
-    send(&mut h, EngineCommand::Seek(960.0));
-    send(&mut h, EngineCommand::Play);
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetLoop(Some((0.0, 960.0)))),
+    );
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(960.0)));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 1000);
     assert!((tick(&h) - (960.0 + 1000.0 * TPS)).abs() < 1e-6);
 }
@@ -604,8 +631,11 @@ fn seeking_exactly_onto_the_loop_end_does_not_snap_back() {
 #[test]
 fn playing_into_a_loop_from_before_it_wraps() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
-    send(&mut h, EngineCommand::SetLoop(Some((960.0, 1000.0))));
-    send(&mut h, EngineCommand::Play);
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetLoop(Some((960.0, 1000.0)))),
+    );
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     // Ends mid-pass: 960 ticks to reach the loop, then 40-tick passes of 1000 frames.
     run(&mut engine, 30_100);
     assert!(
@@ -621,16 +651,25 @@ fn session_clip_phase_survives_a_wrap() {
     let (rec, log) = FrameRecorder::new();
     let (tid, mut track) = track_with(Box::new(rec));
     track.set_slot(0, Some(midi_clip(960, &[(0, 480, 64)])));
-    send(&mut h, EngineCommand::AddTrack { index: 0, track });
-    send(&mut h, EngineCommand::SetQuantize(Quantize::None));
-    // 1500 ticks is not a multiple of the clip: a phase reset would be obvious.
-    send(&mut h, EngineCommand::SetLoop(Some((0.0, 1500.0))));
     send(
         &mut h,
-        EngineCommand::LaunchClip {
+        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+    );
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetQuantize(Quantize::None)),
+    );
+    // 1500 ticks is not a multiple of the clip: a phase reset would be obvious.
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetLoop(Some((0.0, 1500.0)))),
+    );
+    send(
+        &mut h,
+        EngineCommand::Launch(LaunchCmd::LaunchClip {
             track: tid,
             slot: 0,
-        },
+        }),
     );
     run(&mut engine, 100_000);
 
@@ -646,15 +685,24 @@ fn note_on_the_loop_boundary_fires_once() {
     let (tid, mut track) = track_with(Box::new(rec));
     // The note sits exactly where the song loop ends.
     track.set_slot(0, Some(midi_clip(1920, &[(960, 240, 70)])));
-    send(&mut h, EngineCommand::AddTrack { index: 0, track });
-    send(&mut h, EngineCommand::SetQuantize(Quantize::None));
-    send(&mut h, EngineCommand::SetLoop(Some((0.0, 960.0))));
     send(
         &mut h,
-        EngineCommand::LaunchClip {
+        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+    );
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetQuantize(Quantize::None)),
+    );
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetLoop(Some((0.0, 960.0)))),
+    );
+    send(
+        &mut h,
+        EngineCommand::Launch(LaunchCmd::LaunchClip {
             track: tid,
             slot: 0,
-        },
+        }),
     );
     run(&mut engine, 30_000);
     assert_eq!(ons(&log.lock().unwrap(), 70), [24_000]);
@@ -666,17 +714,23 @@ fn wrap_keeps_a_queued_launch_the_same_distance_away() {
     let (rec, log) = FrameRecorder::new();
     let (tid, mut track) = track_with(Box::new(rec));
     track.set_slot(0, Some(midi_clip(3840, &[(0, 480, 72)])));
-    send(&mut h, EngineCommand::AddTrack { index: 0, track });
-    send(&mut h, EngineCommand::SetLoop(Some((0.0, 1920.0))));
-    send(&mut h, EngineCommand::Play);
+    send(
+        &mut h,
+        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+    );
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetLoop(Some((0.0, 1920.0)))),
+    );
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 10_000);
     // Bar quantize: queued for tick 3840, which is one wrap beyond the loop end.
     send(
         &mut h,
-        EngineCommand::LaunchClip {
+        EngineCommand::Launch(LaunchCmd::LaunchClip {
             track: tid,
             slot: 0,
-        },
+        }),
     );
     run(&mut engine, 200_000);
     assert_eq!(ons(&log.lock().unwrap(), 72)[0], 96_000);
@@ -688,17 +742,20 @@ fn seek_requantizes_a_queued_launch() {
     let (rec, log) = FrameRecorder::new();
     let (tid, mut track) = track_with(Box::new(rec));
     track.set_slot(0, Some(midi_clip(3840, &[(0, 480, 72)])));
-    send(&mut h, EngineCommand::AddTrack { index: 0, track });
-    send(&mut h, EngineCommand::Play);
+    send(
+        &mut h,
+        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+    );
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 2560);
     send(
         &mut h,
-        EngineCommand::LaunchClip {
+        EngineCommand::Launch(LaunchCmd::LaunchClip {
             track: tid,
             slot: 0,
-        },
+        }),
     );
-    send(&mut h, EngineCommand::Seek(5000.0));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(5000.0)));
     run(&mut engine, 256_000);
     // From tick 5000 the next bar is 7680: 2680 ticks = 67000 frames after the seek.
     assert_eq!(ons(&log.lock().unwrap(), 72)[0], 2560 + 67_000);
@@ -725,7 +782,10 @@ fn engine_with_lane(
     let (rec, log) = FrameRecorder::new();
     let (tid, mut track) = track_with(Box::new(rec));
     track.set_lane(lane);
-    send(&mut h, EngineCommand::AddTrack { index: 0, track });
+    send(
+        &mut h,
+        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+    );
     (engine, h, tid, log)
 }
 
@@ -738,7 +798,7 @@ fn lane_clip_plays_at_its_position() {
         midi_clip(960, &[(0, 240, 60)]),
     )]);
     let (mut engine, mut h, _, log) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 60_000);
     let log = log.lock().unwrap();
     assert_eq!(ons(&log, 60), [24_000]);
@@ -755,7 +815,7 @@ fn lane_clip_offset_and_looped_content() {
         midi_clip(480, &[(0, 120, 60)]),
     )]);
     let (mut engine, mut h, _, log) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 80_000);
     let log = log.lock().unwrap();
     assert_eq!(ons(&log, 60), [33_000, 45_000, 57_000]);
@@ -772,7 +832,7 @@ fn entering_a_clip_inside_a_note_chases_it() {
         midi_clip(960, &[(0, 480, 60)]),
     )]);
     let (mut engine, mut h, _, log) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 60_000);
     let log = log.lock().unwrap();
     assert_eq!(ons(&log, 60), [24_000]);
@@ -788,9 +848,9 @@ fn seek_chases_into_a_held_note() {
         midi_clip(3840, &[(0, 3840, 60)]),
     )]);
     let (mut engine, mut h, _, log) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 9_600);
-    send(&mut h, EngineCommand::Seek(1000.0));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(1000.0)));
     run(&mut engine, 2_400);
     let log = log.lock().unwrap();
     assert_eq!(ons(&log, 60), [0, 9_600]);
@@ -817,13 +877,13 @@ fn stop_then_play_chases_once_from_the_marker() {
         midi_clip(3840, &[(0, 3840, 60)]),
     )]);
     let (mut engine, mut h, _, log) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Seek(480.0));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(480.0)));
     run(&mut engine, 300);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 2_400);
-    send(&mut h, EngineCommand::Stop);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Stop));
     run(&mut engine, 300);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 2_400);
     let log = log.lock().unwrap();
     assert_eq!(ons(&log, 60).len(), 2);
@@ -839,7 +899,7 @@ fn lane_releases_at_clip_end() {
         midi_clip(3840, &[(0, 3840, 60)]),
     )]);
     let (mut engine, mut h, _, log) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 48_000);
     assert_eq!(offs(&log.lock().unwrap(), 60), [24_000]);
 }
@@ -854,7 +914,7 @@ fn lane_release_lands_on_a_block_boundary() {
         midi_clip(3840, &[(0, 3840, 60)]),
     )]);
     let (mut engine, mut h, _, log) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     let mut l = vec![0.0; 256];
     let mut r = vec![0.0; 256];
     for _ in 0..120 {
@@ -869,7 +929,7 @@ fn adjacent_lane_clips_hand_over_cleanly() {
     let b = midi_clip(960, &[(0, 480, 60)]);
     let lane = lane_of(vec![lane_clip(0, 960, 0, a), lane_clip(960, 1920, 0, b)]);
     let (mut engine, mut h, _, log) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 48_000);
     let log = log.lock().unwrap();
     assert_eq!(ons(&log, 60), [0, 24_000]);
@@ -882,8 +942,11 @@ fn lane_note_on_the_loop_boundaries_fires_once_per_pass() {
     let data = midi_clip(1920, &[(0, 240, 60), (960, 240, 61)]);
     let lane = lane_of(vec![lane_clip(0, 1920, 0, data)]);
     let (mut engine, mut h, _, log) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::SetLoop(Some((0.0, 960.0))));
-    send(&mut h, EngineCommand::Play);
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetLoop(Some((0.0, 960.0)))),
+    );
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 60_000);
     let log = log.lock().unwrap();
     assert_eq!(ons(&log, 60), [0, 24_000, 48_000]);
@@ -901,20 +964,20 @@ fn launch_overrides_the_lane_at_the_quantize_point() {
     let (mut engine, mut h, tid, log) = engine_with_lane(lane);
     send(
         &mut h,
-        EngineCommand::SetClip {
+        EngineCommand::Clip(ClipCmd::SetClip {
             track: tid,
             slot: 0,
             clip: Some(midi_clip(3840, &[(0, 480, 72)])),
-        },
+        }),
     );
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 10_000);
     send(
         &mut h,
-        EngineCommand::LaunchClip {
+        EngineCommand::Launch(LaunchCmd::LaunchClip {
             track: tid,
             slot: 0,
-        },
+        }),
     );
     run(&mut engine, 200_000);
     let log = log.lock().unwrap();
@@ -934,25 +997,28 @@ fn back_to_arrangement_chases_the_lane() {
     let (mut engine, mut h, tid, log) = engine_with_lane(lane);
     send(
         &mut h,
-        EngineCommand::SetClip {
+        EngineCommand::Clip(ClipCmd::SetClip {
             track: tid,
             slot: 0,
             clip: Some(midi_clip(3840, &[(0, 3840, 72)])),
-        },
+        }),
     );
-    send(&mut h, EngineCommand::SetQuantize(Quantize::None));
-    send(&mut h, EngineCommand::Play);
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetQuantize(Quantize::None)),
+    );
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 2_400);
     send(
         &mut h,
-        EngineCommand::LaunchClip {
+        EngineCommand::Launch(LaunchCmd::LaunchClip {
             track: tid,
             slot: 0,
-        },
+        }),
     );
     run(&mut engine, 2_400);
     h.collect_garbage();
-    send(&mut h, EngineCommand::BackToArrangement);
+    send(&mut h, EngineCommand::Launch(LaunchCmd::BackToArrangement));
     run(&mut engine, 2_400);
     assert_eq!(h.collect_garbage(), 1, "the session clip is retired");
 
@@ -961,6 +1027,64 @@ fn back_to_arrangement_chases_the_lane() {
     assert_eq!(offs(&log, 60), [2_400]);
     assert_eq!(ons(&log, 72), [2_400]);
     assert_eq!(offs(&log, 72), [4_800]);
+}
+
+#[test]
+fn retiring_every_kind_of_object_stays_off_the_heap_on_the_audio_thread() {
+    let (mut engine, mut h) = create_engine(SR, BLOCK);
+    let (tid, mut track) = track_with(Box::new(Dc(0.0)));
+    let device = track.devices[0].id;
+    track.set_slot(0, Some(midi_clip(480, &[(0, 240, 60)])));
+    let (other, other_track) = track_with(Box::new(Dc(0.0)));
+    send(
+        &mut h,
+        EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }),
+    );
+    send(
+        &mut h,
+        EngineCommand::Graph(GraphCmd::AddTrack {
+            index: 1,
+            track: other_track,
+        }),
+    );
+    let mut l = vec![0.0; BLOCK];
+    let mut r = vec![0.0; BLOCK];
+    engine.process(&mut l, &mut r);
+
+    send(
+        &mut h,
+        EngineCommand::Clip(ClipCmd::SetClip {
+            track: tid,
+            slot: 0,
+            clip: Some(midi_clip(480, &[(0, 240, 62)])),
+        }),
+    );
+    send(
+        &mut h,
+        EngineCommand::Clip(ClipCmd::SetLane {
+            track: tid,
+            lane: lane_of(Vec::new()),
+        }),
+    );
+    send(
+        &mut h,
+        EngineCommand::Graph(GraphCmd::RemoveDevice {
+            target: ChainTarget::Track(tid),
+            device,
+        }),
+    );
+    send(&mut h, EngineCommand::Graph(GraphCmd::RemoveTrack(other)));
+    send(
+        &mut h,
+        EngineCommand::Graph(GraphCmd::ReplaceAll {
+            tracks: Box::new(Vec::with_capacity(MAX_TRACKS)),
+            master: Box::new(MasterNode::new(BLOCK)),
+        }),
+    );
+    rlive_testkit::assert_no_alloc(|| engine.process(&mut l, &mut r));
+
+    // Clip, lane, device, track, then the replaced track list and master.
+    assert_eq!(h.collect_garbage(), 6);
 }
 
 #[test]
@@ -973,26 +1097,29 @@ fn follow_flag_tracks_launch_and_back_to_arrangement() {
     track.set_slot(0, Some(midi_clip(960, &[(0, 240, 72)])));
     send(
         &mut h,
-        EngineCommand::AddTrack {
+        EngineCommand::Graph(GraphCmd::AddTrack {
             index: 0,
             track: Box::new(track),
-        },
+        }),
     );
-    send(&mut h, EngineCommand::SetQuantize(Quantize::None));
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetQuantize(Quantize::None)),
+    );
     run(&mut engine, 256);
     assert!(shared.follow_arrangement.load(Relaxed));
 
     send(
         &mut h,
-        EngineCommand::LaunchClip {
+        EngineCommand::Launch(LaunchCmd::LaunchClip {
             track: tid,
             slot: 0,
-        },
+        }),
     );
     run(&mut engine, 256);
     assert!(!shared.follow_arrangement.load(Relaxed));
 
-    send(&mut h, EngineCommand::BackToArrangement);
+    send(&mut h, EngineCommand::Launch(LaunchCmd::BackToArrangement));
     run(&mut engine, 256);
     assert!(shared.follow_arrangement.load(Relaxed));
     assert_eq!(
@@ -1006,17 +1133,17 @@ fn set_lane_retires_the_old_lane() {
     let (mut engine, mut h, tid, _) = engine_with_lane(lane_of(vec![]));
     send(
         &mut h,
-        EngineCommand::SetLane {
+        EngineCommand::Clip(ClipCmd::SetLane {
             track: tid,
             lane: lane_of(vec![]),
-        },
+        }),
     );
     send(
         &mut h,
-        EngineCommand::SetLane {
+        EngineCommand::Clip(ClipCmd::SetLane {
             track: tid,
             lane: lane_of(vec![]),
-        },
+        }),
     );
     run(&mut engine, 256);
     assert_eq!(h.collect_garbage(), 2);
@@ -1027,10 +1154,10 @@ fn set_lane_for_an_unknown_track_comes_back_as_garbage() {
     let (mut engine, mut h, _, _) = engine_with_lane(lane_of(vec![]));
     send(
         &mut h,
-        EngineCommand::SetLane {
+        EngineCommand::Clip(ClipCmd::SetLane {
             track: TrackId::new(),
             lane: lane_of(vec![]),
-        },
+        }),
     );
     run(&mut engine, 256);
     assert_eq!(h.collect_garbage(), 1);
@@ -1041,19 +1168,19 @@ fn value_equal_lane_swap_keeps_voices() {
     let data = midi_clip(3840, &[(0, 3840, 60)]);
     let lane = lane_of(vec![lane_clip(0, 3840, 0, data.clone())]);
     let (mut engine, mut h, tid, log) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 4_800);
     // Equal but not identical: the same content in new allocations, with a clip added later.
     let copy = Arc::new((*data).clone());
     send(
         &mut h,
-        EngineCommand::SetLane {
+        EngineCommand::Clip(ClipCmd::SetLane {
             track: tid,
             lane: lane_of(vec![
                 lane_clip(0, 3840, 0, copy),
                 lane_clip(7680, 9600, 0, midi_clip(960, &[(0, 240, 80)])),
             ]),
-        },
+        }),
     );
     run(&mut engine, 4_800);
     let log = log.lock().unwrap();
@@ -1070,11 +1197,11 @@ fn changed_lane_under_the_playhead_releases_and_chases() {
         midi_clip(3840, &[(0, 3840, 60)]),
     )]);
     let (mut engine, mut h, tid, log) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 4_800);
     send(
         &mut h,
-        EngineCommand::SetLane {
+        EngineCommand::Clip(ClipCmd::SetLane {
             track: tid,
             lane: lane_of(vec![lane_clip(
                 0,
@@ -1082,7 +1209,7 @@ fn changed_lane_under_the_playhead_releases_and_chases() {
                 0,
                 midi_clip(3840, &[(0, 3840, 62)]),
             )]),
-        },
+        }),
     );
     run(&mut engine, 4_800);
     let log = log.lock().unwrap();
@@ -1104,7 +1231,7 @@ fn lane_audio_ramps_at_its_region_edges() {
     let data = audio_clip(0.5, 96_000, 3840, true);
     let lane = lane_of(vec![lane_clip(480, 1440, 0, data)]);
     let (mut engine, mut h, _, _) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     let (l, _) = run(&mut engine, 40_000);
 
     // Silent outside the region, 0.04 ticks per frame.
@@ -1134,9 +1261,9 @@ fn lane_audio_reseeds_on_a_seek() {
     }));
     let lane = lane_of(vec![lane_clip(0, 7680, 0, data)]);
     let (mut engine, mut h, _, _) = engine_with_lane(lane);
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 4_800);
-    send(&mut h, EngineCommand::Seek(3840.0));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(3840.0)));
     let (l, _) = run(&mut engine, 4_800);
     // After the ramp-in we are reading half way through the sample.
     assert!((l[1_000] - 0.505).abs() < 1e-3, "{}", l[1_000]);
@@ -1166,18 +1293,18 @@ fn recorded_ticks(events: &[EngineEvent]) -> Vec<f64> {
 
 fn engine_recording() -> (Engine, EngineHandle, TrackId, Arc<Mutex<Timeline>>) {
     let (mut engine, mut h, tid, log) = engine_with_lane(lane_of(vec![]));
-    send(&mut h, EngineCommand::SetRecording(true));
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Record(RecordCmd::SetRecording(true)));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 24_000); // one beat
     (engine, h, tid, log)
 }
 
 fn played(track: TrackId, message: MidiMessage, age: Duration) -> EngineCommand {
-    EngineCommand::PlayedMidi {
+    EngineCommand::Record(RecordCmd::PlayedMidi {
         track,
         message,
         at: Instant::now() - age,
-    }
+    })
 }
 
 #[test]
@@ -1200,7 +1327,7 @@ fn recorded_tick_is_backdated_by_the_message_age() {
 #[test]
 fn recorded_tick_is_floored_at_the_last_jump() {
     let (mut engine, mut h, tid, _) = engine_recording();
-    send(&mut h, EngineCommand::Seek(2000.0));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(2000.0)));
     send(&mut h, played(tid, note_on(60), Duration::from_millis(100)));
     run(&mut engine, 256);
     assert_eq!(recorded_ticks(&events(&mut h)), [2000.0]);
@@ -1209,9 +1336,9 @@ fn recorded_tick_is_floored_at_the_last_jump() {
 #[test]
 fn recording_starts_no_earlier_than_the_play_position() {
     let (mut engine, mut h, tid, _) = engine_with_lane(lane_of(vec![]));
-    send(&mut h, EngineCommand::Seek(480.0));
-    send(&mut h, EngineCommand::SetRecording(true));
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(480.0)));
+    send(&mut h, EngineCommand::Record(RecordCmd::SetRecording(true)));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     send(&mut h, played(tid, note_on(60), Duration::from_millis(500)));
     run(&mut engine, 256);
     assert_eq!(recorded_ticks(&events(&mut h)), [480.0]);
@@ -1233,10 +1360,10 @@ fn preview_midi_is_not_recorded() {
     let (mut engine, mut h, tid, log) = engine_recording();
     send(
         &mut h,
-        EngineCommand::Midi {
+        EngineCommand::Record(RecordCmd::Midi {
             track: tid,
             message: note_on(60),
-        },
+        }),
     );
     run(&mut engine, 256);
     assert!(recorded_ticks(&events(&mut h)).is_empty());
@@ -1272,14 +1399,17 @@ fn only_notes_are_recorded() {
 fn nothing_is_recorded_unless_recording_and_playing() {
     let (mut engine, mut h, tid, _) = engine_with_lane(lane_of(vec![]));
     // Recording armed but stopped.
-    send(&mut h, EngineCommand::SetRecording(true));
+    send(&mut h, EngineCommand::Record(RecordCmd::SetRecording(true)));
     send(&mut h, played(tid, note_on(60), Duration::ZERO));
     run(&mut engine, 256);
     assert!(recorded_ticks(&events(&mut h)).is_empty());
 
     // Playing but not recording.
-    send(&mut h, EngineCommand::SetRecording(false));
-    send(&mut h, EngineCommand::Play);
+    send(
+        &mut h,
+        EngineCommand::Record(RecordCmd::SetRecording(false)),
+    );
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     send(&mut h, played(tid, note_on(60), Duration::ZERO));
     run(&mut engine, 256);
     assert!(recorded_ticks(&events(&mut h)).is_empty());
@@ -1291,7 +1421,7 @@ fn stop_reports_recording_stopped_after_the_notes() {
     let mut midi = h.take_midi_sender().unwrap();
     // Queued by the MIDI thread before the stop arrives: still has to be recorded first.
     assert!(midi.send(tid, note_on(62)));
-    send(&mut h, EngineCommand::Stop);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Stop));
     run(&mut engine, 256);
 
     let ev = events(&mut h);
@@ -1311,7 +1441,7 @@ fn stop_reports_recording_stopped_after_the_notes() {
 
     // Recording ended with the stop.
     send(&mut h, played(tid, note_on(60), Duration::ZERO));
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     run(&mut engine, 256);
     assert!(recorded_ticks(&events(&mut h)).is_empty());
 }
@@ -1319,12 +1449,12 @@ fn stop_reports_recording_stopped_after_the_notes() {
 #[test]
 fn stop_while_stopped_keeps_recording_armed() {
     let (mut engine, mut h, tid, _) = engine_with_lane(lane_of(vec![]));
-    send(&mut h, EngineCommand::SetRecording(true));
-    send(&mut h, EngineCommand::Stop);
+    send(&mut h, EngineCommand::Record(RecordCmd::SetRecording(true)));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Stop));
     run(&mut engine, 256);
     assert!(events(&mut h).is_empty(), "nothing was being recorded");
 
-    send(&mut h, EngineCommand::Play);
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
     send(&mut h, played(tid, note_on(60), Duration::ZERO));
     run(&mut engine, 256);
     assert_eq!(recorded_ticks(&events(&mut h)).len(), 1);
@@ -1333,8 +1463,11 @@ fn stop_while_stopped_keeps_recording_armed() {
 #[test]
 fn jumps_are_reported_while_recording() {
     let (mut engine, mut h, _, _) = engine_recording();
-    send(&mut h, EngineCommand::SetLoop(Some((0.0, 1200.0))));
-    send(&mut h, EngineCommand::Seek(1100.0));
+    send(
+        &mut h,
+        EngineCommand::Transport(TransportCmd::SetLoop(Some((0.0, 1200.0)))),
+    );
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(1100.0)));
     run(&mut engine, 12_000);
     let jumps: Vec<_> = events(&mut h)
         .into_iter()
@@ -1356,8 +1489,8 @@ fn jumps_are_reported_while_recording() {
 #[test]
 fn jumps_are_not_reported_when_not_recording() {
     let (mut engine, mut h, _, _) = engine_with_lane(lane_of(vec![]));
-    send(&mut h, EngineCommand::Play);
-    send(&mut h, EngineCommand::Seek(1100.0));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Play));
+    send(&mut h, EngineCommand::Transport(TransportCmd::Seek(1100.0)));
     run(&mut engine, 256);
     assert!(events(&mut h).is_empty());
 }
@@ -1367,7 +1500,7 @@ fn midi_sender_reaches_track() {
     let (mut engine, mut h) = create_engine(SR, BLOCK);
     let log = Arc::new(Mutex::new(Vec::new()));
     let (tid, track) = track_with(Box::new(Recorder { log: log.clone() }));
-    h.send(EngineCommand::AddTrack { index: 0, track })
+    h.send(EngineCommand::Graph(GraphCmd::AddTrack { index: 0, track }))
         .ok()
         .unwrap();
     let mut midi = h.take_midi_sender().unwrap();

@@ -11,3 +11,4 @@ hound.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+rlive-testkit.workspace = true

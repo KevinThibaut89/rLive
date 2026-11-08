@@ -11,16 +11,17 @@
 #![allow(clippy::vec_box)] // nodes are boxed so the audio thread only moves pointers
 
 pub mod clip;
+mod commands;
 pub mod lane;
 pub mod shared;
 pub mod track;
 
 use clip::BlockTime;
 pub use clip::{AudioClip, ClipData, MidiClip, Note};
+pub use commands::{ClipCmd, GraphCmd, LaunchCmd, ParamCmd, RecordCmd, TransportCmd};
 pub use lane::{ArrangementLane, LaneClip};
 use rlive_core::{
-    time::ticks_per_sample, DeviceId, MidiEvent, MidiMessage, Quantize, TimeSignature, TrackId,
-    TransportInfo,
+    time::ticks_per_sample, DeviceId, MidiMessage, Quantize, TimeSignature, TrackId, TransportInfo,
 };
 use shared::EngineShared;
 use std::sync::atomic::Ordering;
@@ -56,108 +57,23 @@ pub enum ChainTarget {
 
 /// Messages from the UI to the audio thread.
 pub enum EngineCommand {
-    Play,
-    Stop,
-    SetTempo(f64),
-    SetTimeSignature(TimeSignature),
-    SetMetronome(bool),
-    SetQuantize(Quantize),
-    /// Move the playhead and the insert marker to this tick.
-    Seek(f64),
-    /// Loop playback over `(start, end)` in ticks, or stop looping.
-    SetLoop(Option<(f64, f64)>),
-
-    LaunchClip {
-        track: TrackId,
-        slot: usize,
-    },
-    StopTrack(TrackId),
-    LaunchScene(usize),
-    StopAllClips,
-    SetClip {
-        track: TrackId,
-        slot: usize,
-        clip: Option<Arc<ClipData>>,
-    },
-    /// Replace a track's Arrangement lane.
-    SetLane {
-        track: TrackId,
-        lane: Arc<ArrangementLane>,
-    },
-    /// Put every track that launched a Session clip back on its lane.
-    BackToArrangement,
-
-    AddTrack {
-        index: usize,
-        track: Box<TrackNode>,
-    },
-    RemoveTrack(TrackId),
-    MoveTrack {
-        track: TrackId,
-        to: usize,
-    },
-    SetMix {
-        track: TrackId,
-        mix: MixSettings,
-    },
-    SetMasterVolume(f32),
-
-    InsertDevice {
-        target: ChainTarget,
-        index: usize,
-        device: Box<DeviceSlot>,
-    },
-    RemoveDevice {
-        target: ChainTarget,
-        device: DeviceId,
-    },
-    MoveDevice {
-        target: ChainTarget,
-        device: DeviceId,
-        to: usize,
-    },
-    SetBypass {
-        target: ChainTarget,
-        device: DeviceId,
-        bypass: bool,
-    },
-    SetParam {
-        target: ChainTarget,
-        device: DeviceId,
-        param: u32,
-        value: f64,
-    },
-
-    /// Arm or disarm recording of played MIDI.
-    SetRecording(bool),
-
-    /// Live MIDI (keyboard input) for a track. Never recorded, e.g. piano-roll previews.
-    Midi {
-        track: TrackId,
-        message: MidiMessage,
-    },
-    /// MIDI performed by the user at time `at`. Audible, and recorded while recording.
-    PlayedMidi {
-        track: TrackId,
-        message: MidiMessage,
-        at: Instant,
-    },
-
-    /// Replace the whole session (project load / sample-rate change).
-    ReplaceAll {
-        tracks: Box<Vec<Box<TrackNode>>>,
-        master: Box<MasterNode>,
-    },
+    Transport(TransportCmd),
+    Launch(LaunchCmd),
+    Clip(ClipCmd),
+    Param(ParamCmd),
+    Record(RecordCmd),
+    Graph(GraphCmd),
 }
 
 /// Things the engine is done with. They are dropped on the UI thread.
+///
+/// Retiring something only turns its pointer into a wide one, so the audio thread never
+/// allocates to do it, and a new kind of retired object needs no change here.
 pub enum Garbage {
-    Track(Box<TrackNode>),
-    Tracks(Box<Vec<Box<TrackNode>>>),
-    Master(Box<MasterNode>),
-    Device(Box<DeviceSlot>),
-    Clip(Arc<ClipData>),
-    Lane(Arc<ArrangementLane>),
+    /// Anything the engine owned outright: tracks, the master, device slots.
+    Boxed(Box<dyn Send>),
+    /// Anything shared with the UI: clips, lanes.
+    Shared(Arc<dyn Send + Sync>),
 }
 
 /// Notifications from the audio thread.
@@ -429,52 +345,6 @@ impl Engine {
         self.sample_pos = (self.tick / self.ticks_per_sample()).round() as u64;
     }
 
-    fn start_transport(&mut self) {
-        if !self.playing {
-            self.playing = true;
-            self.record_floor = self.tick;
-            self.sync_sample_pos();
-        }
-    }
-
-    /// Tell the UI that recording ended, at the current playhead.
-    fn finish_recording(&mut self) {
-        if self.recording && self.playing {
-            let tick = self.tick;
-            let _ = self.events.push(EngineEvent::RecordingStopped { tick });
-        }
-        self.recording = false;
-    }
-
-    /// Report a played message if it is a note and we are recording, placing it where the
-    /// user played it rather than where this block happens to be.
-    fn record_midi(&mut self, track: TrackId, message: MidiMessage, at: Instant) {
-        let is_note = matches!(
-            message,
-            MidiMessage::NoteOn { .. } | MidiMessage::NoteOff { .. }
-        );
-        if !(is_note && self.recording && self.playing) {
-            return;
-        }
-        let ticks_per_second = self.ticks_per_sample() * self.sample_rate;
-        let tick = self.tick - at.elapsed().as_secs_f64() * ticks_per_second;
-        let _ = self.events.push(EngineEvent::RecordedMidi {
-            track,
-            tick: tick.max(self.record_floor),
-            message,
-        });
-    }
-
-    /// Route played MIDI to its track and the recorder.
-    fn play_midi(&mut self, track: TrackId, message: MidiMessage, at: Instant) {
-        self.record_midi(track, message, at);
-        if let Some(t) = self.track_mut(track) {
-            if t.live.len() < t.live.capacity() {
-                t.live.push(MidiEvent::new(0, message));
-            }
-        }
-    }
-
     /// Move the playhead without disturbing Session clips or device state.
     fn jump(&mut self, to: f64, kind: JumpKind) {
         if self.recording && self.playing {
@@ -501,278 +371,14 @@ impl Engine {
         }
     }
 
-    fn launch(&mut self, track_idx: usize, slot: usize) {
-        self.start_transport();
-        let at = self.launch_point();
-        let track = &mut self.tracks[track_idx];
-        let has_clip = matches!(track.slots.get(slot), Some(Some(_)));
-        track.player.pending = Some(if has_clip {
-            clip::Pending::Launch { slot, at }
-        } else {
-            clip::Pending::Stop { at }
-        });
-    }
-
-    fn stop_track(&mut self, track_idx: usize) {
-        let at = self.launch_point();
-        let track = &mut self.tracks[track_idx];
-        if track.player.playing.is_some() || track.player.pending.is_some() {
-            track.player.pending = Some(clip::Pending::Stop { at });
-        }
-    }
-
-    fn stop_transport(&mut self) {
-        if self.playing {
-            // Before the tick resets, so the UI sees every recorded note first.
-            self.finish_recording();
-        } else {
-            self.insert_marker = 0.0;
-        }
-        self.playing = false;
-        self.tick = self.insert_marker;
-        self.reached_loop_end = false;
-        self.sync_sample_pos();
-        for t in self.tracks.iter_mut() {
-            t.player.pending = None;
-            t.player.release_all(0, &mut t.live);
-            t.lane.release_and_resync(0, &mut t.live);
-            if let Some(p) = t.player.playing.take() {
-                retire(&mut self.garbage, Garbage::Clip(p.clip));
-            }
-            for d in t.devices.iter_mut() {
-                d.processor.reset();
-            }
-        }
-        for d in self.master.devices.iter_mut() {
-            d.processor.reset();
-        }
-    }
-
     fn handle_command(&mut self, cmd: EngineCommand) {
-        use EngineCommand as C;
         match cmd {
-            C::Play => self.start_transport(),
-            C::Stop => self.stop_transport(),
-            C::SetTempo(t) => self.tempo = t.clamp(20.0, 999.0),
-            C::SetTimeSignature(s) => self.signature = s,
-            C::SetMetronome(on) => self.metronome.enabled = on,
-            C::SetQuantize(q) => self.quantize = q,
-            C::SetRecording(true) => self.recording = true,
-            C::SetRecording(false) => self.finish_recording(),
-            C::Seek(to) => {
-                if to.is_finite() {
-                    let to = to.max(0.0);
-                    self.insert_marker = to;
-                    self.jump(to, JumpKind::Seek);
-                }
-            }
-            C::SetLoop(range) => {
-                self.loop_range = range.filter(|&(s, e)| s >= 0.0 && e > s && e.is_finite());
-                self.reached_loop_end = false;
-            }
-            C::LaunchClip { track, slot } => {
-                if let Some(i) = self.tracks.iter().position(|t| t.id == track) {
-                    self.launch(i, slot);
-                }
-            }
-            C::StopTrack(track) => {
-                if let Some(i) = self.tracks.iter().position(|t| t.id == track) {
-                    self.stop_track(i);
-                }
-            }
-            C::LaunchScene(slot) => {
-                for i in 0..self.tracks.len() {
-                    self.launch(i, slot);
-                }
-            }
-            C::StopAllClips => {
-                for i in 0..self.tracks.len() {
-                    self.stop_track(i);
-                }
-            }
-            C::SetClip { track, slot, clip } => {
-                let Some(t) = self.tracks.iter_mut().find(|t| t.id == track) else {
-                    if let Some(c) = clip {
-                        retire(&mut self.garbage, Garbage::Clip(c));
-                    }
-                    return;
-                };
-                while t.slots.len() <= slot && t.slots.len() < t.slots.capacity() {
-                    t.slots.push(None);
-                }
-                let Some(entry) = t.slots.get_mut(slot) else {
-                    if let Some(c) = clip {
-                        retire(&mut self.garbage, Garbage::Clip(c));
-                    }
-                    return;
-                };
-                // Live-update a playing clip (e.g. edits in the piano roll).
-                if let Some(p) = t.player.playing.as_mut() {
-                    if p.slot == slot {
-                        match &clip {
-                            Some(new) => {
-                                let old = std::mem::replace(&mut p.clip, new.clone());
-                                retire(&mut self.garbage, Garbage::Clip(old));
-                                t.player.release_all(0, &mut t.live);
-                            }
-                            None => {
-                                if let Some(p) = t.player.playing.take() {
-                                    retire(&mut self.garbage, Garbage::Clip(p.clip));
-                                }
-                                t.player.release_all(0, &mut t.live);
-                            }
-                        }
-                    }
-                }
-                if let Some(old) = std::mem::replace(entry, clip) {
-                    retire(&mut self.garbage, Garbage::Clip(old));
-                }
-            }
-            C::SetLane { track, lane } => {
-                let tick = self.tick;
-                let old = match self.tracks.iter_mut().find(|t| t.id == track) {
-                    Some(t) => t.lane.swap(lane, tick, &mut t.live),
-                    None => lane,
-                };
-                retire(&mut self.garbage, Garbage::Lane(old));
-            }
-            C::BackToArrangement => {
-                for t in self.tracks.iter_mut() {
-                    t.player.pending = None;
-                    if !t.follow {
-                        t.player.release_all(0, &mut t.live);
-                        if let Some(p) = t.player.playing.take() {
-                            retire(&mut self.garbage, Garbage::Clip(p.clip));
-                        }
-                        t.follow = true;
-                        t.lane.release_and_resync(0, &mut t.live);
-                    }
-                }
-            }
-            C::AddTrack { index, track } => {
-                if self.tracks.len() < self.tracks.capacity() {
-                    let idx = index.min(self.tracks.len());
-                    self.tracks.insert(idx, track);
-                } else {
-                    retire(&mut self.garbage, Garbage::Track(track));
-                }
-            }
-            C::RemoveTrack(id) => {
-                if let Some(i) = self.tracks.iter().position(|t| t.id == id) {
-                    let mut t = self.tracks.remove(i);
-                    for d in t.devices.iter_mut() {
-                        d.processor.stop_processing();
-                    }
-                    if let Some(p) = t.player.playing.take() {
-                        retire(&mut self.garbage, Garbage::Clip(p.clip));
-                    }
-                    retire(&mut self.garbage, Garbage::Track(t));
-                }
-            }
-            C::MoveTrack { track, to } => {
-                if let Some(i) = self.tracks.iter().position(|t| t.id == track) {
-                    let t = self.tracks.remove(i);
-                    let to = to.min(self.tracks.len());
-                    self.tracks.insert(to, t);
-                }
-            }
-            C::SetMix { track, mix } => {
-                if let Some(t) = self.track_mut(track) {
-                    t.mix = mix;
-                }
-            }
-            C::SetMasterVolume(db) => self.master.volume_db = db,
-            C::InsertDevice {
-                target,
-                index,
-                device,
-            } => match self.chain_mut(target) {
-                Some(chain) if chain.len() < chain.capacity() => {
-                    let idx = index.min(chain.len());
-                    chain.insert(idx, device);
-                }
-                _ => retire(&mut self.garbage, Garbage::Device(device)),
-            },
-            C::RemoveDevice { target, device } => {
-                let removed = self.chain_mut(target).and_then(|chain| {
-                    let i = chain.iter().position(|d| d.id == device)?;
-                    Some(chain.remove(i))
-                });
-                if let Some(mut slot) = removed {
-                    slot.processor.stop_processing();
-                    retire(&mut self.garbage, Garbage::Device(slot));
-                }
-            }
-            C::MoveDevice { target, device, to } => {
-                if let Some(chain) = self.chain_mut(target) {
-                    if let Some(i) = chain.iter().position(|d| d.id == device) {
-                        let d = chain.remove(i);
-                        let to = to.min(chain.len());
-                        chain.insert(to, d);
-                    }
-                }
-            }
-            C::SetBypass {
-                target,
-                device,
-                bypass,
-            } => {
-                if let Some(chain) = self.chain_mut(target) {
-                    if let Some(d) = chain.iter_mut().find(|d| d.id == device) {
-                        d.bypass = bypass;
-                        if bypass {
-                            d.processor.reset();
-                        }
-                    }
-                }
-            }
-            C::SetParam {
-                target,
-                device,
-                param,
-                value,
-            } => {
-                if let Some(chain) = self.chain_mut(target) {
-                    if let Some(d) = chain.iter_mut().find(|d| d.id == device) {
-                        d.processor.set_param(param, value);
-                    }
-                }
-            }
-            C::Midi { track, message } => {
-                if let Some(t) = self.track_mut(track) {
-                    if t.live.len() < t.live.capacity() {
-                        t.live.push(MidiEvent::new(0, message));
-                    }
-                }
-            }
-            C::PlayedMidi { track, message, at } => self.play_midi(track, message, at),
-            C::ReplaceAll {
-                mut tracks,
-                mut master,
-            } => {
-                for t in self.tracks.iter_mut() {
-                    for d in t.devices.iter_mut() {
-                        d.processor.stop_processing();
-                    }
-                    if let Some(p) = t.player.playing.take() {
-                        retire(&mut self.garbage, Garbage::Clip(p.clip));
-                    }
-                }
-                for d in self.master.devices.iter_mut() {
-                    d.processor.stop_processing();
-                }
-                std::mem::swap(&mut self.tracks, &mut *tracks);
-                std::mem::swap(&mut self.master, &mut master);
-                retire(&mut self.garbage, Garbage::Tracks(tracks));
-                retire(&mut self.garbage, Garbage::Master(master));
-                self.playing = false;
-                self.tick = 0.0;
-                self.sample_pos = 0;
-                self.insert_marker = 0.0;
-                self.loop_range = None;
-                self.reached_loop_end = false;
-                self.recording = false;
-            }
+            EngineCommand::Transport(c) => self.handle_transport(c),
+            EngineCommand::Launch(c) => self.handle_launch(c),
+            EngineCommand::Clip(c) => self.handle_clip(c),
+            EngineCommand::Param(c) => self.handle_param(c),
+            EngineCommand::Record(c) => self.handle_record(c),
+            EngineCommand::Graph(c) => self.handle_graph(c),
         }
     }
 
@@ -863,7 +469,7 @@ impl Engine {
 
         let garbage = &mut self.garbage;
         let events = &mut self.events;
-        let mut retire_clip = |c: Arc<ClipData>| retire(garbage, Garbage::Clip(c));
+        let mut retire_clip = |c: Arc<ClipData>| retire(garbage, Garbage::Shared(c));
         let mut on_param = |t: TrackId, d: DeviceId, p: u32, v: f64| {
             let _ = events.push(EngineEvent::ParamChanged {
                 target: ChainTarget::Track(t),

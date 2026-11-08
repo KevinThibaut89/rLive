@@ -1,0 +1,10 @@
+[package]
+name = "rlive-testkit"
+description = "Test helpers for the rLive DAW: offline rendering, signal tools and an allocation guard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+rlive-core.workspace = true

@@ -9,6 +9,7 @@ members = [
     "crates/rlive-app",
     "crates/rlive-test-clap",
     "crates/rlive-test-vst3",
+    "crates/rlive-testkit",
 ]
 default-members = [
     "crates/rlive-core",
@@ -32,6 +33,7 @@ rlive-engine = { path = "crates/rlive-engine" }
 rlive-devices = { path = "crates/rlive-devices" }
 rlive-project = { path = "crates/rlive-project" }
 rlive-plugin-host = { path = "crates/rlive-plugin-host" }
+rlive-testkit = { path = "crates/rlive-testkit" }
 
 rtrb = "0.4"
 serde = { version = "1", features = ["derive"] }

@@ -26,6 +26,9 @@ env_logger.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+rlive-testkit.workspace = true
+
 # macOS renders with Metal. Plugin editors commonly make their own OpenGL
 # context current on the main thread, which corrupts eframe's OpenGL drawing.
 [target.'cfg(target_os = "macos")'.dependencies]

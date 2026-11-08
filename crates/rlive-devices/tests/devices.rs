@@ -8,29 +8,7 @@ const SR: f64 = 48_000.0;
 const BLOCK: usize = 512;
 
 fn render(p: &mut dyn Processor, input: f32, events: &[MidiEvent], blocks: usize) -> Vec<f32> {
-    let transport = TransportInfo {
-        playing: true,
-        sample_rate: SR,
-        ..Default::default()
-    };
-    let mut out = Vec::new();
-    let mut q = ParamOutQueue::with_capacity(16);
-    for b in 0..blocks {
-        let mut l = vec![input; BLOCK];
-        let mut r = vec![input; BLOCK];
-        let ev: &[MidiEvent] = if b == 0 { events } else { &[] };
-        p.process(&mut ProcessContext {
-            audio: AudioBuffer {
-                left: &mut l,
-                right: &mut r,
-            },
-            events: ev,
-            transport: &transport,
-            param_out: &mut q,
-        });
-        out.extend_from_slice(&l);
-    }
-    out
+    rlive_testkit::render_processor(p, input, events, blocks, BLOCK, SR)
 }
 
 fn note_on(key: u8) -> MidiEvent {

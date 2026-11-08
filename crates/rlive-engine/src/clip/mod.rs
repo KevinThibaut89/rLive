@@ -1,0 +1,77 @@
+//! Clip data, stateless clip rendering and the per-track clip launcher.
+
+mod audio;
+mod data;
+mod launcher;
+mod midi;
+
+pub(crate) use audio::AudioCursor;
+pub use data::{AudioClip, ClipData, MidiClip, Note};
+pub(crate) use launcher::{ClipPlayer, Pending};
+pub(crate) use midi::{chase, Voices};
+
+use audio::render_audio;
+use midi::render_midi;
+use rlive_core::MidiEvent;
+
+/// Block geometry shared by everything rendered in one block.
+#[derive(Clone, Copy)]
+pub(crate) struct BlockTime {
+    pub t0: f64,
+    pub ticks_per_sample: f64,
+    /// Tick at the end of the block. Exactly `loop_end` when the block runs up to a loop end,
+    /// so float error can never pull a note on the boundary into the block.
+    pub end: f64,
+    pub frames: usize,
+    pub sample_rate: f64,
+    pub tempo: f64,
+}
+
+impl BlockTime {
+    pub fn t1(&self) -> f64 {
+        self.end
+    }
+
+    /// Frame offset of `tick` inside the block, clamped to `0..=frames`.
+    pub fn offset(&self, tick: f64) -> usize {
+        let off = ((tick - self.t0) / self.ticks_per_sample).round();
+        off.clamp(0.0, self.frames as f64) as usize
+    }
+
+    pub fn event_offset(&self, tick: f64) -> u32 {
+        self.offset(tick).min(self.frames.saturating_sub(1)) as u32
+    }
+}
+
+/// Render clip content for the song-tick range `[a, b)`. MIDI clips push events, audio clips
+/// write into `l`/`r` (block-sized buffers). `origin` is the song tick of clip-local 0.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_range(
+    clip: &ClipData,
+    origin: f64,
+    a: f64,
+    b: f64,
+    time: BlockTime,
+    voices: &mut Voices,
+    audio: &mut AudioCursor,
+    ev: &mut Vec<MidiEvent>,
+    l: &mut [f32],
+    r: &mut [f32],
+) {
+    let len = clip.length() as f64;
+    if b <= a || len <= 0.0 {
+        return;
+    }
+    let seg_end = if clip.looped() {
+        b
+    } else {
+        b.min(origin + len)
+    };
+    if seg_end <= a {
+        return;
+    }
+    match clip {
+        ClipData::Midi(clip) => render_midi(clip, origin, a, seg_end, time, voices, ev),
+        ClipData::Audio(clip) => render_audio(clip, origin, a, seg_end, time, audio, l, r),
+    }
+}
