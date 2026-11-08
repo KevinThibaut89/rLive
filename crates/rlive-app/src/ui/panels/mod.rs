@@ -15,6 +15,7 @@ mod gate_display;
 mod midi_monitor;
 mod multiband_display;
 mod plot;
+mod roar_matrix;
 mod scale_matrix;
 mod velocity_curve;
 
@@ -113,6 +114,7 @@ pub const PANELS: &[PanelDef] = &[
     eq_three_leds::PANEL,
     channel_eq_display::PANEL,
     auto_filter_display::PANEL,
+    roar_matrix::PANEL,
 ];
 
 /// What a panel takes up when the table has no entry for it.

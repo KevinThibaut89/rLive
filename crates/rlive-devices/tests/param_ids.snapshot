@@ -102,6 +102,22 @@ rlive.compressor	20	S/C EQ Gain
 rlive.saturator	0	Drive
 rlive.saturator	1	Output
 rlive.saturator	2	Dry/Wet
+rlive.saturator	3	Curve Type
+rlive.saturator	4	Post Clip
+rlive.saturator	5	Color
+rlive.saturator	6	Amt Lo
+rlive.saturator	7	Amt Hi
+rlive.saturator	8	Frequency
+rlive.saturator	9	Width
+rlive.saturator	10	Bass Shaper Threshold
+rlive.saturator	11	WS Drive
+rlive.saturator	12	WS Curve
+rlive.saturator	13	WS Depth
+rlive.saturator	14	WS Lin
+rlive.saturator	15	WS Damp
+rlive.saturator	16	WS Period
+rlive.saturator	17	Hi-Quality
+rlive.saturator	18	Pre-DC Filter
 rlive.delay	0	Sync
 rlive.delay	1	Time
 rlive.delay	2	Division
@@ -678,3 +694,275 @@ rlive.auto_pan_tremolo	21	Trem Invert
 rlive.auto_pan_tremolo	22	Trem Shape
 rlive.auto_pan_tremolo	23	Harmonic
 rlive.auto_pan_tremolo	24	Vintage
+rlive.overdrive	0	Frequency
+rlive.overdrive	1	Width
+rlive.overdrive	2	Drive
+rlive.overdrive	3	Tone
+rlive.overdrive	4	Dynamics
+rlive.overdrive	5	Dry/Wet
+rlive.dynamic_tube	0	Tube
+rlive.dynamic_tube	1	Drive
+rlive.dynamic_tube	2	Bias
+rlive.dynamic_tube	3	Tone
+rlive.dynamic_tube	4	Envelope
+rlive.dynamic_tube	5	Attack
+rlive.dynamic_tube	6	Release
+rlive.dynamic_tube	7	Output
+rlive.dynamic_tube	8	Hi-Quality
+rlive.pedal	0	Type
+rlive.pedal	1	Gain
+rlive.pedal	2	Output
+rlive.pedal	3	Bass
+rlive.pedal	4	Mid
+rlive.pedal	5	Mid Freq
+rlive.pedal	6	Treble
+rlive.pedal	7	Sub
+rlive.pedal	8	Dry/Wet
+rlive.pedal	9	Hi-Quality
+rlive.amp	0	Model
+rlive.amp	1	Gain
+rlive.amp	2	Bass
+rlive.amp	3	Middle
+rlive.amp	4	Treble
+rlive.amp	5	Presence
+rlive.amp	6	Volume
+rlive.amp	7	Output
+rlive.amp	8	Dry/Wet
+rlive.amp	9	Hi-Quality
+rlive.cabinet	0	Speaker
+rlive.cabinet	1	Microphone
+rlive.cabinet	2	Mic Type
+rlive.cabinet	3	Output
+rlive.cabinet	4	Dry/Wet
+rlive.erosion	0	Freq
+rlive.erosion	1	Amount
+rlive.erosion	2	Noise Blend
+rlive.erosion	3	Filter Width
+rlive.erosion	4	Stereo Width
+rlive.redux	0	Rate
+rlive.redux	1	Jitter
+rlive.redux	2	Pre-Filter
+rlive.redux	3	Post-Filter
+rlive.redux	4	Post-Filter Octave
+rlive.redux	5	Bits
+rlive.redux	6	Shape
+rlive.redux	7	DC Shift
+rlive.redux	8	Dry/Wet
+rlive.vinyl_distortion	0	Tracing Drive
+rlive.vinyl_distortion	1	Tracing Freq
+rlive.vinyl_distortion	2	Tracing Width
+rlive.vinyl_distortion	3	Pinch Drive
+rlive.vinyl_distortion	4	Pinch Freq
+rlive.vinyl_distortion	5	Pinch Width
+rlive.vinyl_distortion	6	Drive
+rlive.vinyl_distortion	7	Mode
+rlive.vinyl_distortion	8	Pinch Stereo
+rlive.vinyl_distortion	9	Crackle Density
+rlive.vinyl_distortion	10	Crackle Volume
+rlive.roar	0	Drive
+rlive.roar	1	Tone Amount
+rlive.roar	2	Tone Freq
+rlive.roar	3	Color Compensation
+rlive.roar	4	Routing
+rlive.roar	5	Blend
+rlive.roar	6	Crossover Low
+rlive.roar	7	Crossover High
+rlive.roar	8	Stage 1 On
+rlive.roar	9	Stage 1 Amount
+rlive.roar	10	Stage 1 Bias
+rlive.roar	11	Stage 1 Shaper
+rlive.roar	12	Stage 1 Shaper On
+rlive.roar	13	Stage 1 Level
+rlive.roar	14	Stage 1 Filter On
+rlive.roar	15	Stage 1 Filter
+rlive.roar	16	Stage 1 Freq
+rlive.roar	17	Stage 1 Resonance
+rlive.roar	18	Stage 1 Filter Pre
+rlive.roar	19	Stage 1 Peak Gain
+rlive.roar	20	Stage 1 Morph
+rlive.roar	21	Stage 2 On
+rlive.roar	22	Stage 2 Amount
+rlive.roar	23	Stage 2 Bias
+rlive.roar	24	Stage 2 Shaper
+rlive.roar	25	Stage 2 Shaper On
+rlive.roar	26	Stage 2 Level
+rlive.roar	27	Stage 2 Filter On
+rlive.roar	28	Stage 2 Filter
+rlive.roar	29	Stage 2 Freq
+rlive.roar	30	Stage 2 Resonance
+rlive.roar	31	Stage 2 Filter Pre
+rlive.roar	32	Stage 2 Peak Gain
+rlive.roar	33	Stage 2 Morph
+rlive.roar	34	Stage 3 On
+rlive.roar	35	Stage 3 Amount
+rlive.roar	36	Stage 3 Bias
+rlive.roar	37	Stage 3 Shaper
+rlive.roar	38	Stage 3 Shaper On
+rlive.roar	39	Stage 3 Level
+rlive.roar	40	Stage 3 Filter On
+rlive.roar	41	Stage 3 Filter
+rlive.roar	42	Stage 3 Freq
+rlive.roar	43	Stage 3 Resonance
+rlive.roar	44	Stage 3 Filter Pre
+rlive.roar	45	Stage 3 Peak Gain
+rlive.roar	46	Stage 3 Morph
+rlive.roar	47	LFO 1 Wave
+rlive.roar	48	LFO 1 Mode
+rlive.roar	49	LFO 1 Rate
+rlive.roar	50	LFO 1 Sync
+rlive.roar	51	LFO 1 Morph
+rlive.roar	52	LFO 1 Smooth
+rlive.roar	53	LFO 2 Wave
+rlive.roar	54	LFO 2 Mode
+rlive.roar	55	LFO 2 Rate
+rlive.roar	56	LFO 2 Sync
+rlive.roar	57	LFO 2 Morph
+rlive.roar	58	LFO 2 Smooth
+rlive.roar	59	Env Attack
+rlive.roar	60	Env Release
+rlive.roar	61	Env Hold
+rlive.roar	62	Env Threshold
+rlive.roar	63	Env Gain
+rlive.roar	64	Env Freq
+rlive.roar	65	Env Width
+rlive.roar	66	Env Listen
+rlive.roar	67	Noise Type
+rlive.roar	68	Noise Mode
+rlive.roar	69	Noise Rate
+rlive.roar	70	Noise Sync
+rlive.roar	71	Noise Smooth
+rlive.roar	72	Global Mod Amount
+rlive.roar	73	Feedback Mode
+rlive.roar	74	Feedback Amount
+rlive.roar	75	Feedback Invert
+rlive.roar	76	Feedback Gate
+rlive.roar	77	Feedback Freq
+rlive.roar	78	Feedback Width
+rlive.roar	79	Feedback Time
+rlive.roar	80	Feedback Sync
+rlive.roar	81	Feedback Note
+rlive.roar	82	Compression
+rlive.roar	83	Comp SC HP
+rlive.roar	84	Output
+rlive.roar	85	Dry/Wet
+rlive.roar	86	External SC
+rlive.roar	87	SC Mix
+rlive.roar	88	SC Gain
+rlive.roar	89	MIDI > FB Note
+rlive.roar	90	Sidechain Listen
+rlive.roar	91	LFO 1 > Drive
+rlive.roar	92	LFO 1 > Tone Amount
+rlive.roar	93	LFO 1 > Tone Freq
+rlive.roar	94	LFO 1 > Blend
+rlive.roar	95	LFO 1 > Feedback Amount
+rlive.roar	96	LFO 1 > Feedback Freq
+rlive.roar	97	LFO 1 > Feedback Width
+rlive.roar	98	LFO 1 > Feedback Time
+rlive.roar	99	LFO 1 > Compression
+rlive.roar	100	LFO 1 > Output
+rlive.roar	101	LFO 1 > Dry/Wet
+rlive.roar	102	LFO 1 > Stage 1 Amount
+rlive.roar	103	LFO 1 > Stage 1 Bias
+rlive.roar	104	LFO 1 > Stage 1 Level
+rlive.roar	105	LFO 1 > Stage 1 Freq
+rlive.roar	106	LFO 1 > Stage 1 Reso
+rlive.roar	107	LFO 1 > Stage 1 Morph
+rlive.roar	108	LFO 1 > Stage 2 Amount
+rlive.roar	109	LFO 1 > Stage 2 Bias
+rlive.roar	110	LFO 1 > Stage 2 Level
+rlive.roar	111	LFO 1 > Stage 2 Freq
+rlive.roar	112	LFO 1 > Stage 2 Reso
+rlive.roar	113	LFO 1 > Stage 2 Morph
+rlive.roar	114	LFO 1 > Stage 3 Amount
+rlive.roar	115	LFO 1 > Stage 3 Bias
+rlive.roar	116	LFO 1 > Stage 3 Level
+rlive.roar	117	LFO 1 > Stage 3 Freq
+rlive.roar	118	LFO 1 > Stage 3 Reso
+rlive.roar	119	LFO 1 > Stage 3 Morph
+rlive.roar	120	LFO 2 > Drive
+rlive.roar	121	LFO 2 > Tone Amount
+rlive.roar	122	LFO 2 > Tone Freq
+rlive.roar	123	LFO 2 > Blend
+rlive.roar	124	LFO 2 > Feedback Amount
+rlive.roar	125	LFO 2 > Feedback Freq
+rlive.roar	126	LFO 2 > Feedback Width
+rlive.roar	127	LFO 2 > Feedback Time
+rlive.roar	128	LFO 2 > Compression
+rlive.roar	129	LFO 2 > Output
+rlive.roar	130	LFO 2 > Dry/Wet
+rlive.roar	131	LFO 2 > Stage 1 Amount
+rlive.roar	132	LFO 2 > Stage 1 Bias
+rlive.roar	133	LFO 2 > Stage 1 Level
+rlive.roar	134	LFO 2 > Stage 1 Freq
+rlive.roar	135	LFO 2 > Stage 1 Reso
+rlive.roar	136	LFO 2 > Stage 1 Morph
+rlive.roar	137	LFO 2 > Stage 2 Amount
+rlive.roar	138	LFO 2 > Stage 2 Bias
+rlive.roar	139	LFO 2 > Stage 2 Level
+rlive.roar	140	LFO 2 > Stage 2 Freq
+rlive.roar	141	LFO 2 > Stage 2 Reso
+rlive.roar	142	LFO 2 > Stage 2 Morph
+rlive.roar	143	LFO 2 > Stage 3 Amount
+rlive.roar	144	LFO 2 > Stage 3 Bias
+rlive.roar	145	LFO 2 > Stage 3 Level
+rlive.roar	146	LFO 2 > Stage 3 Freq
+rlive.roar	147	LFO 2 > Stage 3 Reso
+rlive.roar	148	LFO 2 > Stage 3 Morph
+rlive.roar	149	Env > Drive
+rlive.roar	150	Env > Tone Amount
+rlive.roar	151	Env > Tone Freq
+rlive.roar	152	Env > Blend
+rlive.roar	153	Env > Feedback Amount
+rlive.roar	154	Env > Feedback Freq
+rlive.roar	155	Env > Feedback Width
+rlive.roar	156	Env > Feedback Time
+rlive.roar	157	Env > Compression
+rlive.roar	158	Env > Output
+rlive.roar	159	Env > Dry/Wet
+rlive.roar	160	Env > Stage 1 Amount
+rlive.roar	161	Env > Stage 1 Bias
+rlive.roar	162	Env > Stage 1 Level
+rlive.roar	163	Env > Stage 1 Freq
+rlive.roar	164	Env > Stage 1 Reso
+rlive.roar	165	Env > Stage 1 Morph
+rlive.roar	166	Env > Stage 2 Amount
+rlive.roar	167	Env > Stage 2 Bias
+rlive.roar	168	Env > Stage 2 Level
+rlive.roar	169	Env > Stage 2 Freq
+rlive.roar	170	Env > Stage 2 Reso
+rlive.roar	171	Env > Stage 2 Morph
+rlive.roar	172	Env > Stage 3 Amount
+rlive.roar	173	Env > Stage 3 Bias
+rlive.roar	174	Env > Stage 3 Level
+rlive.roar	175	Env > Stage 3 Freq
+rlive.roar	176	Env > Stage 3 Reso
+rlive.roar	177	Env > Stage 3 Morph
+rlive.roar	178	Noise > Drive
+rlive.roar	179	Noise > Tone Amount
+rlive.roar	180	Noise > Tone Freq
+rlive.roar	181	Noise > Blend
+rlive.roar	182	Noise > Feedback Amount
+rlive.roar	183	Noise > Feedback Freq
+rlive.roar	184	Noise > Feedback Width
+rlive.roar	185	Noise > Feedback Time
+rlive.roar	186	Noise > Compression
+rlive.roar	187	Noise > Output
+rlive.roar	188	Noise > Dry/Wet
+rlive.roar	189	Noise > Stage 1 Amount
+rlive.roar	190	Noise > Stage 1 Bias
+rlive.roar	191	Noise > Stage 1 Level
+rlive.roar	192	Noise > Stage 1 Freq
+rlive.roar	193	Noise > Stage 1 Reso
+rlive.roar	194	Noise > Stage 1 Morph
+rlive.roar	195	Noise > Stage 2 Amount
+rlive.roar	196	Noise > Stage 2 Bias
+rlive.roar	197	Noise > Stage 2 Level
+rlive.roar	198	Noise > Stage 2 Freq
+rlive.roar	199	Noise > Stage 2 Reso
+rlive.roar	200	Noise > Stage 2 Morph
+rlive.roar	201	Noise > Stage 3 Amount
+rlive.roar	202	Noise > Stage 3 Bias
+rlive.roar	203	Noise > Stage 3 Level
+rlive.roar	204	Noise > Stage 3 Freq
+rlive.roar	205	Noise > Stage 3 Reso
+rlive.roar	206	Noise > Stage 3 Morph

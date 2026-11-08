@@ -139,6 +139,15 @@ const EXISTING: &[(&str, &str)] = &[
     ("rlive.channel_eq", "Channel EQ"),
     ("rlive.auto_filter", "Auto Filter"),
     ("rlive.auto_pan_tremolo", "Auto Pan-Tremolo"),
+    ("rlive.amp", "Amp"),
+    ("rlive.cabinet", "Cabinet"),
+    ("rlive.dynamic_tube", "Dynamic Tube"),
+    ("rlive.erosion", "Erosion"),
+    ("rlive.overdrive", "Overdrive"),
+    ("rlive.pedal", "Pedal"),
+    ("rlive.redux", "Redux"),
+    ("rlive.roar", "Roar"),
+    ("rlive.vinyl_distortion", "Vinyl Distortion"),
 ];
 
 #[test]

@@ -1,5 +1,6 @@
 pub mod amp;
 pub mod cabinet;
+pub mod common;
 pub mod dynamic_tube;
 pub mod erosion;
 pub mod overdrive;
