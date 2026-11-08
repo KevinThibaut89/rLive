@@ -10,15 +10,15 @@ use rlive_core::{DeviceId, ParamInfo, Ports, Processor, Section, ViewChannel};
 use rlive_devices::{DeviceInit, DeviceRole, SampleBuffer};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
-    ArrangementLane, AudioClip, BusLayout, ChainNode, ClipData, DeviceSlot, ExprPoint, LaneClip,
-    MasterNode, MidiClip, MixSettings, Note, NoteExpression, NullProcessor,
-    RackKind as EngineRackKind, RackNode, TrackNode, WarpedClip, MAX_RACK_DEPTH,
+    mix_cell, ArrangementLane, AudioClip, BusLayout, ChainNode, ClipData, DeviceSlot, ExprPoint,
+    LaneClip, MidiClip, MixSettings, Note, NoteExpression, NullProcessor,
+    RackKind as EngineRackKind, RackNode, TrackNode, WarpedClip, MAX_RACK_DEPTH, MAX_SENDS,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
 use rlive_project::{
     ArrangementClip, Breakpoint, Chain, Clip, ClipContent, Device, DeviceKind, Project, RackKind,
-    Track, Warp, WarpMode as ProjectWarpMode,
+    Track, TrackKind, Warp, WarpMode as ProjectWarpMode,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -451,17 +451,28 @@ impl Builder<'_> {
         Arc::new(ArrangementLane { clips: lane })
     }
 
+    /// `returns` are the project's return tracks, in order: the sends' positions.
+    #[allow(clippy::too_many_arguments)]
     pub fn track(
         &mut self,
         track: &Track,
+        returns: &[rlive_core::TrackId],
         shared: Arc<TrackShared>,
         runtimes: &mut HashMap<DeviceId, DeviceRuntime>,
         layouts: &mut HashMap<ChainRef, BusLayout>,
         errors: &mut Vec<String>,
     ) -> Box<TrackNode> {
         let mut node = TrackNode::new(track.id, self.max_block).with_shared(shared);
+        if track.kind == TrackKind::Return {
+            node = node.with_feedback(self.max_block);
+        }
         node.mix = mix_of(track);
         let mut layout = BusLayout::for_track(&node.mix).with_max_block(self.max_block);
+        for (n, ret) in returns.iter().take(MAX_SENDS).enumerate() {
+            let db = track.send_level(*ret);
+            layout.note_value(mix_cell::send(n), db as f64);
+            node.seed_send(n, db);
+        }
         for d in &track.devices {
             let slot = self.device(d, 0, runtimes);
             note_errors(d, runtimes, errors);
@@ -489,10 +500,11 @@ impl Builder<'_> {
         runtimes: &mut HashMap<DeviceId, DeviceRuntime>,
         layouts: &mut HashMap<ChainRef, BusLayout>,
         errors: &mut Vec<String>,
-    ) -> Box<MasterNode> {
-        let mut node = MasterNode::new(self.max_block);
-        node.volume_db = project.master.volume_db;
-        let mut layout = BusLayout::for_master(node.volume_db).with_max_block(self.max_block);
+    ) -> Box<TrackNode> {
+        let mut node = TrackNode::master(self.max_block);
+        node.id = project.master.id;
+        node.mix.volume_db = project.master.volume_db;
+        let mut layout = BusLayout::for_master(node.mix.volume_db).with_max_block(self.max_block);
         for d in &project.master.devices {
             let slot = self.device(d, 0, runtimes);
             note_errors(d, runtimes, errors);

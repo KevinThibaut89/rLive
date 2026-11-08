@@ -359,6 +359,7 @@ pub fn capture(project: &Project, prev: Option<&Snapshot>) -> (Snapshot, usize) 
         tuning: project.tuning.clone(),
         midi_mappings: project.midi_mappings.clone(),
         key_mappings: project.key_mappings.clone(),
+        solo_in_place: project.solo_in_place,
     };
     let snapshot = Snapshot {
         shell: share(

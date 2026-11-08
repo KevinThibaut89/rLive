@@ -11,6 +11,7 @@ mod devices;
 mod export;
 mod graph;
 mod recording;
+mod routing;
 mod tracks;
 mod transport;
 mod undo;
@@ -19,6 +20,8 @@ mod undo;
 mod automation_tests;
 #[cfg(test)]
 mod golden;
+#[cfg(test)]
+mod routing_tests;
 #[cfg(test)]
 mod tests;
 
@@ -141,10 +144,18 @@ impl Session {
         let mut shared_map = HashMap::new();
         let mut tracks = Vec::with_capacity(MAX_TRACKS);
         let (mut b, project) = self.builder();
-        for t in &project.tracks {
+        let returns: Vec<TrackId> = project.returns.iter().map(|t| t.id).collect();
+        for t in project.tracks.iter().chain(&project.returns) {
             let shared = Arc::new(TrackShared::default());
             shared_map.insert(t.id, shared.clone());
-            tracks.push(b.track(t, shared, &mut runtimes, &mut layouts, &mut errors));
+            tracks.push(b.track(
+                t,
+                &returns,
+                shared,
+                &mut runtimes,
+                &mut layouts,
+                &mut errors,
+            ));
         }
         let master = b.master(project, &mut runtimes, &mut layouts, &mut errors);
         self.runtimes = runtimes;

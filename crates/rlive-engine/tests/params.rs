@@ -530,7 +530,7 @@ fn the_master_has_a_bus_too() {
         frames: 0,
         log: log.clone(),
     };
-    let mut master = Box::new(MasterNode::new(BLOCK));
+    let mut master = Box::new(TrackNode::master(BLOCK));
     master
         .devices
         .push(Box::new(DeviceSlot::new(device, Box::new(probe))));

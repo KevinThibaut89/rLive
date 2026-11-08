@@ -7,9 +7,7 @@
 use super::{ChainRef, Session};
 use rlive_core::{ChainId, DeviceId, TrackId};
 use rlive_engine::{mix_cell, EngineCommand, TrackRef, TransportCmd};
-use rlive_project::history::{
-    ChainSnap, DeviceSnap, ParkedDevice, ParkedTrack, Snapshot, TrackSnap,
-};
+use rlive_project::history::{ChainSnap, DeviceSnap, ParkedDevice, Snapshot, TrackSnap};
 use rlive_project::{Chain, Device, DeviceKind, Project, Track};
 use std::collections::HashSet;
 use std::mem::take;
@@ -130,7 +128,7 @@ impl Session {
             .filter(|id| !keep.contains(id))
             .collect();
         for id in gone {
-            self.delete_track(id);
+            self.remove_track(id);
         }
         for (i, s) in target.tracks.iter().enumerate() {
             if self.project.track(s.shell.id).is_none() {
@@ -140,19 +138,22 @@ impl Session {
         }
         for (i, s) in target.tracks.iter().enumerate() {
             if self.project.track_index(s.shell.id) != Some(i) {
-                self.move_track(s.shell.id, i);
+                self.move_track_exact(s.shell.id, i);
             }
         }
-        for s in &target.tracks {
+        self.restore_returns(&target.returns);
+        for s in target.tracks.iter().chain(&target.returns) {
             self.restore_track(s);
         }
         self.restore_master(&target.master);
-        self.restore_returns(&target.returns);
         self.project.arrangement = (*target.arrangement).clone();
         self.restore_settings(&target.shell);
         self.sync_loop();
         self.project.normalize();
         self.update_midi_targets();
+        // Group, send and return changes all end up here: the sends' positions settle last.
+        self.push_all_sends();
+        self.send_track_edits(Vec::new());
     }
 
     /// What undo doesn't cover about a device, as remembered when it left the project.
@@ -221,18 +222,39 @@ impl Session {
         }
     }
 
-    /// Return tracks have no engine side yet, so this only has to get the project right.
+    /// Brings the list of return tracks to the target: what is gone is removed, what came back
+    /// is rebuilt, and the rest moves into place. What is in them follows in `restore_track`.
     fn restore_returns(&mut self, target: &[Arc<TrackSnap>]) {
-        for t in &self.project.returns {
-            self.history.parked_tracks.insert(t.id, ParkedTrack::of(t));
-            let parked = &mut self.history.parked_devices;
-            for d in &t.devices {
-                d.for_each(&mut |d| {
-                    parked.insert(d.id, ParkedDevice::of(d));
-                });
+        let keep: HashSet<TrackId> = target.iter().map(|t| t.shell.id).collect();
+        let gone: Vec<TrackId> = self
+            .project
+            .returns
+            .iter()
+            .map(|t| t.id)
+            .filter(|id| !keep.contains(id))
+            .collect();
+        for id in gone {
+            self.remove_track(id);
+        }
+        for (i, s) in target.iter().enumerate() {
+            if self.project.return_index(s.shell.id).is_none() {
+                let t = self.track_from_snapshot(s);
+                self.install_return(t, i);
             }
         }
-        self.project.returns = target.iter().map(|s| self.track_from_snapshot(s)).collect();
+        let tracks = self.project.tracks.len();
+        for (i, s) in target.iter().enumerate() {
+            if self.project.return_index(s.shell.id) != Some(i) {
+                let id = s.shell.id;
+                let at = self.project.return_index(id).unwrap_or(i);
+                let t = self.project.returns.remove(at);
+                self.project.returns.insert(i, t);
+                self.send_track_edits(vec![rlive_engine::GraphOp::MoveTrack {
+                    track: id,
+                    to: tracks + i,
+                }]);
+            }
+        }
     }
 
     fn restore_settings(&mut self, shell: &Project) {
@@ -252,6 +274,7 @@ impl Session {
             tuning,
             midi_mappings,
             key_mappings,
+            solo_in_place,
         } = shell;
         let mut commands = Vec::new();
         let p = &mut self.project;
@@ -276,6 +299,7 @@ impl Session {
         p.tuning = tuning.clone();
         p.midi_mappings = midi_mappings.clone();
         p.key_mappings = key_mappings.clone();
+        p.solo_in_place = *solo_in_place;
         for c in commands {
             self.send(EngineCommand::Transport(c));
         }

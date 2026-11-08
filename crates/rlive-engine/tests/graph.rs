@@ -520,12 +520,11 @@ fn step(track: u32, inputs: &[u32]) -> Step {
 /// `tracks` tracks and a Master that hears only those in `routed`, in that order.
 fn routed_plan(tracks: u32, routed: &[u32]) -> RenderPlan {
     let mut steps: Vec<Step> = (0..tracks).map(|t| step(t, &[])).collect();
-    steps.push(step(MASTER_STEP, routed));
+    steps.push(step(tracks, routed));
     RenderPlan {
         steps,
         levels: vec![0..tracks, tracks..tracks + 1],
-        buses: 0,
-        sidechains: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -1056,7 +1055,7 @@ impl Fuzz {
         self.tracks = models;
         vec![GraphOp::ReplaceAll {
             tracks: Box::new(tracks),
-            master: Box::new(MasterNode::new(BLOCK)),
+            master: Box::new(TrackNode::master(BLOCK)),
         }]
     }
 

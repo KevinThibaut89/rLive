@@ -241,7 +241,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Clip Launch and Stop per slot; keyboard select and Enter launch, arrows move [L]
 - `[ ]` Transport keeps running after clips stop; double Stop resets [S]
 - `[ ]` Multi-select rename with Tab flow, info text, colours [S]
-- `[ ]` Group slots: shading by left-most clip colour, group launch and stop, click selects children [M]
+- `[~]` Group slots: shading by left-most clip colour, group launch and stop, click selects children [M]
 - `[ ]` Track resize to launch-only width, all-tracks modifier [S]
 - `[ ]` Scene launch; cancel pending launch [M]
 - `[ ]` Select Next Scene on Launch [S]
@@ -619,14 +619,14 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Rename with Tab to next track; # auto-numbering with extra # for zero padding; info text. S
 - `[ ]` Reorder and resize; multi-select keeps relative value offsets; non-adjacent drag collapses, Ctrl+arrows does not. M
 - `[ ]` Drag track to browser folder saves a Set, with Collect Files on Export behaviour. M
-- `[ ]` Group Tracks: nesting; auto-routing unless custom; fold; Ungroup; deleting removes contents. M
-- `[ ]` Group Arrangement overview; Session group slots launch, stop and select contained clips. M
-- `[ ]` Assign Track Color to grouped tracks and clips, per view; half-lit Solo for nested solo. S
-- `[ ]` Return tracks: multiple; Pre/Post toggle; feedback sends disabled by default, with Enable Send and Enable All Sends. M
-- `[ ]` Main track: exactly one, hosts effects. S
+- `[x]` Group Tracks: nesting; auto-routing unless custom; fold; Ungroup; deleting removes contents. M
+- `[~]` Group Arrangement overview; Session group slots launch, stop and select contained clips. M
+- `[~]` Assign Track Color to grouped tracks and clips, per view; half-lit Solo for nested solo. S
+- `[x]` Return tracks: multiple; Pre/Post toggle; feedback sends disabled by default, with Enable Send and Enable All Sends. M
+- `[x]` Main track: exactly one, hosts effects. S
 - `[ ]` Crossfader: A/B assign on all tracks including returns; 7 curves; left, centre and right mappable, with toggle and snap-back key behaviour; automatable. M
-- `[ ]` Solo in Place option; returns stay audible only with it on. S
-- `[ ]` Soloing a return mutes other mains but keeps send audio. S
+- `[x]` Solo in Place option; returns stay audible only with it on. S
+- `[x]` Soloing a return mutes other mains but keeps send audio. S
 - `[ ]` Cue mode: separate Main and Cue outputs, Cue Volume, headphone switches, browser preview goes to Cue. M. Needs 4 outputs.
 - `[ ]` Track Delay in ms or samples; unavailable when PDC is off. M
 - `[ ]` Performance Impact meters: 6 segments per track, relative to Set. M. Needs per-track DSP timing.

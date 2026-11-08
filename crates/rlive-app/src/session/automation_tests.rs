@@ -634,3 +634,81 @@ fn a_new_bus_brings_routes_along() {
     let cell = s.device_cell(chain, dev, param).unwrap();
     assert!(s.cell_state(chain, cell).automated());
 }
+
+fn peak_after(engine: &mut Engine, s: &mut Session, frames: usize) -> f32 {
+    let mut peak = 0f32;
+    let mut done = 0;
+    while done < frames {
+        let mut l = vec![0.0; 512];
+        let mut r = vec![0.0; 512];
+        engine.process_stereo(&mut l, &mut r);
+        s.idle();
+        peak = l.iter().chain(&r).fold(peak, |p, x| p.max(x.abs()));
+        done += 512;
+    }
+    peak
+}
+
+/// Plays the demo clip for a moment and returns the loudest sample once it's sounding.
+fn demo_peak(engine: &mut Engine, s: &mut Session) -> f32 {
+    let t = s.project.tracks[0].id;
+    s.launch_clip(t, 0);
+    render(engine, s, 12_000);
+    peak_after(engine, s, 12_000)
+}
+
+#[test]
+fn master_automation_changes_what_comes_out() {
+    let (mut engine, mut s) = session();
+    let plain = demo_peak(&mut engine, &mut s);
+    assert!(plain > 0.01, "the demo clip should sound");
+
+    let (mut engine, mut s) = session();
+    s.project.master.automation.push(Envelope {
+        target: EnvTarget::Param(ParamRef {
+            owner: ParamOwner::Master,
+            id: mixer::VOLUME,
+        }),
+        points: vec![Breakpoint::new(0.0, -96.0)],
+    });
+    s.rebuild();
+    let automated = demo_peak(&mut engine, &mut s);
+    assert!(
+        automated < plain * 0.001,
+        "plain {plain}, automated {automated}"
+    );
+}
+
+#[test]
+fn send_automation_controls_what_reaches_a_return() {
+    let setup = |db: f64| {
+        let (engine, mut s) = session();
+        let t = s.project.tracks[0].id;
+        let ret = s.add_return().expect("room for a return");
+        s.set_send(t, ret, 0.0);
+        // Played from the timeline: launching a Session clip would punch automation out.
+        let clip = s.project.tracks[0].clips[0].clone().expect("demo clip");
+        s.arr_place(t, rlive_project::ArrangementClip::new(clip, 0));
+        s.project.tracks[0].routing.output = rlive_project::Route::SendsOnly;
+        s.project.tracks[0].automation.push(Envelope {
+            target: EnvTarget::Param(ParamRef {
+                owner: ParamOwner::Track(t),
+                id: mixer::FIRST_SEND,
+            }),
+            points: vec![Breakpoint::new(0.0, db)],
+        });
+        s.rebuild();
+        (engine, s)
+    };
+    let play = |engine: &mut Engine, s: &mut Session| {
+        s.play();
+        render(engine, s, 2_048);
+        peak_after(engine, s, 12_000)
+    };
+    let (mut engine, mut s) = setup(0.0);
+    let open = play(&mut engine, &mut s);
+    assert!(open > 0.01, "the send should carry the clip, got {open}");
+    let (mut engine, mut s) = setup(rlive_engine::SEND_MIN_DB);
+    let closed = play(&mut engine, &mut s);
+    assert!(closed < open * 0.001, "open {open}, closed {closed}");
+}

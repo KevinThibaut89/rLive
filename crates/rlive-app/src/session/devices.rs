@@ -6,7 +6,7 @@ use rlive_core::{ChainId, DeviceId, ParamId, ParamInfo, TrackId};
 use rlive_devices::DeviceRole;
 use rlive_engine::{mix_cell, CellIx, ChainAddr, GraphOp, TrackRef};
 use rlive_plugin_host::PluginDescriptor;
-use rlive_project::{Chain, Device, DeviceKind, FileRef};
+use rlive_project::{Chain, Device, DeviceKind, FileRef, TrackKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -135,8 +135,30 @@ impl Session {
         }
     }
 
+    /// Whether a chain's track can host this kind of device: group and return tracks take audio
+    /// effects only. Reports it to the user when it can't.
+    fn accepts_role(&mut self, chain: ChainRef, role: DeviceRole, name: &str) -> bool {
+        let ChainRef::Track(id) = chain.owner() else {
+            return true;
+        };
+        let audio_only = self
+            .project
+            .track(id)
+            .is_some_and(|t| matches!(t.kind, TrackKind::Group | TrackKind::Return));
+        if audio_only && role != DeviceRole::AudioEffect {
+            self.messages.push(format!(
+                "{name}: group and return tracks take audio effects only"
+            ));
+            return false;
+        }
+        true
+    }
+
     pub fn add_builtin(&mut self, chain: ChainRef, type_id: &str) {
         if let Some(info) = rlive_devices::find(type_id) {
+            if !self.accepts_role(chain, info.role, info.name) {
+                return;
+            }
             let d = Device::builtin(info.id, info.name);
             let index = self.instrument_insert_index(chain, info.role);
             self.add_device(chain, index, d);
@@ -150,6 +172,9 @@ impl Session {
         } else {
             DeviceRole::AudioEffect
         };
+        if !self.accepts_role(chain, role, &desc.name) {
+            return;
+        }
         let index = self.instrument_insert_index(chain, role);
         self.add_device(chain, index, d);
     }
@@ -575,6 +600,10 @@ pub(super) fn mixer_cell_of(chain: ChainRef, control: ParamId) -> Option<CellIx>
         (ChainRef::Track(_), mixer::PAN) => Some(mix_cell::PAN),
         (ChainRef::Track(_), mixer::MUTE) => Some(mix_cell::MUTE),
         (ChainRef::Track(_), mixer::SOLO) => Some(mix_cell::SOLO),
+        (ChainRef::Track(_), ParamId(id)) if id >= mixer::FIRST_SEND.0 => {
+            let n = (id - mixer::FIRST_SEND.0) as usize;
+            (n < rlive_engine::MAX_SENDS).then(|| mix_cell::send(n))
+        }
         _ => None,
     }
 }

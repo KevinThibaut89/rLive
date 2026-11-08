@@ -64,9 +64,11 @@ impl Session {
         };
         let p = &self.project;
         let mut tracks = Vec::with_capacity(MAX_TRACKS);
-        for t in &p.tracks {
+        let returns: Vec<_> = p.returns.iter().map(|t| t.id).collect();
+        for t in p.tracks.iter().chain(&p.returns) {
             tracks.push(b.track(
                 t,
+                &returns,
                 Arc::new(TrackShared::default()),
                 &mut runtimes,
                 &mut layouts,

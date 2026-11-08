@@ -79,6 +79,12 @@ pub struct Project {
     pub midi_mappings: Vec<MidiMapping>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub key_mappings: Vec<KeyMapping>,
+    /// Soloing a clip or group track leaves the return tracks audible.
+    #[serde(
+        default = "crate::defaults::yes",
+        skip_serializing_if = "crate::defaults::is_true"
+    )]
+    pub solo_in_place: bool,
 }
 
 impl Default for Project {
@@ -152,6 +158,7 @@ impl Project {
             tuning: None,
             midi_mappings: Vec::new(),
             key_mappings: Vec::new(),
+            solo_in_place: true,
         }
     }
 
@@ -179,12 +186,16 @@ impl Project {
         p
     }
 
+    /// A clip or group track, or a return track.
     pub fn track(&self, id: TrackId) -> Option<&Track> {
-        self.tracks.iter().find(|t| t.id == id)
+        self.tracks.iter().chain(&self.returns).find(|t| t.id == id)
     }
 
     pub fn track_mut(&mut self, id: TrackId) -> Option<&mut Track> {
-        self.tracks.iter_mut().find(|t| t.id == id)
+        self.tracks
+            .iter_mut()
+            .chain(self.returns.iter_mut())
+            .find(|t| t.id == id)
     }
 
     pub fn track_index(&self, id: TrackId) -> Option<usize> {

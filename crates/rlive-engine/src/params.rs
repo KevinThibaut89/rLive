@@ -131,14 +131,38 @@ impl Inbox {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CellIx(pub u32);
 
+/// How many return tracks a Set can have, and so how many sends every track has.
+pub const MAX_SENDS: usize = 12;
+/// Lowest send level, which is silence.
+pub const SEND_MIN_DB: f64 = mixer::VOLUME_MIN_DB;
+/// Highest send level.
+pub const SEND_MAX_DB: f64 = 0.0;
+
 /// Cells of the mixer controls. Every track's bus starts with these; the Master has only volume.
+///
+/// A send's cell is [`send`](mix_cell::send), one per return track, reserved up front so adding a
+/// return track doesn't have to touch every bus. Devices' cells come after all of them.
 pub mod mix_cell {
-    use super::CellIx;
+    use super::{CellIx, MAX_SENDS};
 
     pub const VOLUME: CellIx = CellIx(0);
     pub const PAN: CellIx = CellIx(1);
     pub const MUTE: CellIx = CellIx(2);
     pub const SOLO: CellIx = CellIx(3);
+    /// The first cell of a device, on a track.
+    const FIRST_SEND: u32 = 4;
+
+    /// The cell of the send to the `n`th return track. `n` is `0..MAX_SENDS`.
+    pub const fn send(n: usize) -> CellIx {
+        assert!(n < MAX_SENDS);
+        CellIx(FIRST_SEND + n as u32)
+    }
+
+    /// Which send a cell is, if it is one.
+    pub fn send_index(cell: CellIx) -> Option<usize> {
+        let n = cell.0.checked_sub(FIRST_SEND)? as usize;
+        (n < MAX_SENDS).then_some(n)
+    }
 }
 
 const DIRTY: u8 = 1;
@@ -651,6 +675,19 @@ impl ParamBus {
     }
 }
 
+/// A description of the send to the `n`th return track.
+fn send_info(n: usize) -> ParamInfo {
+    ParamInfo::continuous(
+        mixer::FIRST_SEND.0 + n as u32,
+        "Send",
+        SEND_MIN_DB,
+        SEND_MAX_DB,
+        SEND_MIN_DB,
+        "dB",
+    )
+    .with_mod_mode(ModMode::Scale)
+}
+
 /// Where a control step falls in the block.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ControlStep {
@@ -723,12 +760,14 @@ impl BusLayout {
     /// A track's layout: the mixer controls and no devices yet.
     pub fn for_track(mix: &MixSettings) -> Self {
         let [volume, pan, mute, solo] = mixer::infos();
-        Self::with_mixer(&[
+        let mut controls = vec![
             (volume, mix.volume_db as f64),
             (pan, mix.pan as f64),
             (mute, mix.mute as u8 as f64),
             (solo, mix.solo as u8 as f64),
-        ])
+        ];
+        controls.extend((0..MAX_SENDS).map(|n| (send_info(n), SEND_MIN_DB)));
+        Self::with_mixer(&controls)
     }
 
     /// The Master's layout: its volume and no devices yet.

@@ -411,7 +411,7 @@ fn replace_all_swaps_session() {
     tracks.push(tb);
     h.send(EngineCommand::graph(GraphOp::ReplaceAll {
         tracks: Box::new(tracks),
-        master: Box::new(MasterNode::new(BLOCK)),
+        master: Box::new(TrackNode::master(BLOCK)),
     }))
     .ok()
     .unwrap();
@@ -1065,7 +1065,7 @@ fn retiring_every_kind_of_object_stays_off_the_heap_on_the_audio_thread() {
         &mut h,
         EngineCommand::graph(GraphOp::ReplaceAll {
             tracks: Box::new(Vec::with_capacity(MAX_TRACKS)),
-            master: Box::new(MasterNode::new(BLOCK)),
+            master: Box::new(TrackNode::master(BLOCK)),
         }),
     );
     rlive_testkit::assert_no_alloc(|| engine.process_stereo(&mut l, &mut r));

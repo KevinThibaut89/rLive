@@ -57,6 +57,10 @@ enum ScanMsg {
 
 pub struct UiState {
     pub selected: Option<ChainRef>,
+    /// Tracks selected together, for commands like Group Tracks. Includes `selected`.
+    pub selected_tracks: Vec<TrackId>,
+    /// A group slot whose clips are selected, as a group and a scene.
+    pub group_slot: Option<(TrackId, usize)>,
     pub selected_clip: Option<ClipRef>,
     pub detail: Detail,
     pub main_view: MainView,
@@ -140,6 +144,8 @@ impl RliveApp {
                 .tracks
                 .first()
                 .map(|t| ChainRef::Track(t.id)),
+            selected_tracks: Vec::new(),
+            group_slot: None,
             selected_clip: None,
             detail: Detail::Devices,
             main_view: MainView::Session,

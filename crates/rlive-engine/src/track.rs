@@ -2,10 +2,12 @@
 #![allow(clippy::vec_box)]
 
 use crate::clip::{BlockTime, ClipData, ClipPlayer, Pending};
+use crate::graph::{BusIn, Tap};
 use crate::lane::{ArrangementLane, LanePlayer};
+use crate::params::{mix_cell, MAX_SENDS};
 use crate::params::{BusLayout, ControlHooks, ControlStep, ParamBus, TrackRoutes, CONTROL_STEP};
 use crate::rack::RackNode;
-use crate::shared::{PeakMeter, TrackShared, NO_SLOT};
+use crate::shared::{TrackShared, NO_SLOT};
 use rlive_core::param::{mixer, ParamId};
 use rlive_core::time::BarMap;
 use rlive_core::warp::StretchBank;
@@ -206,6 +208,24 @@ impl GainSmoother {
             *r *= self.r;
         }
     }
+
+    /// Mix `src` into `dst` at the smoothed gain.
+    fn add(
+        &mut self,
+        src: (&[f32], &[f32]),
+        dst: (&mut [f32], &mut [f32]),
+        target: (f32, f32),
+        coeff: f32,
+    ) {
+        let (sl, sr) = src;
+        let (dl, dr) = dst;
+        for i in 0..sl.len().min(dl.len()) {
+            self.l += (target.0 - self.l) * coeff;
+            self.r += (target.1 - self.r) * coeff;
+            dl[i] += sl[i] * self.l;
+            dr[i] += sr[i] * self.r;
+        }
+    }
 }
 
 /// A gain whose target changes at control steps inside a block.
@@ -258,6 +278,149 @@ impl GainStage {
         );
         self.settled = target;
         self.points.clear();
+    }
+
+    /// [`apply`](Self::apply), but mixing `src` into `dst` and leaving `src` alone.
+    fn add(
+        &mut self,
+        src: (&[f32], &[f32]),
+        dst: (&mut [f32], &mut [f32]),
+        frames: usize,
+        coeff: f32,
+    ) {
+        let silent = self.points.is_empty()
+            && self.settled == (0.0, 0.0)
+            && self.smoother.l.abs() < 1e-6
+            && self.smoother.r.abs() < 1e-6;
+        if silent {
+            self.smoother.l = 0.0;
+            self.smoother.r = 0.0;
+            return;
+        }
+        let (sl, sr) = (&src.0[..frames], &src.1[..frames]);
+        let (dl, dr) = (&mut dst.0[..frames], &mut dst.1[..frames]);
+        let mut target = self.settled;
+        let mut from = 0;
+        for &(at, next) in &self.points {
+            let at = (at as usize).min(frames);
+            self.smoother.add(
+                (&sl[from..at], &sr[from..at]),
+                (&mut dl[from..at], &mut dr[from..at]),
+                target,
+                coeff,
+            );
+            target = next;
+            from = at;
+        }
+        self.smoother.add(
+            (&sl[from..], &sr[from..]),
+            (&mut dl[from..], &mut dr[from..]),
+            target,
+            coeff,
+        );
+        self.settled = target;
+        self.points.clear();
+    }
+
+    /// Forget targets that nothing rendered this block.
+    fn settle(&mut self) {
+        if let Some(&(_, target)) = self.points.last() {
+            self.settled = target;
+        }
+        self.points.clear();
+    }
+
+    /// Start exactly at a gain, with nothing to smooth towards.
+    fn seed(&mut self, gain: (f32, f32)) {
+        self.smoother.l = gain.0;
+        self.smoother.r = gain.1;
+        self.settled = gain;
+        self.target = gain;
+        self.points.clear();
+        self.dirty = false;
+    }
+}
+
+/// Signal a track makes available to its sends. Only filled when the plan has one.
+struct SendTaps {
+    /// Before the mixer stage, gated by solo.
+    pre: [Vec<f32>; 2],
+    /// After the mixer stage, gated by solo.
+    post: [Vec<f32>; 2],
+    /// Open unless solo silences this track's sends.
+    gate: GainStage,
+    /// Volume, pan and the activator, as the main output has them, without the solo stage.
+    mix: GainStage,
+    /// The level of each send, in the sender's own bus.
+    levels: Vec<GainStage>,
+    /// What the plan wants of this track this block.
+    wants_pre: bool,
+    wants_post: bool,
+    gate_dirty: bool,
+    feedback: Option<FeedbackRing>,
+}
+
+impl SendTaps {
+    fn new(max_block: usize) -> Self {
+        Self {
+            pre: [vec![0.0; max_block], vec![0.0; max_block]],
+            post: [vec![0.0; max_block], vec![0.0; max_block]],
+            gate: GainStage::new(max_block),
+            mix: GainStage::new(max_block),
+            levels: (0..MAX_SENDS)
+                .map(|_| {
+                    let mut level = GainStage::new(max_block);
+                    level.seed((0.0, 0.0));
+                    level
+                })
+                .collect(),
+            wants_pre: false,
+            wants_post: false,
+            gate_dirty: false,
+            feedback: None,
+        }
+    }
+
+    fn set_level(&mut self, offset: usize, control: ParamId, plain: f64) {
+        let n = (control.0 - mixer::FIRST_SEND.0) as usize;
+        if let Some(level) = self.levels.get_mut(n) {
+            let gain = db_to_gain(plain as f32);
+            level.set_target(offset, (gain, gain));
+        }
+    }
+}
+
+/// What a return track fed its sends, a fixed time ago. A feedback send reads this: a track can
+/// only hear itself, or one rendering after it, from the past.
+struct FeedbackRing {
+    pre: [Vec<f32>; 2],
+    post: [Vec<f32>; 2],
+    /// Where the next block goes, which is also the oldest audio in the ring.
+    head: usize,
+}
+
+impl FeedbackRing {
+    fn new(max_block: usize) -> Self {
+        Self {
+            pre: [vec![0.0; max_block], vec![0.0; max_block]],
+            post: [vec![0.0; max_block], vec![0.0; max_block]],
+            head: 0,
+        }
+    }
+
+    /// Read the oldest `frames` into `out`, without moving. Delays by the ring's full length.
+    fn read(buf: &[f32], head: usize, frames: usize, out: &mut [f32]) {
+        let wrap = (buf.len() - head).min(frames);
+        out[..wrap].copy_from_slice(&buf[head..head + wrap]);
+        out[wrap..frames].copy_from_slice(&buf[..frames - wrap]);
+    }
+
+    /// Store a block. A value that blew up never comes back round the loop.
+    fn write(buf: &mut [f32], head: usize, input: &[f32]) {
+        let n = buf.len();
+        for (i, &s) in input.iter().enumerate() {
+            buf[(head + i) % n] = if s.is_finite() { s } else { 0.0 };
+        }
     }
 }
 
@@ -449,6 +612,19 @@ pub struct TrackNode {
     midi: [EventQueue; 2],
     cursor: ChainCursor,
     gain: GainStage,
+    sends: SendTaps,
+    /// Room to read a feedback ring into, on a return track.
+    scratch: [Vec<f32>; 2],
+    /// Takes the Master's place in the plan: no pan law, and never silenced by solo.
+    is_master: bool,
+    /// This track's Solo switch as of the last control step.
+    pub(crate) soloed: bool,
+    /// Holds a soloed track, which keeps it audible.
+    pub(crate) holds_solo: bool,
+    /// Solo leaves this track's main output on.
+    pub(crate) solo_open: bool,
+    /// Solo leaves this track's sends on.
+    pub(crate) sends_open: bool,
 }
 
 impl TrackNode {
@@ -478,7 +654,41 @@ impl TrackNode {
             ],
             cursor: ChainCursor::default(),
             gain: GainStage::new(max_block),
+            sends: SendTaps::new(max_block),
+            scratch: [Vec::new(), Vec::new()],
+            is_master: false,
+            soloed: false,
+            holds_solo: false,
+            solo_open: true,
+            sends_open: true,
         }
+    }
+
+    /// A track to render last, as the Set's Main output. Call on the UI thread.
+    pub fn master(max_block: usize) -> Self {
+        let mut node = Self::new(TrackId(0), max_block);
+        node.is_master = true;
+        node.bus = BusLayout::for_master(0.0).build();
+        node
+    }
+
+    /// Give a return track somewhere to remember what it sent, so it can be fed back.
+    pub fn with_feedback(mut self, max_block: usize) -> Self {
+        self.sends.feedback = Some(FeedbackRing::new(max_block));
+        self.scratch = [vec![0.0; max_block], vec![0.0; max_block]];
+        self
+    }
+
+    /// Set the level of a send before the track is sent to the engine.
+    pub fn seed_send(&mut self, n: usize, db: f32) {
+        if let Some(level) = self.sends.levels.get_mut(n) {
+            let gain = db_to_gain(db);
+            level.seed((gain, gain));
+        }
+    }
+
+    pub fn is_master(&self) -> bool {
+        self.is_master
     }
 
     pub fn with_shared(mut self, shared: Arc<TrackShared>) -> Self {
@@ -555,6 +765,24 @@ impl TrackNode {
         }
         self.events.sort_unstable_by_key(|e| e.sort_key());
         self.cursor = ChainCursor::default();
+        // Anything no send consumed last block: there's no plan edge carrying it.
+        for level in &mut self.sends.levels {
+            level.settle();
+        }
+    }
+
+    /// Clear what the sends carry over, as of a change of plan.
+    pub(crate) fn plan_changed(&mut self) {
+        self.sends.wants_pre = false;
+        self.sends.wants_post = false;
+    }
+
+    /// Take the plan's demand for this track's send signals.
+    pub(crate) fn want_send(&mut self, tap: &Tap) {
+        match tap {
+            Tap::PostFx => self.sends.wants_pre = true,
+            _ => self.sends.wants_post = true,
+        }
     }
 
     /// Run the chain up to `to` frames into the block, handing each device a segment of its own.
@@ -625,24 +853,49 @@ impl TrackNode {
         if resolved.activators {
             self.render_to(offset, ctx, on_param);
         }
-        let mix = &mut self.mix;
-        self.bus
-            .deliver_resolved(offset as u32, |control, plain| mix.apply(control, plain));
+        let (mix, sends) = (&mut self.mix, &mut self.sends);
+        self.bus.deliver_resolved(offset as u32, |control, plain| {
+            if control >= mixer::FIRST_SEND {
+                sends.set_level(offset, control, plain);
+            } else {
+                mix.apply(control, plain);
+            }
+        });
         self.gain.dirty |= resolved.mixer;
     }
 
-    /// Set the gain target from the mixer, at this step, when something affecting it changed.
-    pub(crate) fn update_mix(&mut self, offset: usize, any_solo: bool, solo_changed: bool) {
-        if !self.gain.dirty && !solo_changed {
+    /// Say whether solo leaves this track's main output and sends on.
+    pub(crate) fn set_solo_gates(&mut self, solo_open: bool, sends_open: bool) {
+        self.gain.dirty |= solo_open != self.solo_open;
+        self.sends.gate_dirty |= sends_open != self.sends_open;
+        self.solo_open = solo_open;
+        self.sends_open = sends_open;
+    }
+
+    /// Set the gain targets from the mixer, at this step, when something affecting them changed.
+    pub(crate) fn update_mix(&mut self, offset: usize) {
+        if self.is_master {
+            if self.gain.dirty {
+                let gain = db_to_gain(self.mix.volume_db);
+                self.gain.set_target(offset, (gain, gain));
+            }
             return;
         }
-        let audible = !self.mix.mute && (!any_solo || self.mix.solo);
-        let target = if audible {
-            self.mix.gains()
-        } else {
-            (0.0, 0.0)
-        };
-        self.gain.set_target(offset, target);
+        if self.gain.dirty {
+            let mix = if self.mix.mute {
+                (0.0, 0.0)
+            } else {
+                self.mix.gains()
+            };
+            self.sends.mix.set_target(offset, mix);
+            let target = if self.solo_open { mix } else { (0.0, 0.0) };
+            self.gain.set_target(offset, target);
+        }
+        if self.sends.gate_dirty {
+            self.sends.gate_dirty = false;
+            let open = if self.sends_open { 1.0 } else { 0.0 };
+            self.sends.gate.set_target(offset, (open, open));
+        }
     }
 
     /// Run what is left of the chain and publish the clip state.
@@ -678,6 +931,95 @@ impl TrackNode {
             .store(self.follow, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Fill what this track's sends will tap, before the mixer stage changes its audio.
+    pub(crate) fn prepare_sends(&mut self, frames: usize, coeff: f32) {
+        let s = &mut self.sends;
+        if !s.wants_pre && !s.wants_post {
+            s.gate.settle();
+            s.mix.settle();
+            return;
+        }
+        s.pre[0][..frames].copy_from_slice(&self.left[..frames]);
+        s.pre[1][..frames].copy_from_slice(&self.right[..frames]);
+        let [pre_l, pre_r] = &mut s.pre;
+        s.gate.apply(pre_l, pre_r, frames, coeff);
+        if s.wants_post {
+            s.post[0][..frames].copy_from_slice(&s.pre[0][..frames]);
+            s.post[1][..frames].copy_from_slice(&s.pre[1][..frames]);
+            let [post_l, post_r] = &mut s.post;
+            s.mix.apply(post_l, post_r, frames, coeff);
+        } else {
+            s.mix.settle();
+        }
+        if let Some(ring) = &mut s.feedback {
+            let head = ring.head;
+            if s.wants_pre {
+                FeedbackRing::write(&mut ring.pre[0], head, &s.pre[0][..frames]);
+                FeedbackRing::write(&mut ring.pre[1], head, &s.pre[1][..frames]);
+            }
+            if s.wants_post {
+                FeedbackRing::write(&mut ring.post[0], head, &s.post[0][..frames]);
+                FeedbackRing::write(&mut ring.post[1], head, &s.post[1][..frames]);
+            }
+            ring.head = (head + frames) % ring.pre[0].len().max(1);
+        }
+    }
+
+    /// Mix one of this track's sends into `dst`.
+    pub(crate) fn send_into(
+        &mut self,
+        input: &BusIn,
+        dst: (&mut [f32], &mut [f32]),
+        frames: usize,
+        coeff: f32,
+    ) {
+        let Some(n) = input.gain.and_then(mix_cell::send_index) else {
+            return;
+        };
+        let s = &mut self.sends;
+        let level = &mut s.levels[n];
+        let tap = match input.tap {
+            Tap::PostFx => &s.pre,
+            _ => &s.post,
+        };
+        if input.feedback {
+            let Some(ring) = &s.feedback else { return };
+            let ring_tap = match input.tap {
+                Tap::PostFx => &ring.pre,
+                _ => &ring.post,
+            };
+            let [sl, sr] = &mut self.scratch;
+            FeedbackRing::read(&ring_tap[0], ring.head, frames, sl);
+            FeedbackRing::read(&ring_tap[1], ring.head, frames, sr);
+            level.add((&sl[..frames], &sr[..frames]), dst, frames, coeff);
+        } else {
+            let (sl, sr) = (&tap[0][..frames], &tap[1][..frames]);
+            level.add((sl, sr), dst, frames, coeff);
+        }
+    }
+
+    /// Mix a feedback send from this track into itself.
+    pub(crate) fn feedback_into_self(&mut self, input: &BusIn, frames: usize, coeff: f32) {
+        let Some(n) = input.gain.and_then(mix_cell::send_index) else {
+            return;
+        };
+        let s = &mut self.sends;
+        let Some(ring) = &s.feedback else { return };
+        let ring_tap = match input.tap {
+            Tap::PostFx => &ring.pre,
+            _ => &ring.post,
+        };
+        let [sl, sr] = &mut self.scratch;
+        FeedbackRing::read(&ring_tap[0], ring.head, frames, sl);
+        FeedbackRing::read(&ring_tap[1], ring.head, frames, sr);
+        s.levels[n].add(
+            (&sl[..frames], &sr[..frames]),
+            (&mut self.left[..frames], &mut self.right[..frames]),
+            frames,
+            coeff,
+        );
+    }
+
     /// Apply volume/pan (mute/solo resolved at the control steps) and update meters.
     pub(crate) fn apply_mix(&mut self, frames: usize, coeff: f32) {
         let left = &mut self.left[..frames];
@@ -695,124 +1037,5 @@ impl TrackNode {
             .iter_mut()
             .find(|d| d.id == id)
             .map(|b| &mut **b)
-    }
-}
-
-/// The master bus.
-pub struct MasterNode {
-    pub devices: Vec<Box<DeviceSlot>>,
-    pub volume_db: f32,
-    /// Every parameter of the Master. Devices must be placed in the layout it was built from.
-    pub bus: Box<ParamBus>,
-    /// Automation lanes, set by `ParamCmd::SetRoutes`.
-    pub routes: Arc<TrackRoutes>,
-    /// Writes the bus at each control step, around automation. Unused until modulators exist.
-    pub hooks: Option<Box<dyn ControlHooks>>,
-    pub(crate) left: Vec<f32>,
-    pub(crate) right: Vec<f32>,
-    pub(crate) param_out: ParamOutQueue,
-    midi: [EventQueue; 2],
-    cursor: ChainCursor,
-    gain: GainStage,
-}
-
-impl MasterNode {
-    pub fn new(max_block: usize) -> Self {
-        Self {
-            devices: Vec::with_capacity(MAX_DEVICES),
-            volume_db: 0.0,
-            bus: BusLayout::for_master(0.0).build(),
-            routes: Arc::new(TrackRoutes::default()),
-            hooks: None,
-            left: vec![0.0; max_block],
-            right: vec![0.0; max_block],
-            param_out: ParamOutQueue::with_capacity(256),
-            midi: [EventQueue::with_capacity(0), EventQueue::with_capacity(0)],
-            cursor: ChainCursor::default(),
-            gain: GainStage::new(max_block),
-        }
-    }
-
-    fn render_to(
-        &mut self,
-        to: usize,
-        ctx: &BlockCtx,
-        on_param: &mut dyn FnMut(DeviceId, u32, f64),
-    ) {
-        let from = self.cursor.frames;
-        if to <= from {
-            return;
-        }
-        let transport = ctx.at(from);
-        run_chain(
-            &mut self.devices,
-            ChainRun {
-                left: &mut self.left[from..to],
-                right: &mut self.right[from..to],
-                events: &[],
-                midi: &mut self.midi,
-                at: &mut Stretch {
-                    transport: &transport,
-                    param_out: &mut self.param_out,
-                    bus: &mut self.bus,
-                    on_param,
-                    from: from as u32,
-                    to: to as u32,
-                },
-            },
-        );
-        self.cursor.frames = to;
-    }
-
-    /// Resolve the Master's parameters at a step, once its input is ready.
-    pub(crate) fn control_step(
-        &mut self,
-        index: u32,
-        offset: usize,
-        ctx: &BlockCtx,
-        on_param: &mut dyn FnMut(DeviceId, u32, f64),
-    ) {
-        run_writers(
-            self.hooks.as_deref_mut(),
-            Some(&*self.routes),
-            &mut self.bus,
-            index,
-            offset,
-            ctx,
-        );
-        let resolved = self.bus.resolve();
-        if resolved.activators {
-            self.render_to(offset, ctx, on_param);
-        }
-        let volume = &mut self.volume_db;
-        self.bus.deliver_resolved(offset as u32, |control, plain| {
-            if control == mixer::VOLUME {
-                *volume = plain as f32;
-            }
-        });
-        if resolved.mixer || self.gain.dirty {
-            let g = db_to_gain(self.volume_db);
-            self.gain.set_target(offset, (g, g));
-        }
-    }
-
-    pub(crate) fn begin_block(&mut self) {
-        self.cursor = ChainCursor::default();
-    }
-
-    pub(crate) fn finish(
-        &mut self,
-        ctx: &BlockCtx,
-        meter: &PeakMeter,
-        coeff: f32,
-        on_param: &mut dyn FnMut(DeviceId, u32, f64),
-    ) {
-        let frames = ctx.frames;
-        self.render_to(frames, ctx, on_param);
-        self.bus.end_block();
-        let left = &mut self.left[..frames];
-        let right = &mut self.right[..frames];
-        self.gain.apply(left, right, frames, coeff);
-        meter.update(left, right);
     }
 }

@@ -38,13 +38,17 @@ pub enum MenuCommand {
     ZoomReset,
     RescanPlugins,
     ToggleComputerKeys,
+    GroupTracks,
+    UngroupTracks,
+    NewReturnTrack,
+    ToggleSoloInPlace,
 }
 
 use MenuCommand as C;
 
 impl MenuCommand {
     /// Every command, in declaration order, so `ALL[c as usize] == c`.
-    pub const ALL: [MenuCommand; 29] = [
+    pub const ALL: [MenuCommand; 33] = [
         C::About,
         C::Preferences,
         C::Quit,
@@ -74,6 +78,10 @@ impl MenuCommand {
         C::ZoomReset,
         C::RescanPlugins,
         C::ToggleComputerKeys,
+        C::GroupTracks,
+        C::UngroupTracks,
+        C::NewReturnTrack,
+        C::ToggleSoloInPlace,
     ];
 }
 
@@ -105,6 +113,9 @@ pub fn shortcut(c: MenuCommand) -> Option<KeyboardShortcut> {
         C::Duplicate => (CMD, Key::D),
         C::SelectAll => (CMD, Key::A),
         C::NewMidiTrack => (CMD, Key::T),
+        C::NewReturnTrack => (CMD_ALT, Key::T),
+        C::GroupTracks => (CMD, Key::G),
+        C::UngroupTracks => (CMD_SHIFT, Key::G),
         C::ToggleBrowser => (CMD_ALT, Key::B),
         C::ToggleDetail => (CMD_ALT, Key::L),
         C::ZoomIn => (CMD, Key::Equals),
@@ -160,7 +171,11 @@ pub const EDIT_MENU: &[Entry] = &[
 pub const CREATE_MENU: &[Entry] = &[
     Item("MIDI Track", C::NewMidiTrack),
     Item("Audio Track", C::NewAudioTrack),
+    Item("Return Track", C::NewReturnTrack),
     Item("Scene", C::NewScene),
+    Separator,
+    Item("Group Tracks", C::GroupTracks),
+    Item("Ungroup Tracks", C::UngroupTracks),
 ];
 
 pub const VIEW_MENU: &[Entry] = &[
@@ -178,6 +193,7 @@ pub const VIEW_MENU: &[Entry] = &[
 
 pub const OPTIONS_MENU: &[Entry] = &[
     Item("Computer MIDI Keyboard", C::ToggleComputerKeys),
+    Item("Solo in Place", C::ToggleSoloInPlace),
     Item("Rescan Plugins", C::RescanPlugins),
 ];
 
@@ -351,7 +367,62 @@ impl RliveApp {
         s.check(C::ToggleDetail, self.ui.show_detail);
         s.check(C::ToggleMixer, self.ui.layout.show_mixer);
         s.check(C::ToggleComputerKeys, self.ui.computer_keys);
+        let selected = self.selected_track_ids();
+        let project = &self.session.project;
+        s.enable(C::GroupTracks, !selected.is_empty());
+        s.enable(
+            C::UngroupTracks,
+            selected
+                .iter()
+                .any(|t| project.track(*t).is_some_and(|t| t.is_group())),
+        );
+        s.enable(
+            C::NewReturnTrack,
+            project.returns.len() < rlive_engine::MAX_SENDS,
+        );
+        s.check(C::ToggleSoloInPlace, project.solo_in_place);
         s
+    }
+
+    /// The tracks a Group or Ungroup command applies to: the multi-selection, or the single
+    /// selected track.
+    fn selected_track_ids(&self) -> Vec<TrackId> {
+        let mut ids = self.ui.selected_tracks.clone();
+        ids.retain(|t| self.session.project.track_index(*t).is_some());
+        if ids.is_empty() {
+            if let Some(ChainRef::Track(t)) = self.ui.selected {
+                if self.session.project.track_index(t).is_some() {
+                    ids.push(t);
+                }
+            }
+        }
+        ids
+    }
+
+    fn group_selected(&mut self) {
+        let ids = self.selected_track_ids();
+        if let Some(g) = self.session.group_tracks(&ids) {
+            self.ui.selected = Some(ChainRef::Track(g));
+            self.ui.selected_tracks = vec![g];
+        }
+    }
+
+    fn ungroup_selected(&mut self) {
+        let groups: Vec<TrackId> = self
+            .selected_track_ids()
+            .into_iter()
+            .filter(|t| self.session.project.track(*t).is_some_and(|t| t.is_group()))
+            .collect();
+        for g in groups {
+            self.session.ungroup(g);
+        }
+        self.ui.selected_tracks.clear();
+        self.ui.selected = self
+            .session
+            .project
+            .tracks
+            .first()
+            .map(|t| ChainRef::Track(t.id));
     }
 
     fn select_new_track(&mut self, kind: TrackKind) {
@@ -383,6 +454,17 @@ impl RliveApp {
             }
             C::NewMidiTrack => self.select_new_track(TrackKind::Midi),
             C::NewAudioTrack => self.select_new_track(TrackKind::Audio),
+            C::GroupTracks => self.group_selected(),
+            C::UngroupTracks => self.ungroup_selected(),
+            C::NewReturnTrack => {
+                if let Some(r) = self.session.add_return() {
+                    self.ui.selected = Some(ChainRef::Track(r));
+                }
+            }
+            C::ToggleSoloInPlace => {
+                let on = !self.session.project.solo_in_place;
+                self.session.set_solo_in_place(on);
+            }
             C::NewScene => self.session.add_scene(),
             C::ToggleMainView => {
                 self.ui.main_view = match self.ui.main_view {

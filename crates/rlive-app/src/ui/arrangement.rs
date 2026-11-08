@@ -17,6 +17,8 @@ const LOOP_H: f32 = 11.0;
 const HEADER_W: f32 = 176.0;
 const SCROLLBAR: f32 = 8.0;
 const CLIP_TITLE_H: f32 = 13.0;
+/// Rows at the bottom for the return tracks and the Master.
+const RETURN_ROW_H: f32 = 24.0;
 const EDGE_W: f32 = 6.0;
 const ADD_ZONE_H: f32 = 64.0;
 
@@ -91,17 +93,22 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let bar = sig.ticks_per_bar();
     let lanes_right = full.right() - HEADER_W;
     let ruler = Rect::from_min_max(full.min, Pos2::new(lanes_right, full.top() + RULER_H));
+    // Return tracks and the Master stay at the bottom, under the scrolling lanes.
+    let bottom_rows = session.project.returns.len() + 1;
+    let bottom_h = bottom_rows as f32 * RETURN_ROW_H;
+    let lanes_bottom = full.bottom() - SCROLLBAR - bottom_h;
     let lanes = Rect::from_min_max(
         Pos2::new(full.left(), ruler.bottom()),
-        Pos2::new(lanes_right, full.bottom() - SCROLLBAR),
+        Pos2::new(lanes_right, lanes_bottom),
     );
     let headers = Rect::from_min_max(
         Pos2::new(lanes_right, ruler.bottom()),
-        Pos2::new(full.right(), full.bottom() - SCROLLBAR),
+        Pos2::new(full.right(), lanes_bottom),
     );
 
     wheel(ui, state, full, lanes);
-    let n = session.project.tracks.len();
+    let visible = session.project.visible_tracks();
+    let n = visible.len();
     let track_h = state.arr.track_h;
     let content_h = n as f32 * track_h + ADD_ZONE_H;
     let last = session
@@ -158,6 +165,16 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     }
 
     track_headers(ui, session, state, headers);
+    return_rows(
+        ui,
+        session,
+        state,
+        Rect::from_min_max(
+            Pos2::new(full.left(), lanes.bottom()),
+            Pos2::new(full.right(), lanes.bottom() + bottom_h),
+        ),
+        lanes_right,
+    );
     let add_y = lanes.top() + n as f32 * track_h - state.arr.scroll.y;
     if add_y < lanes.bottom() {
         let zone = Rect::from_min_max(
@@ -220,7 +237,12 @@ fn paint_lane_backgrounds(ui: &egui::Ui, session: &Session, state: &UiState, lan
         Some(ChainRef::Track(t)) => Some(t),
         _ => None,
     };
-    for (i, t) in session.project.tracks.iter().enumerate() {
+    let visible = session.project.visible_tracks();
+    for (i, t) in visible
+        .iter()
+        .map(|&v| &session.project.tracks[v])
+        .enumerate()
+    {
         let r = lane_rect(lanes, i, state.arr.track_h, state.arr.scroll.y);
         if r.bottom() < lanes.top() || r.top() > lanes.bottom() {
             continue;
@@ -268,10 +290,18 @@ fn paint_clips(
 ) -> Vec<Hit> {
     let p = ui.painter_at(lanes);
     let mut hits = Vec::new();
-    for (i, t) in session.project.tracks.iter().enumerate() {
+    let visible = session.project.visible_tracks();
+    for (i, t) in visible
+        .iter()
+        .map(|&v| &session.project.tracks[v])
+        .enumerate()
+    {
         let lane = lane_rect(lanes, i, state.arr.track_h, state.arr.scroll.y);
         if lane.bottom() < lanes.top() || lane.top() > lanes.bottom() {
             continue;
+        }
+        if t.is_group() {
+            paint_group_overview(&p, session, t.id, lane, lanes, axis);
         }
         for c in &t.arrangement {
             let (x0, x1) = (axis.x(c.start as f64), axis.x(c.end() as f64));
@@ -349,6 +379,39 @@ fn paint_clip(
             Stroke::new(1.0, Color32::WHITE),
             StrokeKind::Inside,
         );
+    }
+}
+
+/// A group shows its members' clips as thin bars in its own lane.
+fn paint_group_overview(
+    p: &egui::Painter,
+    session: &Session,
+    group: TrackId,
+    lane: Rect,
+    lanes: Rect,
+    axis: &TimeAxis,
+) {
+    let tracks = session.project.group_contents(group);
+    let tracks: Vec<_> = tracks
+        .iter()
+        .filter_map(|id| session.project.track(*id))
+        .filter(|t| !t.is_group())
+        .collect();
+    let rows = tracks.len().max(1) as f32;
+    let row_h = ((lane.height() - 4.0) / rows).clamp(2.0, 9.0);
+    for (row, t) in tracks.iter().enumerate() {
+        let y = lane.top() + 2.0 + row as f32 * row_h;
+        for c in &t.arrangement {
+            let (x0, x1) = (axis.x(c.start as f64), axis.x(c.end() as f64));
+            if x1 < lanes.left() || x0 > lanes.right() {
+                continue;
+            }
+            let bar = Rect::from_min_max(
+                Pos2::new(x0, y),
+                Pos2::new(x1.max(x0 + 2.0), y + (row_h - 1.0).max(1.0)),
+            );
+            p.rect_filled(bar, 0.0, theme::darken(rgb(c.clip.color), 0.2));
+        }
     }
 }
 
@@ -460,7 +523,7 @@ fn track_at(session: &Session, lanes: Rect, y: f32, h: f32, scroll_y: f32) -> Op
         return None;
     }
     let i = ((y - lanes.top() + scroll_y) / h).floor() as usize;
-    (i < session.project.tracks.len()).then_some(i)
+    session.project.visible_tracks().get(i).copied()
 }
 
 fn lane_interaction(
@@ -510,7 +573,9 @@ fn lane_interaction(
     } else if resp.clicked() {
         if let Some(pos) = pointer {
             if let Some(i) = track_at(session, lanes, pos.y, h, sy) {
-                state.selected = Some(ChainRef::Track(session.project.tracks[i].id));
+                let id = session.project.tracks[i].id;
+                state.selected = Some(ChainRef::Track(id));
+                state.selected_tracks = vec![id];
             }
             match hit(pos) {
                 Some(hit) => {
@@ -708,8 +773,12 @@ fn drag_preview(
     let target = anchor as f64 + ((pos.x - d.origin.x) / axis.px_per_beat) as f64 * PPQ as f64;
     let snapped = timeline::snap(target, grid, snapping).max(0);
     let mut dt = snapped - anchor as i64;
-    let tracks = &session.project.tracks;
-    let index = |t: TrackId| session.project.track_index(t);
+    let visible = session.project.visible_tracks();
+    let tracks: Vec<&rlive_project::Track> = visible
+        .iter()
+        .map(|&v| &session.project.tracks[v])
+        .collect();
+    let index = |t: TrackId| tracks.iter().position(|o| o.id == t);
     let mut dlane = 0i32;
     if d.kind == DragKind::Move {
         let earliest = d.clips.iter().map(|(_, c)| c.start).min().unwrap_or(0) as i64;
@@ -842,7 +911,13 @@ fn drops(
     let kind = session.project.tracks[i].kind;
     let start = timeline::snap(axis.tick(pos.x), grid, snapping).max(0) as u64;
     let x = axis.x(start as f64);
-    let lane = lane_rect(lanes, i, h, sy);
+    let row = session
+        .project
+        .visible_tracks()
+        .iter()
+        .position(|&v| v == i)
+        .unwrap_or(0);
+    let lane = lane_rect(lanes, row, h, sy);
     resp.ctx.layer_painter(resp.layer_id).line_segment(
         [Pos2::new(x, lane.top()), Pos2::new(x, lane.bottom())],
         Stroke::new(2.0, ACCENT),
@@ -1009,14 +1084,156 @@ fn paint_ruler(
 }
 
 fn track_headers(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, headers: Rect) {
-    let ids: Vec<TrackId> = session.project.tracks.iter().map(|t| t.id).collect();
-    for (i, id) in ids.iter().enumerate() {
-        let lane = lane_rect(headers, i, state.arr.track_h, state.arr.scroll.y);
+    let visible = session.project.visible_tracks();
+    let ids: Vec<(TrackId, usize)> = visible
+        .iter()
+        .map(|&v| (session.project.tracks[v].id, v))
+        .collect();
+    for (row, (id, i)) in ids.iter().enumerate() {
+        let lane = lane_rect(headers, row, state.arr.track_h, state.arr.scroll.y);
         if lane.bottom() < headers.top() || lane.top() > headers.bottom() {
             continue;
         }
-        track_header(ui, session, state, headers, lane, *id, i);
+        track_header(ui, session, state, headers, lane, *id, *i);
     }
+}
+
+/// The rows below the lanes: one for each return track, then the Master.
+fn return_rows(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    area: Rect,
+    lanes_right: f32,
+) {
+    let p = ui.painter().clone();
+    p.rect_filled(area, 0.0, PANEL_DARK);
+    p.line_segment(
+        [area.left_top(), area.right_top()],
+        Stroke::new(2.0, SEPARATOR),
+    );
+    let returns: Vec<TrackId> = session.project.returns.iter().map(|t| t.id).collect();
+    for (i, id) in returns.iter().enumerate() {
+        let row = Rect::from_min_size(
+            Pos2::new(lanes_right, area.top() + i as f32 * RETURN_ROW_H),
+            Vec2::new(area.right() - lanes_right, RETURN_ROW_H),
+        );
+        return_row(ui, session, state, row, *id, i);
+    }
+    let row = Rect::from_min_size(
+        Pos2::new(lanes_right, area.bottom() - RETURN_ROW_H),
+        Vec2::new(area.right() - lanes_right, RETURN_ROW_H),
+    );
+    let selected = state.selected == Some(ChainRef::Master);
+    let resp = ui.allocate_rect(row, Sense::click());
+    p.rect_filled(
+        row,
+        0.0,
+        if selected {
+            hex(0x3b3b3b)
+        } else {
+            hex(0x303030)
+        },
+    );
+    p.text(
+        row.left_center() + Vec2::new(10.0, 0.0),
+        Align2::LEFT_CENTER,
+        "Master",
+        theme::font_bold(11.0),
+        TEXT,
+    );
+    if resp.clicked() {
+        state.selected = Some(ChainRef::Master);
+        state.detail = Detail::Devices;
+    }
+    info(resp, "Master track — click to see its devices");
+}
+
+fn return_row(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    row: Rect,
+    id: TrackId,
+    index: usize,
+) {
+    let Some(t) = session.project.track(id) else {
+        return;
+    };
+    let (name, color, mute, solo) = (t.name.clone(), t.color, t.mute, t.solo);
+    let selected = state.selected == Some(ChainRef::Track(id));
+    let resp = ui.allocate_rect(row, Sense::click());
+    let p = ui.painter().clone();
+    p.rect_filled(
+        row,
+        0.0,
+        if selected {
+            hex(0x3b3b3b)
+        } else {
+            hex(0x303030)
+        },
+    );
+    p.line_segment(
+        [row.left_bottom(), row.right_bottom()],
+        Stroke::new(1.0, SEPARATOR),
+    );
+    p.rect_filled(
+        Rect::from_min_size(row.min, Vec2::new(6.0, row.height())),
+        0.0,
+        rgb(color),
+    );
+    let label = Rect::from_min_size(
+        row.min + Vec2::new(10.0, 0.0),
+        Vec2::new(row.width() - 80.0, row.height()),
+    );
+    p.with_clip_rect(label).text(
+        label.left_center(),
+        Align2::LEFT_CENTER,
+        name.as_str(),
+        theme::font_bold(10.5),
+        TEXT,
+    );
+    let row_h = RETURN_ROW_H - 6.0;
+    let letter = (b'A' + index as u8) as char;
+    let mute_r = Rect::from_min_size(
+        Pos2::new(row.right() - 68.0, row.top() + 3.0),
+        Vec2::new(30.0, row_h),
+    );
+    let solo_r = Rect::from_min_size(
+        Pos2::new(row.right() - 35.0, row.top() + 3.0),
+        Vec2::new(30.0, row_h),
+    );
+    let mut mu = ui.new_child(egui::UiBuilder::new().max_rect(mute_r));
+    let r = widgets::state_button(
+        &mut mu,
+        mute_r.size(),
+        !mute,
+        ACTIVATOR,
+        &letter.to_string(),
+    );
+    if info(r, "Track Activator — click to mute/unmute").clicked() {
+        if let Some(t) = session.project.track_mut(id) {
+            t.mute = !mute;
+        }
+        session.sync_mix(id);
+    }
+    let mut su = ui.new_child(egui::UiBuilder::new().max_rect(solo_r));
+    let r = widgets::state_button(&mut su, solo_r.size(), solo, SOLO_BLUE, "S");
+    if info(
+        r,
+        "Solo the return — every other track's main output goes silent",
+    )
+    .clicked()
+    {
+        let additive = su.input(|i| i.modifiers.command);
+        session_view::toggle_solo(session, id, solo, additive);
+    }
+    if resp.clicked() {
+        state.selected = Some(ChainRef::Track(id));
+        state.detail = Detail::Devices;
+    }
+    let resp = info(resp, format!("Return track '{name}'"));
+    resp.context_menu(|ui| session_view::return_menu(ui, session, state, id, &name));
 }
 
 fn track_header(
@@ -1031,7 +1248,17 @@ fn track_header(
     let Some(t) = session.project.track(id) else {
         return;
     };
-    let (name, color, mute, solo, arm) = (t.name.clone(), t.color, t.mute, t.solo, t.arm);
+    let (name, color, mute, solo, arm, kind, folded) = (
+        t.name.clone(),
+        t.color,
+        t.mute,
+        t.solo,
+        t.arm,
+        t.kind,
+        t.ui.folded,
+    );
+    let holds_solo = kind == TrackKind::Group && session.project.holds_solo(id);
+    let depth = session.project.group_depth(id);
     let selected = state.selected == Some(ChainRef::Track(id));
     let mut cu = session_view::child(
         ui,
@@ -1056,8 +1283,26 @@ fn track_header(
     );
     let swatch = Rect::from_min_size(rect.min, Vec2::new(6.0, rect.height()));
     p.rect_filled(swatch, 0.0, rgb(color));
-    let inner = rect.shrink2(Vec2::new(10.0, 4.0));
-    let top = Rect::from_min_size(inner.min, Vec2::new(inner.width(), 16.0));
+    let indent = depth as f32 * 8.0;
+    let inner = Rect::from_min_max(
+        rect.min + Vec2::new(10.0 + indent, 4.0),
+        rect.max - Vec2::new(10.0, 4.0),
+    );
+    let fold_w = if kind == TrackKind::Group {
+        icons::fold(
+            &p,
+            Rect::from_min_size(inner.min, Vec2::splat(16.0)),
+            !folded,
+            TEXT_DIM,
+        );
+        16.0
+    } else {
+        0.0
+    };
+    let top = Rect::from_min_size(
+        inner.min + Vec2::new(fold_w, 0.0),
+        Vec2::new(inner.width() - fold_w, 16.0),
+    );
     let galley = p.layout_no_wrap(name.clone(), theme::font_bold(11.0), TEXT);
     p.with_clip_rect(top.intersect(headers)).galley(
         top.left_center() - Vec2::new(0.0, galley.size().y / 2.0),
@@ -1093,21 +1338,53 @@ fn track_header(
             session.sync_mix(id);
         }
         let r = widgets::state_button(&mut bu, Vec2::new(bw, btn_h), solo, SOLO_BLUE, "S");
+        if holds_solo && !solo {
+            let half =
+                Rect::from_min_size(r.rect.min, Vec2::new(r.rect.width() / 2.0, r.rect.height()));
+            p.rect_filled(half, 1.0, SOLO_BLUE);
+            p.text(
+                r.rect.center(),
+                Align2::CENTER_CENTER,
+                "S",
+                theme::font(10.5),
+                TEXT,
+            );
+        }
         if info(r, "Solo — Cmd-click to solo several tracks").clicked() {
             session_view::toggle_solo(session, id, solo, bu.input(|i| i.modifiers.command));
         }
-        let r = widgets::icon_button(&mut bu, Vec2::new(bw, btn_h), arm, ARM_RED, icons::record);
-        if info(
-            r,
-            "Arm — record MIDI onto this track (Cmd-click to arm several)",
-        )
-        .clicked()
-        {
-            let exclusive = !bu.input(|i| i.modifiers.command);
-            session.set_arm(id, !arm, exclusive);
+        if kind != TrackKind::Group {
+            let r =
+                widgets::icon_button(&mut bu, Vec2::new(bw, btn_h), arm, ARM_RED, icons::record);
+            if info(
+                r,
+                "Arm — record MIDI onto this track (Cmd-click to arm several)",
+            )
+            .clicked()
+            {
+                let exclusive = !bu.input(|i| i.modifiers.command);
+                session.set_arm(id, !arm, exclusive);
+            }
         }
     }
-    if resp.clicked() {
+    let on_fold = kind == TrackKind::Group
+        && resp
+            .interact_pointer_pos()
+            .is_some_and(|pos| Rect::from_min_size(inner.min, Vec2::splat(16.0)).contains(pos));
+    if resp.clicked() && on_fold {
+        session.set_folded(id, !folded);
+    } else if resp.clicked() {
+        let m = cu.input(|i| i.modifiers);
+        if m.shift || m.command {
+            match state.selected_tracks.iter().position(|t| *t == id) {
+                Some(i) => {
+                    state.selected_tracks.remove(i);
+                }
+                None => state.selected_tracks.push(id),
+            }
+        } else {
+            state.selected_tracks = vec![id];
+        }
         state.selected = Some(ChainRef::Track(id));
         state.detail = Detail::Devices;
     }
@@ -1138,7 +1415,7 @@ fn scrollbars(
     };
     if max_x > 0.0 {
         let track = Rect::from_min_max(
-            Pos2::new(lanes.left(), lanes.bottom() + 1.0),
+            Pos2::new(lanes.left(), full.bottom() - SCROLLBAR + 1.0),
             Pos2::new(lanes.right(), full.bottom() - 1.0),
         );
         let w = (track.width() * lanes.width() / content_w).max(20.0);

@@ -7,7 +7,7 @@ use crate::graph::{ChainAddr, RenderPlan, TrackRef, MAX_RACK_DEPTH};
 use crate::params::{ParamBus, TrackRoutes};
 use crate::rack::ChainNode;
 use crate::track::bind_chain;
-use crate::{retire, DeviceSlot, Engine, Garbage, MasterNode, TrackNode};
+use crate::{retire, DeviceSlot, Engine, Garbage, TrackNode};
 use rlive_core::{ChainId, DeviceId, Resource, TrackId};
 use std::sync::Arc;
 
@@ -77,7 +77,7 @@ pub enum GraphOp {
     /// Replace the whole session (project load / sample-rate change).
     ReplaceAll {
         tracks: Box<Vec<Box<TrackNode>>>,
-        master: Box<MasterNode>,
+        master: Box<TrackNode>,
     },
 }
 
@@ -131,7 +131,26 @@ impl Engine {
         } else if applied.tracks || txn.plan.is_some() {
             txn.replaced = self.plans.compiled.take();
             self.plans.flat.make_flat(self.tracks.len());
+        } else {
+            return;
         }
+        self.configure_tracks();
+    }
+
+    /// Tell every track what the running plan wants of it, and have solo worked out again.
+    fn configure_tracks(&mut self) {
+        let plan = self.plans.active();
+        for t in self.tracks.iter_mut() {
+            t.plan_changed();
+        }
+        for step in &plan.steps {
+            for input in step.inputs.iter().filter(|i| i.gain.is_some()) {
+                if let Some(t) = self.tracks.get_mut(input.from as usize) {
+                    t.want_send(&input.tap);
+                }
+            }
+        }
+        self.solo_dirty = true;
     }
 
     fn apply_graph_op(&mut self, op: GraphOp, applied: &mut Applied) {

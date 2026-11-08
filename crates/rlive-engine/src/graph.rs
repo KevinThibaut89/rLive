@@ -106,10 +106,10 @@ impl From<TrackRef> for ChainAddr {
     }
 }
 
-/// The value of [`Step::track`] for the Master, which isn't one of the engine's tracks yet.
-pub const MASTER_STEP: u32 = u32::MAX;
-
 /// The order tracks render in, and where each takes its input from. Compiled on the UI thread.
+///
+/// A step's `track` indexes the engine's tracks, in the order `project.tracks`, then
+/// `project.returns`; one past the last track is the Master, which is always the last step.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct RenderPlan {
     pub steps: Vec<Step>,
@@ -119,12 +119,19 @@ pub struct RenderPlan {
     pub buses: u32,
     /// Audio routed to devices' sidechain inputs. None yet.
     pub sidechains: Vec<SidechainIn>,
+    /// For each track, the group it is directly in. Solo needs this: a soloed track's groups stay
+    /// open, and a soloed group keeps everything in it audible. Empty is no groups at all.
+    pub groups: Vec<Option<u32>>,
+    /// Which tracks are return tracks: they sit at the end of the tracks, before the Master.
+    pub returns: Range<u32>,
+    /// Soloing a clip or group track leaves the return tracks audible.
+    pub solo_in_place: bool,
 }
 
 /// One track's turn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Step {
-    /// An index into the engine's tracks, or [`MASTER_STEP`].
+    /// An index into the engine's tracks; one past the last of them is the Master.
     pub track: u32,
     /// What it sums before its devices run, in order.
     pub inputs: Vec<BusIn>,
@@ -136,10 +143,14 @@ pub struct BusIn {
     /// An index into the engine's tracks.
     pub from: u32,
     pub tap: Tap,
-    /// The cell in the receiving track's bus scaling this input. `None` is unity.
+    /// The sender's send level for this input, a cell in its own bus. A send takes the sender's
+    /// signal before solo silences its main output. `None` is its main output, at unity.
     pub gain: Option<CellIx>,
     /// Frames to hold the signal back, to line up paths of different latency.
     pub delay: u32,
+    /// Takes what `from` produced a fixed time ago rather than this block, which is the only way
+    /// a track can hear itself or a track rendering after it (a feedback send).
+    pub feedback: bool,
 }
 
 impl BusIn {
@@ -150,6 +161,22 @@ impl BusIn {
             tap: Tap::PostMixer,
             gain: None,
             delay: 0,
+            feedback: false,
+        }
+    }
+
+    /// A send at the level in the sender's cell `level`, tapped before or after its mixer.
+    pub fn send(from: u32, level: CellIx, pre_mixer: bool) -> Self {
+        Self {
+            from,
+            tap: if pre_mixer {
+                Tap::PostFx
+            } else {
+                Tap::PostMixer
+            },
+            gain: Some(level),
+            delay: 0,
+            feedback: false,
         }
     }
 }
@@ -183,9 +210,12 @@ impl RenderPlan {
             levels: Vec::with_capacity(2),
             buses: 0,
             sidechains: Vec::new(),
+            groups: Vec::new(),
+            returns: 0..0,
+            solo_in_place: true,
         };
         plan.steps.push(Step {
-            track: MASTER_STEP,
+            track: 0,
             inputs: Vec::with_capacity(tracks),
         });
         plan.levels.push(0..0);
@@ -201,6 +231,7 @@ impl RenderPlan {
         self.steps.drain(..last);
         let room = self.steps[0].inputs.capacity();
         let tracks = tracks.min(room).min(self.steps.capacity() - 1);
+        self.steps[0].track = tracks as u32;
         self.steps[0].inputs.clear();
         self.steps[0]
             .inputs
@@ -225,21 +256,52 @@ impl RenderPlan {
             (level.start == end && level.end >= level.start).then_some(level.end)
         });
         let renderable = self.buses == 0 && self.sidechains.is_empty();
-        if tiled != Some(self.steps.len() as u32) || !renderable || self.steps.len() != tracks + 1 {
+        if tiled != Some(self.steps.len() as u32)
+            || !renderable
+            || tracks > crate::MAX_TRACKS
+            || self.steps.len() != tracks + 1
+            || self.returns.start > self.returns.end
+            || self.returns.end > tracks as u32
+        {
             return false;
         }
-        let once = |t: u32| self.steps.iter().filter(|s| s.track == t).count() == 1;
-        self.steps.last().is_some_and(|s| s.track == MASTER_STEP)
-            && (0..tracks as u32).all(once)
-            && self.steps.iter().all(|s| {
-                (s.track == MASTER_STEP || s.inputs.is_empty())
-                    && s.inputs.iter().all(|i| {
-                        (i.from as usize) < tracks
-                            && i.tap == Tap::PostMixer
-                            && i.gain.is_none()
+        let master = tracks as u32;
+        if self.steps.last().map(|s| s.track) != Some(master) {
+            return false;
+        }
+        let parents_ok = (self.groups.is_empty() || self.groups.len() == tracks)
+            && self
+                .groups
+                .iter()
+                .all(|g| g.is_none_or(|p| (p as usize) < tracks));
+        if !parents_ok {
+            return false;
+        }
+        // Every track exactly once, and the level it renders in, so an input can be checked
+        // against what its source has rendered by then.
+        let mut level_of = [u16::MAX; crate::MAX_TRACKS + 1];
+        for (level, range) in self.levels.iter().enumerate() {
+            for step in &self.steps[range.start as usize..range.end as usize] {
+                match level_of.get_mut(step.track as usize) {
+                    Some(l) if *l == u16::MAX => *l = level as u16,
+                    _ => return false,
+                }
+            }
+        }
+        self.levels.iter().enumerate().all(|(level, range)| {
+            self.steps[range.start as usize..range.end as usize]
+                .iter()
+                .all(|s| {
+                    s.inputs.iter().all(|i| {
+                        let from = i.from as usize;
+                        from < tracks
+                            && matches!(i.tap, Tap::PostMixer | Tap::PostFx)
                             && i.delay == 0
+                            // Rendered already, unless it is explicitly a feedback tap.
+                            && (i.feedback || (level_of[from] as usize) < level)
                     })
-            })
+                })
+        })
     }
 }
 
@@ -271,7 +333,7 @@ mod tests {
             vec![
                 step(0, vec![]),
                 step(1, vec![]),
-                step(MASTER_STEP, vec![BusIn::post_mixer(0)]),
+                step(2, vec![BusIn::post_mixer(0)]),
             ],
             vec![0..2, 2..3],
         )
@@ -299,7 +361,7 @@ mod tests {
         p.make_flat(3);
         assert_eq!(p.steps.len(), 4);
         assert_eq!(p.levels, [0..3, 3..4]);
-        assert_eq!(p.steps[3].track, MASTER_STEP);
+        assert_eq!(p.steps[3].track, 3);
         assert_eq!(
             p.steps[3].inputs.iter().map(|i| i.from).collect::<Vec<_>>(),
             [0, 1, 2]
@@ -361,7 +423,7 @@ mod tests {
 
         let mut p = good();
         p.steps[0].inputs.push(BusIn::post_mixer(1));
-        assert!(!p.fits(2), "only the Master has inputs");
+        assert!(!p.fits(2), "an input from a track in the same level");
 
         let mut p = good();
         p.buses = 1;

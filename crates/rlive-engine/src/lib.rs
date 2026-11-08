@@ -26,12 +26,12 @@ pub use clip::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, W
 pub use commands::{ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, RecordCmd, TransportCmd};
 pub use graph::{
     AudioIo, BusIn, ChainAddr, ChainPath, ChainStep, RenderPlan, SidechainIn, Step, Tap, TrackRef,
-    MASTER_STEP, MAX_RACK_DEPTH,
+    MAX_RACK_DEPTH,
 };
 pub use lane::{ArrangementLane, LaneClip};
 pub use params::{
     mix_cell, BusLayout, CellIx, CellSpec, CellState, CellTarget, ControlHooks, ControlStep,
-    ParamBus, TrackRoutes, CONTROL_STEP,
+    ParamBus, TrackRoutes, CONTROL_STEP, MAX_SENDS, SEND_MAX_DB, SEND_MIN_DB,
 };
 pub use rack::{ChainNode, RackKind, RackNode, Zones, MAX_CHAINS};
 use rlive_core::{
@@ -43,9 +43,11 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 use track::BlockCtx;
-pub use track::{DeviceBody, DeviceSlot, MasterNode, MixSettings, TrackNode};
+pub use track::{DeviceBody, DeviceSlot, MixSettings, TrackNode};
 
 pub const MAX_TRACKS: usize = 256;
+/// How deep a group can be nested for solo purposes, in case a plan links groups in a loop.
+const MAX_GROUP_DEPTH: usize = 64;
 const COMMAND_CAPACITY: usize = 4096;
 const GARBAGE_CAPACITY: usize = 4096;
 const EVENT_CAPACITY: usize = 8192;
@@ -263,7 +265,8 @@ pub struct Engine {
     sample_rate: f64,
     max_block: usize,
     tracks: Vec<Box<TrackNode>>,
-    master: Box<MasterNode>,
+    /// The Main output: a track like any other, rendered last.
+    master: Box<TrackNode>,
     plans: Plans,
 
     playing: bool,
@@ -286,8 +289,8 @@ pub struct Engine {
     record_floor: f64,
     metronome: Metronome,
     smooth_coeff: f32,
-    /// Whether any track was soloed at the last control step.
-    any_solo: bool,
+    /// Solo has to be worked out again, as the plan or a Solo switch changed.
+    solo_dirty: bool,
 
     commands: rtrb::Consumer<EngineCommand>,
     garbage: rtrb::Producer<Garbage>,
@@ -308,7 +311,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         sample_rate,
         max_block,
         tracks: Vec::with_capacity(MAX_TRACKS),
-        master: Box::new(MasterNode::new(max_block)),
+        master: Box::new(TrackNode::master(max_block)),
         plans: Plans {
             compiled: None,
             flat: {
@@ -338,7 +341,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         },
         // ~5 ms one-pole smoothing.
         smooth_coeff: 1.0 - (-1.0 / (0.005 * sample_rate as f32)).exp(),
-        any_solo: false,
+        solo_dirty: true,
         commands: cmd_rx,
         garbage: gb_tx,
         events: ev_tx,
@@ -651,7 +654,7 @@ impl Engine {
         for t in self.tracks.iter_mut() {
             t.begin_block(time, &transport, &mut retire_clip);
         }
-        self.master.begin_block();
+        self.master.begin_block(time, &transport, &mut retire_clip);
 
         let ctx = BlockCtx {
             transport: &transport,
@@ -668,7 +671,7 @@ impl Engine {
             for step in steps {
                 self.gather_inputs(step, time, &transport, &maps.bars);
             }
-            self.run_control_steps(steps, level == 0, &ctx);
+            self.run_control_steps(plan, steps, level == 0, &ctx);
             self.finish_steps(steps, time, &ctx);
         }
         self.plans = plans;
@@ -693,8 +696,9 @@ impl Engine {
         self.shared.tempo.store(self.maps.tempo.bpm_at(self.tick));
     }
 
-    /// Sum what a step takes as input into its track, before its devices run. Only the Master
-    /// has inputs for now, and the metronome joins it there.
+    /// Sum what a step takes as input into its track, before its devices run. Track `tracks.len()`
+    /// is the Master, and the metronome joins it there. A group or return track's buffer holds
+    /// nothing else; a clip track's holds its clips, and takes no inputs yet.
     fn gather_inputs(
         &mut self,
         step: &Step,
@@ -702,32 +706,62 @@ impl Engine {
         transport: &TransportInfo,
         bars: &BarMap,
     ) {
-        if step.track != MASTER_STEP {
+        let frames = time.frames;
+        let coeff = self.smooth_coeff;
+        let to = step.track as usize;
+        if to == self.tracks.len() {
+            let t = &mut *self.master;
+            let (l, r) = (&mut t.left[..frames], &mut t.right[..frames]);
+            for input in &step.inputs {
+                if let Some(from) = self.tracks.get_mut(input.from as usize) {
+                    add_input(from, input, l, r, frames, coeff);
+                }
+            }
+            if transport.playing {
+                self.metronome.render(time, bars, l, r);
+            }
             return;
         }
-        let frames = time.frames;
-        let ml = &mut self.master.left[..frames];
-        let mr = &mut self.master.right[..frames];
-        ml.fill(0.0);
-        mr.fill(0.0);
-        for input in &step.inputs {
-            let Some(t) = self.tracks.get(input.from as usize) else {
-                continue;
-            };
-            let (l, r) = t.output(frames);
-            for i in 0..frames {
-                ml[i] += l[i];
-                mr[i] += r[i];
-            }
+        if to > self.tracks.len() {
+            return;
         }
-        if transport.playing {
-            self.metronome.render(time, bars, ml, mr);
+        let (before, rest) = self.tracks.split_at_mut(to);
+        let Some((dest, after)) = rest.split_first_mut() else {
+            return;
+        };
+        for input in &step.inputs {
+            let from = input.from as usize;
+            if from == to {
+                dest.feedback_into_self(input, frames, coeff);
+                continue;
+            }
+            let source = if from < to {
+                before.get_mut(from)
+            } else {
+                after.get_mut(from - to - 1)
+            };
+            if let Some(source) = source {
+                add_input(
+                    source,
+                    input,
+                    &mut dest.left,
+                    &mut dest.right,
+                    frames,
+                    coeff,
+                );
+            }
         }
     }
 
     /// Resolve the parameters of some steps at each control step of the block.
-    fn run_control_steps(&mut self, steps: &[Step], take_commands: bool, ctx: &BlockCtx) {
-        let has_tracks = steps.iter().any(|s| s.track != MASTER_STEP);
+    fn run_control_steps(
+        &mut self,
+        plan: &RenderPlan,
+        steps: &[Step],
+        take_commands: bool,
+        ctx: &BlockCtx,
+    ) {
+        let master = self.tracks.len() as u32;
         let mut index = 0;
         let mut offset = 0;
         while offset < ctx.frames {
@@ -737,25 +771,34 @@ impl Engine {
             }
             let events = &mut self.events;
             for step in steps {
-                if step.track == MASTER_STEP {
-                    self.master
-                        .control_step(index, offset, ctx, &mut |d, p, v| {
-                            push_param_changed(events, TrackRef::Master, d, p, v)
-                        });
-                } else if let Some(t) = self.tracks.get_mut(step.track as usize) {
+                let is_master = step.track == master;
+                let t = if is_master {
+                    Some(&mut *self.master)
+                } else {
+                    self.tracks.get_mut(step.track as usize).map(|t| &mut **t)
+                };
+                if let Some(t) = t {
                     t.control_step(index, offset, ctx, &mut |t, d, p, v| {
-                        push_param_changed(events, TrackRef::Track(t), d, p, v)
+                        let owner = if is_master {
+                            TrackRef::Master
+                        } else {
+                            TrackRef::Track(t)
+                        };
+                        push_param_changed(events, owner, d, p, v)
                     });
                 }
             }
-            if has_tracks {
-                let any_solo = self.tracks.iter().any(|t| t.mix.solo);
-                let solo_changed = any_solo != self.any_solo;
-                self.any_solo = any_solo;
-                for step in steps {
-                    if let Some(t) = self.tracks.get_mut(step.track as usize) {
-                        t.update_mix(offset, any_solo, solo_changed);
-                    }
+            if take_commands {
+                self.resolve_solo(plan);
+            }
+            for step in steps {
+                let t = if step.track == master {
+                    Some(&mut *self.master)
+                } else {
+                    self.tracks.get_mut(step.track as usize).map(|t| &mut **t)
+                };
+                if let Some(t) = t {
+                    t.update_mix(offset);
                 }
             }
             index += 1;
@@ -763,24 +806,120 @@ impl Engine {
         }
     }
 
+    /// Work out what solo leaves audible across every track, when a Solo switch changed. Reads
+    /// each switch's cell as well as its resolved value, so a group that renders later is seen
+    /// at this same step, and a Macro on Solo still counts.
+    fn resolve_solo(&mut self, plan: &RenderPlan) {
+        let (mut any_track, mut any_return) = (false, false);
+        let mut changed = std::mem::take(&mut self.solo_dirty);
+        for (i, t) in self.tracks.iter_mut().enumerate() {
+            let solo = t.mix.solo || t.bus.base(mix_cell::SOLO).is_some_and(|v| v >= 0.5);
+            changed |= solo != t.soloed;
+            t.soloed = solo;
+            if solo {
+                if plan.returns.contains(&(i as u32)) {
+                    any_return = true;
+                } else {
+                    any_track = true;
+                }
+            }
+        }
+        if !changed {
+            return;
+        }
+        for t in self.tracks.iter_mut() {
+            t.holds_solo = false;
+        }
+        let parent = |at: usize| plan.groups.get(at).copied().flatten().map(|g| g as usize);
+        for i in 0..self.tracks.len() {
+            if !self.tracks[i].soloed {
+                continue;
+            }
+            let (mut at, mut depth) = (parent(i), 0);
+            while let Some(g) = at.filter(|_| depth < MAX_GROUP_DEPTH) {
+                if let Some(t) = self.tracks.get_mut(g) {
+                    t.holds_solo = true;
+                }
+                at = parent(g);
+                depth += 1;
+            }
+        }
+        let any_solo = any_track || any_return;
+        for i in 0..self.tracks.len() {
+            let t = &self.tracks[i];
+            let is_return = plan.returns.contains(&(i as u32));
+            let open = if is_return {
+                t.soloed || (!any_return && (!any_track || plan.solo_in_place))
+            } else if !any_solo || t.soloed || t.holds_solo {
+                true
+            } else {
+                let (mut at, mut depth, mut soloed) = (parent(i), 0, false);
+                while let Some(g) = at.filter(|_| depth < MAX_GROUP_DEPTH && !soloed) {
+                    soloed = self.tracks.get(g).is_some_and(|t| t.soloed);
+                    at = parent(g);
+                    depth += 1;
+                }
+                soloed
+            };
+            self.tracks[i].set_solo_gates(open, open || any_return);
+        }
+    }
+
     /// Run what is left of some steps' chains and take them through the mixer stage.
     fn finish_steps(&mut self, steps: &[Step], time: BlockTime, ctx: &BlockCtx) {
         let events = &mut self.events;
+        let master = self.tracks.len() as u32;
+        let coeff = self.smooth_coeff;
         for step in steps {
-            if step.track == MASTER_STEP {
-                self.master.finish(
-                    ctx,
-                    &self.shared.master_meter,
-                    self.smooth_coeff,
-                    &mut |d, p, v| push_param_changed(events, TrackRef::Master, d, p, v),
-                );
-            } else if let Some(t) = self.tracks.get_mut(step.track as usize) {
-                t.finish_block(time, ctx, &mut |t, d, p, v| {
-                    push_param_changed(events, TrackRef::Track(t), d, p, v)
-                });
-                t.apply_mix(time.frames, self.smooth_coeff);
+            let is_master = step.track == master;
+            let t = if is_master {
+                Some(&mut *self.master)
+            } else {
+                self.tracks.get_mut(step.track as usize).map(|t| &mut **t)
+            };
+            let Some(t) = t else {
+                continue;
+            };
+            t.finish_block(time, ctx, &mut |t, d, p, v| {
+                let owner = if is_master {
+                    TrackRef::Master
+                } else {
+                    TrackRef::Track(t)
+                };
+                push_param_changed(events, owner, d, p, v)
+            });
+            t.prepare_sends(time.frames, coeff);
+            t.apply_mix(time.frames, coeff);
+            if is_master {
+                let (l, r) = t.output(time.frames);
+                self.shared.master_meter.update(l, r);
             }
         }
+    }
+}
+
+/// Add one input to a track's buffers: the source's main output, or its send.
+fn add_input(
+    from: &mut TrackNode,
+    input: &BusIn,
+    left: &mut [f32],
+    right: &mut [f32],
+    frames: usize,
+    coeff: f32,
+) {
+    if input.gain.is_some() {
+        from.send_into(
+            input,
+            (&mut left[..frames], &mut right[..frames]),
+            frames,
+            coeff,
+        );
+        return;
+    }
+    let (l, r) = from.output(frames);
+    for i in 0..frames {
+        left[i] += l[i];
+        right[i] += r[i];
     }
 }
 

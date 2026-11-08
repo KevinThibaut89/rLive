@@ -1,14 +1,14 @@
 //! Session view, laid out like Ableton Live:
 //!
 //! ```text
-//! ┌ track headers (sticky) ─────────────┬ Master ┐
-//! │ clip grid (scrolls ↕ and ↔)          │ scenes │
-//! ├ clip stop buttons (sticky) ─────────┼ StopAll┤
-//! └ mixer strips (sticky, resizable) ───┴ master ┘
+//! ┌ track headers (sticky) ──────┬ returns ┬ Master ┐
+//! │ clip grid (scrolls ↕ and ↔)   │         │ scenes │
+//! ├ clip stop buttons (sticky) ──┼         ┼ StopAll┤
+//! └ mixer strips (sticky, resize) ┴ strips  ┴ master ┘
 //! ```
 //!
-//! Track widths and slot heights adapt to the window; headers, stop row, mixer and the
-//! Master/scene column stay put while the grid scrolls.
+//! Track widths and slot heights adapt to the window; headers, stop row, mixer, return tracks and
+//! the Master/scene column stay put while the grid scrolls.
 
 use super::icons;
 use super::theme::{self, *};
@@ -21,7 +21,7 @@ use egui::{
 use rlive_core::TrackId;
 use rlive_engine::mix_cell;
 use rlive_engine::shared::{NO_SLOT, STOP_QUEUED};
-use rlive_project::{ArrangementClip, Clip, TrackKind, PALETTE};
+use rlive_project::{ArrangementClip, Clip, TrackKind, PALETTE, SEND_OFF_DB};
 use std::sync::atomic::Ordering;
 
 const HEADER_H: f32 = 22.0;
@@ -32,6 +32,27 @@ const MIN_SLOT_H: f32 = 20.0;
 const MAX_SLOT_H: f32 = 26.0;
 const ADD_COL_W: f32 = 36.0;
 const SCROLLBAR: f32 = 6.0;
+const FOLD_W: f32 = 14.0;
+/// Room each send takes in a mixer strip.
+const SEND_RADIUS: f32 = 9.0;
+const SEND_H: f32 = 26.0;
+
+/// Updates the multi-selection for a click on a track.
+fn click_track(state: &mut UiState, ui: &egui::Ui, id: TrackId) {
+    let m = ui.input(|i| i.modifiers);
+    if m.shift || m.command {
+        match state.selected_tracks.iter().position(|t| *t == id) {
+            Some(i) => {
+                state.selected_tracks.remove(i);
+            }
+            None => state.selected_tracks.push(id),
+        }
+    } else {
+        state.selected_tracks = vec![id];
+    }
+    state.selected = Some(ChainRef::Track(id));
+    state.detail = Detail::Devices;
+}
 
 /// Layout state that persists across frames.
 pub struct SessionLayout {
@@ -76,6 +97,8 @@ struct Geo {
     slot_h: f32,
     tracks_left: f32,
     tracks_right: f32,
+    return_w: f32,
+    returns: Rect,
     master: Rect,
     header: Rect,
     grid: Rect,
@@ -105,12 +128,23 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let bg = ui.allocate_rect(full, Sense::click());
     ui.painter().rect_filled(full, 0.0, GRID_BG);
 
-    let n_tracks = session.project.tracks.len();
+    // Only what isn't folded away inside a group gets a column.
+    let visible = session.project.visible_tracks();
+    let n_tracks = visible.len();
     let n_scenes = session.project.scenes.len();
+    let n_returns = session.project.returns.len();
 
     // ---- geometry
     let master_w = (full.width() * 0.13).clamp(112.0, 150.0);
     let master_x = full.right() - master_w;
+    let return_w = if n_returns == 0 {
+        0.0
+    } else {
+        (full.width() * 0.3 / n_returns as f32)
+            .clamp(64.0, 92.0)
+            .floor()
+    };
+    let tracks_right = master_x - return_w * n_returns as f32;
     let mixer_h = if state.layout.show_mixer {
         // On short windows the mixer gives room to the clip grid.
         state
@@ -122,18 +156,18 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     };
     let mixer = Rect::from_min_max(
         Pos2::new(full.left(), full.bottom() - mixer_h),
-        Pos2::new(master_x, full.bottom()),
+        Pos2::new(tracks_right, full.bottom()),
     );
     let stop_row = Rect::from_min_max(
         Pos2::new(full.left(), mixer.top() - STOP_ROW_H),
-        Pos2::new(master_x, mixer.top()),
+        Pos2::new(tracks_right, mixer.top()),
     );
-    let header = Rect::from_min_max(full.min, Pos2::new(master_x, full.top() + HEADER_H));
+    let header = Rect::from_min_max(full.min, Pos2::new(tracks_right, full.top() + HEADER_H));
     let grid = Rect::from_min_max(
         Pos2::new(full.left(), header.bottom()),
-        Pos2::new(master_x, stop_row.top()),
+        Pos2::new(tracks_right, stop_row.top()),
     );
-    let avail_w = (master_x - full.left() - ADD_COL_W).max(10.0);
+    let avail_w = (tracks_right - full.left() - ADD_COL_W).max(10.0);
     let track_w = if n_tracks == 0 {
         MAX_TRACK_W
     } else {
@@ -152,7 +186,12 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         track_w,
         slot_h,
         tracks_left: full.left(),
-        tracks_right: master_x,
+        tracks_right,
+        return_w,
+        returns: Rect::from_min_max(
+            Pos2::new(tracks_right, full.top()),
+            Pos2::new(master_x, full.bottom()),
+        ),
         master: Rect::from_min_max(Pos2::new(master_x, full.top()), full.max),
         header,
         grid,
@@ -164,7 +203,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     // ---- scrolling
     let content_w = n_tracks as f32 * track_w + ADD_COL_W;
     let content_h = n_scenes as f32 * slot_h;
-    let max_x = (content_w - (master_x - full.left())).max(0.0);
+    let max_x = (content_w - (tracks_right - full.left())).max(0.0);
     let max_y = (content_h - grid.height()).max(0.0);
     if bg.contains_pointer() || ui.rect_contains_pointer(full) {
         let (delta, shift) = ui.input(|i| (i.smooth_scroll_delta, i.modifiers.shift));
@@ -184,13 +223,16 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let blink = (ui.input(|i| i.time) * 3.0).fract() < 0.5;
 
     // ---- tracks
-    let ids: Vec<TrackId> = session.project.tracks.iter().map(|t| t.id).collect();
-    for (i, id) in ids.iter().enumerate() {
-        let x = g.track_x(i, scroll.x);
+    let columns: Vec<(TrackId, usize)> = visible
+        .iter()
+        .map(|&i| (session.project.tracks[i].id, i))
+        .collect();
+    for (col, (id, i)) in columns.iter().enumerate() {
+        let x = g.track_x(col, scroll.x);
         if x + track_w < full.left() || x > g.tracks_right {
             continue; // off screen
         }
-        track_column(ui, session, state, &g, *id, i, x, scroll.y, blink);
+        track_column(ui, session, state, &g, *id, *i, x, scroll.y, blink);
     }
 
     // Empty area right of the last track: click = new MIDI track, drop = new track.
@@ -213,17 +255,167 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         [g.stop_row.left_top(), g.stop_row.right_top()],
         Stroke::new(1.0, SEPARATOR),
     );
+    if n_returns > 0 {
+        p.line_segment(
+            [g.returns.left_top(), g.returns.left_bottom()],
+            Stroke::new(2.0, SEPARATOR),
+        );
+    }
     p.line_segment(
         [g.master.left_top(), g.master.left_bottom()],
         Stroke::new(2.0, SEPARATOR),
     );
 
+    let returns: Vec<TrackId> = session.project.returns.iter().map(|t| t.id).collect();
+    for (i, id) in returns.iter().enumerate() {
+        return_column(ui, session, state, &g, *id, i);
+    }
     master_column(ui, session, state, &g, scroll.y, blink);
     mixer_splitter(ui, state, &g);
     scrollbars(ui, state, &g, full, content_w, content_h, max_x, max_y);
 
     if bg.clicked() {
         state.selected_clip = None;
+        state.group_slot = None;
+    }
+}
+
+/// A return track's column: its header, an empty stretch for the grid, and its mixer strip.
+fn return_column(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    g: &Geo,
+    id: TrackId,
+    index: usize,
+) {
+    let Some(t) = session.project.track(id) else {
+        return;
+    };
+    let (name, color) = (t.name.clone(), t.color);
+    let selected = state.selected == Some(ChainRef::Track(id));
+    let track_color = rgb(color);
+    let x = g.returns.left() + index as f32 * g.return_w;
+    let w = g.return_w - 1.0;
+    let body = Rect::from_min_max(
+        Pos2::new(x, g.header.bottom()),
+        Pos2::new(x + w, g.mixer.top()),
+    );
+    ui.painter().rect_filled(body, 0.0, PANEL_DARK);
+    let rect = Rect::from_min_size(Pos2::new(x, g.header.top()), Vec2::new(w, HEADER_H - 1.0));
+    let resp = ui.allocate_rect(rect, Sense::click());
+    let fill = if selected {
+        track_color
+    } else {
+        theme::darken(track_color, 0.35)
+    };
+    ui.painter().rect_filled(rect, 0.0, fill);
+    if selected {
+        widgets::outline(ui.painter(), rect, hex(0xffffff));
+    }
+    let renaming = matches!(&state.renaming, Some((tid, _)) if *tid == id);
+    if renaming {
+        let mut done = false;
+        if let Some((_, text)) = &mut state.renaming {
+            let r = ui.put(
+                rect.shrink(1.0),
+                egui::TextEdit::singleline(text).font(theme::font(11.5)),
+            );
+            r.request_focus();
+            done = r.lost_focus();
+        }
+        if done {
+            if let Some((_, text)) = state.renaming.take() {
+                if let Some(t) = session.project.track_mut(id) {
+                    t.name = text;
+                }
+                session.dirty = true;
+            }
+        }
+    } else {
+        let galley =
+            ui.painter()
+                .layout_no_wrap(name.clone(), theme::font_bold(11.0), theme::text_on(fill));
+        ui.painter()
+            .with_clip_rect(rect.intersect(ui.clip_rect()))
+            .galley(
+                Pos2::new(rect.left() + 5.0, rect.center().y - galley.size().y / 2.0),
+                galley,
+                Color32::WHITE,
+            );
+    }
+    if resp.clicked() {
+        click_track(state, ui, id);
+    }
+    if resp.double_clicked() {
+        state.renaming = Some((id, name.clone()));
+    }
+    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+        drop_on_track(session, state, id, &item, None);
+    }
+    let resp = info(
+        resp,
+        format!("Return track '{name}' — click to select, double-click to rename"),
+    );
+    resp.context_menu(|ui| return_menu(ui, session, state, id, &name));
+    if g.mixer.height() > 0.0 {
+        let rect = Rect::from_min_size(Pos2::new(x, g.mixer.top()), Vec2::new(w, g.mixer.height()));
+        let col_clip = Rect::from_min_max(
+            Pos2::new(g.returns.left(), g.mixer.top()),
+            Pos2::new(g.returns.right(), g.mixer.bottom()),
+        );
+        let mut cu = child(ui, col_clip, rect, Layout::top_down(egui::Align::Center));
+        let letter = ((b'A' + index as u8) as char).to_string();
+        mixer_strip(
+            &mut cu,
+            session,
+            state,
+            id,
+            &letter,
+            rect,
+            g.compact_mixer,
+            selected,
+            false,
+        );
+    }
+}
+
+pub(super) fn return_menu(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    id: TrackId,
+    name: &str,
+) {
+    if ui.button("Rename").clicked() {
+        state.renaming = Some((id, name.to_string()));
+        ui.close();
+    }
+    ui.menu_button("Color", |ui| {
+        if let Some(c) = color_picker(ui) {
+            if let Some(t) = session.project.track_mut(id) {
+                t.color = c;
+            }
+            session.dirty = true;
+            ui.close();
+        }
+    });
+    ui.separator();
+    if ui.button("Insert Return Track").clicked() {
+        if let Some(new) = session.add_return() {
+            state.selected = Some(ChainRef::Track(new));
+        }
+        ui.close();
+    }
+    if ui
+        .button(RichText::new("Delete Return Track").color(ARM_RED))
+        .clicked()
+    {
+        session.delete_return(id);
+        if state.selected == Some(ChainRef::Track(id)) {
+            state.selected = None;
+        }
+        ui.close();
     }
 }
 
@@ -242,7 +434,7 @@ fn track_column(
     let Some(t) = session.project.track(id) else {
         return;
     };
-    let (name, color, kind, arm) = (t.name.clone(), t.color, t.kind, t.arm);
+    let (name, color, kind, arm, folded) = (t.name.clone(), t.color, t.kind, t.arm, t.ui.folded);
     let shared = session.track_shared.get(&id).cloned();
     let playing_slot = shared
         .as_ref()
@@ -288,6 +480,17 @@ fn track_column(
             theme::darken(track_color, 0.35)
         };
         cu.painter().rect_filled(rect, 0.0, fill);
+        if let Some(group) = session.project.parent_group(id) {
+            let group_color = session
+                .project
+                .track(group)
+                .map_or(track_color, |t| rgb(t.color));
+            cu.painter().rect_filled(
+                Rect::from_min_size(rect.min, Vec2::new(rect.width(), 3.0)),
+                0.0,
+                group_color,
+            );
+        }
         if selected {
             widgets::outline(cu.painter(), rect, hex(0xffffff));
         }
@@ -316,7 +519,19 @@ fn track_column(
                 theme::font_bold(11.0),
                 theme::text_on(fill),
             );
-            let clip_r = rect.shrink2(Vec2::new(5.0, 0.0));
+            let mut clip_r = rect.shrink2(Vec2::new(5.0, 0.0));
+            if kind == TrackKind::Group {
+                icons::fold(
+                    cu.painter(),
+                    Rect::from_center_size(
+                        Pos2::new(rect.left() + FOLD_W / 2.0, rect.center().y),
+                        Vec2::splat(FOLD_W),
+                    ),
+                    !folded,
+                    theme::text_on(fill),
+                );
+                clip_r.min.x += FOLD_W;
+            }
             cu.painter()
                 .with_clip_rect(clip_r.intersect(cu.clip_rect()))
                 .galley(
@@ -325,18 +540,33 @@ fn track_column(
                     Color32::WHITE,
                 );
         }
+        let on_fold = kind == TrackKind::Group
+            && resp
+                .interact_pointer_pos()
+                .is_some_and(|pos| pos.x < rect.left() + FOLD_W);
         if resp.clicked() {
-            state.selected = Some(ChainRef::Track(id));
-            state.detail = Detail::Devices;
+            if on_fold {
+                session.set_folded(id, !folded);
+            } else {
+                click_track(state, ui, id);
+            }
         }
-        if resp.double_clicked() {
+        if resp.double_clicked() && !on_fold {
             state.renaming = Some((id, name.clone()));
         }
-        if resp.dnd_hover_payload::<BrowserItem>().is_some() {
+        resp.dnd_set_drag_payload(TrackDrag(id));
+        if resp.dnd_hover_payload::<BrowserItem>().is_some()
+            || resp.dnd_hover_payload::<TrackDrag>().is_some()
+        {
             widgets::outline(cu.painter(), rect, ACCENT);
         }
         if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
             drop_on_track(session, state, id, &item, None);
+        }
+        if let Some(dragged) = resp.dnd_release_payload::<TrackDrag>() {
+            if dragged.0 != id {
+                drop_track(session, dragged.0, id, kind);
+            }
         }
         let resp = info(
             resp,
@@ -354,6 +584,10 @@ fn track_column(
     for slot in first..last {
         let y = g.slot_y(slot, scroll_y);
         let rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w - 1.0, g.slot_h - 1.0));
+        if kind == TrackKind::Group {
+            group_slot(ui, session, state, g, col_clip, id, slot, rect);
+            continue;
+        }
         let clip_info = session
             .clip(id, slot)
             .map(|c| (c.name.clone(), c.color, c.length));
@@ -365,7 +599,10 @@ fn track_column(
         );
         let resp = cu.allocate_rect(rect, Sense::click_and_drag());
         let p = cu.painter().clone();
-        let is_sel = state.selected_clip == Some(ClipRef::slot(id, slot));
+        let is_sel = state.selected_clip == Some(ClipRef::slot(id, slot))
+            || state.group_slot.is_some_and(|(group, at)| {
+                at == slot && session.project.ancestors(id).contains(&group)
+            });
         let launch = Rect::from_min_size(rect.min, Vec2::new(g.slot_h.min(22.0), rect.height()));
         let over_launch = resp.hover_pos().is_some_and(|pos| launch.contains(pos));
         let is_playing = playing_slot == slot as i32;
@@ -459,6 +696,7 @@ fn track_column(
 
         if resp.clicked() {
             state.selected = Some(ChainRef::Track(id));
+            state.group_slot = None;
             if over_launch {
                 if clip_info.is_some() {
                     session.launch_clip(id, slot);
@@ -541,7 +779,8 @@ fn track_column(
                 PANEL_DARK
             },
         );
-        let active = playing_slot != NO_SLOT;
+        let active =
+            playing_slot != NO_SLOT || (kind == TrackKind::Group && group_is_playing(session, id));
         let col = if queued_slot == STOP_QUEUED && blink {
             ACCENT
         } else if active {
@@ -554,7 +793,11 @@ fn track_column(
             Rect::from_center_size(rect.center(), Vec2::splat(rect.height())),
             col,
         );
-        if info(resp, "Stop the clip playing on this track").clicked() {
+        if kind == TrackKind::Group {
+            if info(resp, "Stop every clip in this group").clicked() {
+                session.stop_group(id);
+            }
+        } else if info(resp, "Stop the clip playing on this track").clicked() {
             session.stop_track(id);
         }
     }
@@ -576,12 +819,121 @@ fn track_column(
             session,
             state,
             id,
-            index,
+            &(index + 1).to_string(),
             rect,
             g.compact_mixer,
             selected,
+            kind != TrackKind::Group,
         );
     }
+}
+
+/// A group track's slot: launches and stops what its members have in this scene.
+#[allow(clippy::too_many_arguments)]
+fn group_slot(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    g: &Geo,
+    col_clip: Rect,
+    id: TrackId,
+    slot: usize,
+    rect: Rect,
+) {
+    let mut cu = child(
+        ui,
+        g.grid.intersect(col_clip),
+        rect,
+        Layout::left_to_right(egui::Align::Center),
+    );
+    let resp = cu.allocate_rect(rect, Sense::click());
+    let p = cu.painter().clone();
+    let filled = session.group_slot_has_clip(id, slot);
+    let launch = Rect::from_min_size(rect.min, Vec2::new(g.slot_h.min(22.0), rect.height()));
+    let stop = Rect::from_min_size(
+        Pos2::new(rect.right() - launch.width(), rect.top()),
+        Vec2::new(launch.width(), rect.height()),
+    );
+    let over_launch = resp.hover_pos().is_some_and(|pos| launch.contains(pos));
+    let over_stop = resp.hover_pos().is_some_and(|pos| stop.contains(pos));
+    let is_sel = state.group_slot == Some((id, slot));
+    if filled {
+        // Shaded by the left-most clip in the scene.
+        let color = session
+            .project
+            .group_contents(id)
+            .iter()
+            .find_map(|t| session.clip(*t, slot))
+            .map_or(RAISED, |c| rgb(c.color));
+        p.rect_filled(rect, 0.0, theme::darken(color, 0.55));
+        icons::play(
+            &p,
+            launch,
+            if over_launch {
+                hex(0xffffff)
+            } else {
+                hex(0xbdbdbd)
+            },
+        );
+        icons::stop(
+            &p,
+            stop.shrink(3.0),
+            if over_stop {
+                hex(0xffffff)
+            } else {
+                hex(0x8a8a8a)
+            },
+        );
+    } else {
+        p.rect_filled(rect, 0.0, SLOT_EMPTY);
+    }
+    if is_sel {
+        widgets::outline(&p, rect, hex(0xffffff));
+    }
+    if resp.clicked() && filled {
+        if over_launch {
+            session.launch_group_slot(id, slot);
+        } else if over_stop {
+            session.stop_group(id);
+        } else {
+            // Selects all of the group's clips in this scene.
+            state.selected = Some(ChainRef::Track(id));
+            state.selected_clip = None;
+            state.group_slot = Some((id, slot));
+        }
+    }
+    let text = if filled {
+        "Group slot — ▶ launches its clips, ■ stops them, click selects them"
+    } else {
+        "No clips in this scene"
+    };
+    let _ = info(resp, text);
+}
+
+fn group_is_playing(session: &Session, group: TrackId) -> bool {
+    session.project.group_contents(group).iter().any(|t| {
+        session
+            .track_shared
+            .get(t)
+            .is_some_and(|s| s.playing_slot.load(Ordering::Relaxed) != NO_SLOT)
+    })
+}
+
+/// Drops a dragged track on another's header: into a group, or to that place in the list.
+fn drop_track(session: &mut Session, dragged: TrackId, target: TrackId, kind: TrackKind) {
+    if kind == TrackKind::Group {
+        session.move_into_group(dragged, target);
+        return;
+    }
+    let Some(at) = session.project.track_index(target) else {
+        return;
+    };
+    let block = session.project.track_block(dragged);
+    let to = session.project.tracks[..at]
+        .iter()
+        .filter(|t| !block.contains(&t.id))
+        .count();
+    session.move_track(dragged, to);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -590,10 +942,11 @@ fn mixer_strip(
     session: &mut Session,
     state: &mut UiState,
     id: TrackId,
-    index: usize,
+    label: &str,
     rect: Rect,
     compact: bool,
     selected: bool,
+    armable: bool,
 ) {
     let Some(t) = session.project.track(id) else {
         return;
@@ -601,6 +954,16 @@ fn mixer_strip(
     let (vol, pan, mute, solo, arm, color) =
         (t.volume_db, t.pan, t.mute, t.solo, t.arm, rgb(t.color));
     let chain = ChainRef::Track(id);
+    let is_return = t.kind == TrackKind::Return;
+    let pre_fader = t.pre_fader_sends;
+    let holds_solo = t.kind == TrackKind::Group && session.project.holds_solo(id);
+    let sends: Vec<(TrackId, f32, bool)> = session
+        .project
+        .returns
+        .iter()
+        .map(|r| (r.id, t.send_level(r.id), t.send_enabled(r.id)))
+        .collect();
+    let solo_in_place = session.project.solo_in_place;
     let meter = state.meters.get(&id).copied().unwrap_or_default();
     let p = ui.painter().clone();
     p.rect_filled(rect, 0.0, if selected { hex(0x363636) } else { PANEL });
@@ -626,6 +989,24 @@ fn mixer_strip(
     let mut y = inner.top() + 2.0;
 
     if !compact {
+        if is_return {
+            let toggle = Rect::from_center_size(
+                Pos2::new(inner.center().x, y + 8.0),
+                Vec2::new(inner.width().min(46.0), 15.0),
+            );
+            let mut bu = ui.new_child(UiBuilder::new().max_rect(toggle));
+            let label = if pre_fader { "Pre" } else { "Post" };
+            let r = widgets::state_button(&mut bu, toggle.size(), pre_fader, ACCENT, label);
+            if info(
+                r,
+                "Pre/Post — whether sends feed this return before or after each track's mixer",
+            )
+            .clicked()
+            {
+                session.set_pre_fader_sends(id, !pre_fader);
+            }
+            y += 18.0;
+        }
         let knob_r =
             Rect::from_center_size(Pos2::new(inner.center().x, y + 13.0), Vec2::new(28.0, 26.0));
         let mut ku = ui.new_child(UiBuilder::new().max_rect(knob_r));
@@ -638,6 +1019,9 @@ fn mixer_strip(
         Led::of(session.cell_state(chain, mix_cell::PAN))
             .paint(&p, knob_r.left_top() + Vec2::new(2.0, 2.0));
         y += 30.0;
+        if !sends.is_empty() {
+            y = send_knobs(ui, session, id, is_return, &sends, inner, y);
+        }
     }
 
     // Fader + meter take the remaining height above the buttons and dB box.
@@ -694,34 +1078,62 @@ fn mixer_strip(
         Vec2::new(bw, buttons_h),
         !shown_mute,
         ACTIVATOR,
-        &(index + 1).to_string(),
+        label,
     );
     if info(r, "Track Activator — click to mute/unmute").clicked() {
         new_mix.2 = !shown_mute;
     }
     let r = widgets::state_button(&mut bu, Vec2::new(bw, buttons_h), solo, SOLO_BLUE, "S");
-    if info(r, "Solo — Cmd-click to solo several tracks").clicked() {
+    if holds_solo && !solo {
+        // A soloed track somewhere inside: the button lights up half way.
+        let half =
+            Rect::from_min_size(r.rect.min, Vec2::new(r.rect.width() / 2.0, r.rect.height()));
+        p.rect_filled(half, 1.0, SOLO_BLUE);
+        p.text(
+            r.rect.center(),
+            Align2::CENTER_CENTER,
+            "S",
+            theme::font(10.5),
+            TEXT,
+        );
+    }
+    let r = info(
+        r,
+        "Solo — Cmd-click to solo several tracks; right-click for Solo in Place",
+    );
+    if r.clicked() {
         new_mix.3 = !solo;
         // Like Live: solo is exclusive unless Cmd is held.
         if !solo && !bu.input(|i| i.modifiers.command) {
             clear_other_solos(session, id);
         }
     }
-    let r = widgets::icon_button(
-        &mut bu,
-        Vec2::new(bw, buttons_h),
-        arm,
-        ARM_RED,
-        icons::record,
-    );
-    if info(
-        r,
-        "Arm — route MIDI input to this track (Cmd-click to arm several)",
-    )
-    .clicked()
-    {
-        let exclusive = !bu.input(|i| i.modifiers.command);
-        session.set_arm(id, !arm, exclusive);
+    r.context_menu(|ui| {
+        if ui
+            .selectable_label(solo_in_place, "Solo in Place")
+            .clicked()
+        {
+            session.set_solo_in_place(!solo_in_place);
+            ui.close();
+        }
+    });
+    if armable && !is_return {
+        let r = widgets::icon_button(
+            &mut bu,
+            Vec2::new(bw, buttons_h),
+            arm,
+            ARM_RED,
+            icons::record,
+        );
+        if info(
+            r,
+            "Arm — route MIDI input to this track (Cmd-click to arm several)",
+        )
+        .clicked()
+        {
+            let exclusive = !bu.input(|i| i.modifiers.command);
+            session.set_arm(id, !arm, exclusive);
+        }
     }
 
     if new_mix != (vol, pan, mute, solo) {
@@ -735,11 +1147,108 @@ fn mixer_strip(
     }
 }
 
+/// One knob per return track. Returns the height to carry on from.
+#[allow(clippy::too_many_arguments)]
+fn send_knobs(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    id: TrackId,
+    is_return: bool,
+    sends: &[(TrackId, f32, bool)],
+    inner: Rect,
+    y: f32,
+) -> f32 {
+    let per_row = ((inner.width() / (SEND_RADIUS * 2.0 + 6.0)).floor() as usize).max(1);
+    let rows = sends.len().div_ceil(per_row).min(2);
+    let shown = (per_row * rows).min(sends.len());
+    let p = ui.painter().clone();
+    for (n, (ret, db, enabled)) in sends.iter().take(shown).enumerate() {
+        let col = n % per_row;
+        let row = n / per_row;
+        let cell_w = inner.width() / per_row as f32;
+        let center = Pos2::new(
+            inner.left() + (col as f32 + 0.5) * cell_w,
+            y + SEND_RADIUS + 2.0 + row as f32 * SEND_H,
+        );
+        let hit = Rect::from_center_size(center, Vec2::splat(SEND_RADIUS * 2.0 + 4.0));
+        let resp = ui.interact(
+            hit,
+            ui.scope_id().with(("send", id, n)),
+            Sense::click_and_drag(),
+        );
+        let norm = ((*db as f64 - rlive_engine::SEND_MIN_DB)
+            / (rlive_engine::SEND_MAX_DB - rlive_engine::SEND_MIN_DB)) as f32;
+        let mut changed = None;
+        if resp.dragged() && *enabled {
+            let fine = ui.input(|i| i.modifiers.shift);
+            let delta = -resp.drag_delta().y / if fine { 600.0 } else { 120.0 };
+            let v = (norm + delta).clamp(0.0, 1.0);
+            let db_new = rlive_engine::SEND_MIN_DB + v as f64 * (0.0 - rlive_engine::SEND_MIN_DB);
+            changed = Some(db_new as f32);
+        }
+        if resp.double_clicked() && *enabled {
+            changed = Some(SEND_OFF_DB);
+        }
+        let tone = if !*enabled {
+            widgets::KnobTone::Disabled
+        } else if resp.hovered() || resp.dragged() {
+            widgets::KnobTone::Active
+        } else {
+            widgets::KnobTone::Normal
+        };
+        widgets::paint_knob(&p, center, SEND_RADIUS, norm, false, tone);
+        p.text(
+            center + Vec2::new(0.0, SEND_RADIUS + 3.0),
+            Align2::CENTER_CENTER,
+            ((b'A' + n as u8) as char).to_string(),
+            theme::font(9.0),
+            if *enabled { TEXT_DIM } else { TEXT_FAINT },
+        );
+        if let Some(value) = changed {
+            session.set_send(id, *ret, value);
+        }
+        let label = if *db <= SEND_OFF_DB + 0.5 {
+            "-inf".to_string()
+        } else {
+            format!("{db:.1} dB")
+        };
+        let text = if *enabled {
+            format!("Send {} — {label}", (b'A' + n as u8) as char)
+        } else {
+            format!(
+                "Send {} — disabled to prevent feedback; right-click to enable",
+                (b'A' + n as u8) as char
+            )
+        };
+        let resp = info(resp, text);
+        if is_return {
+            let (ret, enabled) = (*ret, *enabled);
+            resp.context_menu(|ui| {
+                let label = if enabled {
+                    "Disable Send"
+                } else {
+                    "Enable Send"
+                };
+                if ui.button(label).clicked() {
+                    session.set_send_enabled(id, ret, !enabled);
+                    ui.close();
+                }
+                if ui.button("Enable All Sends").clicked() {
+                    session.enable_all_sends(id);
+                    ui.close();
+                }
+            });
+        }
+    }
+    y + rows as f32 * SEND_H
+}
+
 fn clear_other_solos(session: &mut Session, id: TrackId) {
     let others: Vec<TrackId> = session
         .project
         .tracks
         .iter()
+        .chain(&session.project.returns)
         .filter(|t| t.id != id && t.solo)
         .map(|t| t.id)
         .collect();
@@ -1086,6 +1595,10 @@ fn scrollbars(
     }
 }
 
+/// A track header being dragged onto another, to reorder or group.
+#[derive(Clone, Copy)]
+struct TrackDrag(TrackId);
+
 #[derive(Clone, Copy)]
 pub(super) struct ClipDrag {
     pub track: TrackId,
@@ -1139,6 +1652,33 @@ pub(super) fn track_menu(
             ui.close();
         }
     });
+    let is_group = session.project.track(id).is_some_and(|t| t.is_group());
+    let selection = if state.selected_tracks.contains(&id) {
+        state.selected_tracks.clone()
+    } else {
+        vec![id]
+    };
+    if ui.button("Group Tracks   ⌘G").clicked() {
+        if let Some(g) = session.group_tracks(&selection) {
+            state.selected = Some(ChainRef::Track(g));
+            state.selected_tracks = vec![g];
+        }
+        ui.close();
+    }
+    if is_group {
+        if ui.button("Ungroup Tracks   ⌘⇧G").clicked() {
+            session.ungroup(id);
+            state.selected_tracks.clear();
+            ui.close();
+        }
+        if ui
+            .button("Assign Track Color to Grouped Tracks and Clips")
+            .clicked()
+        {
+            session.assign_group_color(id, state.main_view == super::MainView::Session);
+            ui.close();
+        }
+    }
     let idx = session.project.track_index(id).unwrap_or(0);
     if ui.button("Move Left").clicked() && idx > 0 {
         session.move_track(id, idx - 1);

@@ -6,27 +6,132 @@
 //! then the Master sums them all.
 
 use super::Session;
-use rlive_engine::{BusIn, EngineCommand, GraphOp, GraphTxn, RenderPlan, Step, MASTER_STEP};
-use rlive_project::Project;
+use rlive_engine::{
+    mix_cell, BusIn, EngineCommand, GraphOp, GraphTxn, RenderPlan, Step, MAX_SENDS,
+};
+use rlive_project::{Project, Route, Track, TrackKind};
 
-/// The render plan for a project: every track, summed to the Master in track order.
+/// Where a track's main output goes, as an engine index. `None` for nowhere (Sends Only, or a
+/// destination it has no route to). Tracks not yet routable by A5 stay on Main.
+fn main_destination(project: &Project, t: &Track, master: usize) -> Option<usize> {
+    match &t.routing.output {
+        Route::None | Route::SendsOnly => None,
+        Route::Track { track, .. } if t.kind != TrackKind::Return => {
+            let target = project.track(*track).filter(|d| d.is_group());
+            match target {
+                Some(_) => project.track_index(*track),
+                None => Some(master),
+            }
+        }
+        Route::Default if t.kind != TrackKind::Return => match project.parent_group(t.id) {
+            Some(g) => project.track_index(g),
+            None => Some(master),
+        },
+        _ => Some(master),
+    }
+}
+
+/// The render plan for a project: every track feeds its group or the Master, every clip and group
+/// track feeds the returns through its sends, and tracks render after whatever feeds them. Group
+/// nesting is what makes levels of a plan; the Master is always the last step.
 pub fn compile_plan(project: &Project) -> RenderPlan {
-    let tracks = project.tracks.len() as u32;
-    let mut steps: Vec<Step> = (0..tracks)
-        .map(|track| Step {
-            track,
-            inputs: Vec::new(),
+    let tracks = project.tracks.len();
+    let returns = project.returns.len();
+    let all: Vec<&Track> = project.tracks.iter().chain(&project.returns).collect();
+    let master = tracks + returns;
+
+    // Main outputs. A group can't feed back into itself, however it is routed.
+    let mut outputs: Vec<Option<usize>> = vec![None; master];
+    for (i, t) in all.iter().enumerate() {
+        let dest = main_destination(project, t, master);
+        let mut seen = dest;
+        let mut hops = 0;
+        let mut loops = false;
+        while let Some(d) = seen.filter(|&d| d != master) {
+            loops |= d == i;
+            seen = outputs[d];
+            hops += 1;
+            if loops || hops > master {
+                break;
+            }
+        }
+        outputs[i] = if loops { None } else { dest };
+    }
+
+    let mut inputs: Vec<Vec<BusIn>> = vec![Vec::new(); master + 1];
+    for (i, dest) in outputs.iter().enumerate() {
+        if let Some(d) = dest {
+            inputs[*d].push(BusIn::post_mixer(i as u32));
+        }
+    }
+    // Sends, in track order, into the first MAX_SENDS returns.
+    for (i, t) in all.iter().enumerate() {
+        for (k, ret) in project.returns.iter().take(MAX_SENDS).enumerate() {
+            if !t.send_enabled(ret.id) {
+                continue;
+            }
+            let mut input = BusIn::send(i as u32, mix_cell::send(k), ret.pre_fader_sends);
+            // A return feeding itself or one before it hears the past, so the graph stays acyclic.
+            input.feedback = i >= tracks && k <= i - tracks;
+            inputs[tracks + k].push(input);
+        }
+    }
+
+    // Each track's depth: 0 for a track fed by nothing, and one past whatever feeds it.
+    let mut depth = vec![0u32; master + 1];
+    let mut known = vec![false; master + 1];
+    fn depth_of(i: usize, inputs: &[Vec<BusIn>], depth: &mut [u32], known: &mut [bool]) -> u32 {
+        if known[i] {
+            return depth[i];
+        }
+        known[i] = true;
+        let d = inputs[i]
+            .iter()
+            .filter(|input| !input.feedback)
+            .map(|input| depth_of(input.from as usize, inputs, depth, known) + 1)
+            .max()
+            .unwrap_or(0);
+        depth[i] = d;
+        d
+    }
+    let last = (0..master)
+        .map(|i| depth_of(i, &inputs, &mut depth, &mut known))
+        .max()
+        .unwrap_or(0);
+    let master_depth = last + 1;
+    depth[master] = master_depth;
+
+    let mut steps = Vec::with_capacity(master + 1);
+    let mut levels = Vec::with_capacity(master_depth as usize + 1);
+    for level in 0..=master_depth {
+        let start = steps.len() as u32;
+        for i in 0..=master {
+            if depth[i] == level {
+                steps.push(Step {
+                    track: i as u32,
+                    inputs: std::mem::take(&mut inputs[i]),
+                });
+            }
+        }
+        levels.push(start..steps.len() as u32);
+    }
+    let groups = all
+        .iter()
+        .map(|t| {
+            let parent = project.parent_group(t.id)?;
+            let acyclic = !project.ancestors(parent).contains(&t.id);
+            acyclic.then(|| project.track_index(parent).map(|g| g as u32))?
         })
         .collect();
-    steps.push(Step {
-        track: MASTER_STEP,
-        inputs: (0..tracks).map(BusIn::post_mixer).collect(),
-    });
+
     RenderPlan {
         steps,
-        levels: vec![0..tracks, tracks..tracks + 1],
+        levels,
         buses: 0,
         sidechains: Vec::new(),
+        groups,
+        returns: tracks as u32..master as u32,
+        solo_in_place: project.solo_in_place,
     }
 }
 
@@ -66,7 +171,7 @@ mod tests {
     fn every_track_renders_once_before_the_master() {
         let plan = compile_plan(&project(3));
         let steps: Vec<u32> = plan.steps.iter().map(|s| s.track).collect();
-        assert_eq!(steps, [0, 1, 2, MASTER_STEP]);
+        assert_eq!(steps, [0, 1, 2, 3]);
         assert!(plan.steps[..3].iter().all(|s| s.inputs.is_empty()));
     }
 
@@ -92,7 +197,7 @@ mod tests {
     fn an_empty_project_is_just_the_master() {
         let plan = compile_plan(&project(0));
         assert_eq!(plan.steps.len(), 1);
-        assert_eq!(plan.steps[0].track, MASTER_STEP);
+        assert_eq!(plan.steps[0].track, 0);
         assert!(plan.steps[0].inputs.is_empty());
         assert_eq!(plan.levels, [0..0, 0..1]);
     }
