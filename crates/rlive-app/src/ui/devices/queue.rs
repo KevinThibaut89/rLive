@@ -90,7 +90,7 @@ fn apply(
         }
         Action::LoadSample(id, slot) => {
             if let Some(path) = rfd::FileDialog::new()
-                .add_filter("WAV", &["wav"])
+                .add_filter("Audio", rlive_audio_io::AUDIO_EXTENSIONS)
                 .pick_file()
             {
                 session.set_device_sample_at(chain, id, slot, path);
@@ -222,6 +222,8 @@ mod tests {
         let mut q = ActionQueue::default();
         q.push(chain, Action::Add(BrowserItem::Sample(path.clone())));
         run(q, &mut s, &mut DeviceViewState::default());
+        s.samples.wait_idle();
+        s.idle();
         std::fs::remove_file(&path).ok();
         let sampler = &s.devices(chain)[0];
         assert_eq!(sampler.sample(0).map(|f| f.path.clone()), Some(path));

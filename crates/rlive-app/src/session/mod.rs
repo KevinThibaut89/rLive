@@ -13,6 +13,7 @@ mod graph;
 mod info;
 mod recording;
 mod routing;
+mod samples;
 mod timing;
 mod tracks;
 mod transport;
@@ -27,14 +28,17 @@ mod golden;
 #[cfg(test)]
 mod routing_tests;
 #[cfg(test)]
+mod sample_tests;
+#[cfg(test)]
 mod tests;
 
 pub use arrangement::{ArrMove, TrimEdge};
-pub use build::{descriptor_for, mix_of, Builder, DeviceRuntime, SampleCache};
+pub use build::{descriptor_for, mix_of, Builder, DeviceRuntime};
 pub use clips::ClipRef;
 pub use devices::ChainRef;
 pub use graph::compile_plan;
 pub use info::InfoTarget;
+pub use rlive_audio_io::SampleCache;
 
 use crate::recording::Recording;
 use crate::settings::ColorSettings;
@@ -73,6 +77,8 @@ pub struct Session {
     automation: automation::AutomationRecorder,
     /// The compensation the running plan was compiled for.
     timing: timing::Timing,
+    /// Device sample changes waiting for their file to load.
+    pending_samples: Vec<samples::PendingSample>,
 }
 
 impl Session {
@@ -95,7 +101,9 @@ impl Session {
             recording: None,
             automation: automation::AutomationRecorder::default(),
             timing: timing::Timing::default(),
+            pending_samples: Vec::new(),
         };
+        s.preload_samples();
         s.rebuild();
         s
     }
@@ -203,7 +211,9 @@ impl Session {
 
     pub fn new_project(&mut self) {
         self.project = Project::new_default();
+        self.samples.forget_failed();
         self.history = History::new(&self.project);
+        self.pending_samples.clear();
         self.path = None;
         self.dirty = false;
         self.rebuild();
@@ -212,7 +222,9 @@ impl Session {
     pub fn load(&mut self, path: &Path) -> Result<(), String> {
         let p = Project::load(path).map_err(|e| e.to_string())?;
         self.project = p;
+        self.samples.forget_failed();
         self.history = History::new(&self.project);
+        self.pending_samples.clear();
         self.path = Some(path.to_path_buf());
         self.dirty = false;
         // Plugin states in the file must win over the (about to be dropped) running instances.
@@ -247,6 +259,7 @@ impl Session {
 
     pub fn save(&mut self, path: &Path) -> Result<(), String> {
         self.capture_plugin_states();
+        self.record_fingerprints();
         let path = if path.extension().is_none() {
             path.with_extension(rlive_project::FILE_EXTENSION)
         } else {
@@ -265,6 +278,7 @@ impl Session {
     /// Call every UI frame: frees engine garbage and services plugin callbacks.
     pub fn idle(&mut self) {
         self.engine.collect_garbage();
+        self.poll_samples();
         while let Some(ev) = self.engine.poll_event() {
             match ev {
                 EngineEvent::ParamChanged {

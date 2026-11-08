@@ -10,7 +10,7 @@ builds and runs on Linux.
 
 - **Session view**: tracks × scenes clip launcher with quantized launching (none … 4 bars),
   scene launch, stop buttons, playing/queued indicators and per-clip progress.
-- **MIDI and audio clips**: looped or one-shot MIDI clips; WAV audio clips (played at original speed, no time-stretching yet).
+- **MIDI and audio clips**: looped or one-shot MIDI clips; audio clips from WAV, AIFF, FLAC, Ogg Vorbis, MP3 and M4A files (played at original speed, no time-stretching yet).
 - **Clip view**: piano roll with bar ruler and draggable loop end, velocity lane, draw
   (double-click), move, resize, delete notes; grid snap (Alt = free), quantize,
   "Duplicate Loop", live playhead, clickable keyboard for previewing, Cmd+wheel zoom.

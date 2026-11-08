@@ -141,12 +141,12 @@ Overview chapter; only behaviours stated here or foundational are listed.
 **Milestones:** A6, C13, C14
 
 **Samples**
-- `[ ]` Native WAV, AIFF, AIFF-C, FLAC, Ogg Vorbis; import MP3, M4A (Mac) [M]
+- `[x]` Native WAV, AIFF, AIFF-C, FLAC, Ogg Vorbis; import MP3, M4A (Mac) [M]
 - `[ ]` Disk streaming of any length, rate or depth, mono or stereo [L]
-- `[ ]` Decoding cache: minimum free space, maximum size, cleanup, location, auto-eviction [M]
+- `[x]` Decoding cache: minimum free space, maximum size, cleanup, location, auto-eviction [M]
 - `[ ]` Analysis sidecar: warp data, tempo, waveform, default clip; icon indicator; disable option [M]; .asd format itself [PROP if interop wanted]
 - `[ ]` Save Default Clip into sidecar, applies to future imports only [S] → sidecar
-- `[ ]` Waveform greyed and unplayable during analysis [S]
+- `[~]` Waveform greyed and unplayable during analysis [S]
 
 **Export**
 - `[ ]` Rendered Track: Main, All Individual, Selected, single named track; post-fader, equal lengths [M] → offline render

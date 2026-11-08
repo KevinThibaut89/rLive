@@ -10,6 +10,7 @@ use crate::session::{ClipRef, Session};
 use egui::{
     Align2, Color32, CursorIcon, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
 };
+use rlive_audio_io::SampleStatus;
 use rlive_core::{MidiMessage, PPQ};
 use rlive_project::{ClipContent, NoteData};
 use std::sync::atomic::Ordering;
@@ -394,28 +395,46 @@ fn audio_clip_panel(
             session.sync_ref(cref);
         }
     });
-    if let Ok(sample) = session.samples.get(path) {
-        let h = (ui.available_height() - 24.0).max(40.0);
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::hover());
-        let p = ui.painter_at(rect);
-        p.rect_filled(rect, 1.0, pal().grid_bg);
-        let n = sample.len().max(1);
+    match session.samples.status(path) {
+        Some(SampleStatus::Failed(reason)) => {
+            ui.label(RichText::new(reason).color(pal().arm_red));
+            return;
+        }
+        Some(SampleStatus::Ready(_)) => {}
+        _ => {
+            ui.label(RichText::new("Loading…").color(pal().text_faint));
+        }
+    }
+    let h = (ui.available_height() - 24.0).max(40.0);
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::hover());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 1.0, pal().grid_bg);
+    let loading = !session.samples.is_ready(path);
+    if let Some((peaks, sample_rate)) = session.samples.peaks(path) {
+        let color = if loading {
+            pal().text_faint
+        } else {
+            session
+                .clip_at(cref)
+                .map(|c| rgb(c.color))
+                .unwrap_or(pal().accent)
+        };
+        let n = peaks.frames().max(1);
         let cols = rect.width() as usize;
-        let color = session
-            .clip_at(cref)
-            .map(|c| rgb(c.color))
-            .unwrap_or(pal().accent);
-        if let Some((peaks, _)) = session.samples.peaks(path) {
+        let channels = if peaks.is_stereo() { 2 } else { 1 };
+        for ch in 0..channels {
+            let lane = rect.height() / channels as f32;
+            let top = rect.top() + ch as f32 * lane;
+            let mid = top + lane / 2.0;
             for x in 0..cols {
                 let a = x * n / cols;
                 let b = ((x + 1) * n / cols).max(a + 1).min(n);
-                let (lo, hi) = peaks.min_max(a, b);
-                let h = hi.abs().max(lo.abs()).min(1.0) * rect.height() * 0.48;
+                let (lo, hi) = peaks.min_max(ch, a, b);
                 let cx = rect.left() + x as f32;
                 p.line_segment(
                     [
-                        Pos2::new(cx, rect.center().y - h),
-                        Pos2::new(cx, rect.center().y + h),
+                        Pos2::new(cx, mid - hi.clamp(-1.0, 1.0) * lane * 0.48),
+                        Pos2::new(cx, mid - lo.clamp(-1.0, 1.0) * lane * 0.48),
                     ],
                     Stroke::new(1.0, color),
                 );
@@ -424,8 +443,8 @@ fn audio_clip_panel(
         ui.label(
             RichText::new(format!(
                 "{:.2} s · {} Hz · Warp off (plays at original speed)",
-                sample.duration_secs(),
-                sample.sample_rate
+                peaks.frames() as f64 / sample_rate.max(1.0),
+                sample_rate
             ))
             .small()
             .color(pal().text_dim),

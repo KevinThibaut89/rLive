@@ -1,6 +1,7 @@
 //! Persistent user preferences, as set in the Settings window.
 
 use crate::ui::theme::ThemeSettings;
+use rlive_audio_io::{CacheConfig, LoaderConfig};
 use rlive_project::{Project, PALETTE};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -59,6 +60,53 @@ impl ColorSettings {
     }
 }
 
+const GIB: f32 = 1024.0 * 1024.0 * 1024.0;
+
+/// The File & Folder tab's sample settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SampleSettings {
+    /// Write an analysis file next to each sample when it's first loaded.
+    pub create_analysis_files: bool,
+    /// How much of the disk to leave free, in GB.
+    pub minimum_free_space_gb: f32,
+    /// Whether the decoding cache has a size limit.
+    pub limit_cache_size: bool,
+    pub maximum_cache_size_gb: f32,
+    /// Where decoded files go; `None` is the system's cache folder.
+    pub cache_folder: Option<PathBuf>,
+}
+
+impl Default for SampleSettings {
+    fn default() -> Self {
+        Self {
+            create_analysis_files: true,
+            minimum_free_space_gb: 2.0,
+            limit_cache_size: true,
+            maximum_cache_size_gb: 20.0,
+            cache_folder: None,
+        }
+    }
+}
+
+impl SampleSettings {
+    pub fn loader_config(&self) -> LoaderConfig {
+        LoaderConfig {
+            create_analysis_files: self.create_analysis_files,
+            cache: CacheConfig {
+                folder: self
+                    .cache_folder
+                    .clone()
+                    .unwrap_or_else(LoaderConfig::default_cache_folder),
+                minimum_free_space: (self.minimum_free_space_gb.max(0.0) * GIB) as u64,
+                maximum_size: self
+                    .limit_cache_size
+                    .then_some((self.maximum_cache_size_gb.max(0.0) * GIB) as u64),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -76,6 +124,7 @@ pub struct Settings {
     /// Draw a border around the view that has keyboard focus.
     pub outline_focus: bool,
     pub scroll_bars: ScrollBars,
+    pub samples: SampleSettings,
 }
 
 impl Default for Settings {
@@ -93,6 +142,7 @@ impl Default for Settings {
             colors: ColorSettings::default(),
             outline_focus: false,
             scroll_bars: ScrollBars::default(),
+            samples: SampleSettings::default(),
         }
     }
 }
@@ -170,6 +220,13 @@ mod tests {
             },
             outline_focus: true,
             scroll_bars: ScrollBars::Always,
+            samples: SampleSettings {
+                create_analysis_files: false,
+                minimum_free_space_gb: 5.0,
+                limit_cache_size: false,
+                maximum_cache_size_gb: 40.0,
+                cache_folder: Some(PathBuf::from("/fast/cache")),
+            },
         };
         let path = temp_file("round-trip.json");
         settings.save_to(&path);
@@ -186,6 +243,26 @@ mod tests {
         assert_eq!(loaded.zoom, Some(1.2));
         assert_eq!(loaded.theme, ThemeSettings::default());
         assert!(loaded.show_info, "the Info View starts visible");
+    }
+
+    #[test]
+    fn sample_settings_become_the_loader_config() {
+        let defaults = SampleSettings::default().loader_config();
+        assert!(defaults.create_analysis_files);
+        assert_eq!(defaults.cache.maximum_size, Some(20 * 1024 * 1024 * 1024));
+        assert_eq!(defaults.cache.folder, LoaderConfig::default_cache_folder());
+        let chosen = SampleSettings {
+            create_analysis_files: false,
+            minimum_free_space_gb: 1.0,
+            limit_cache_size: false,
+            maximum_cache_size_gb: 1.0,
+            cache_folder: Some(PathBuf::from("/x")),
+        }
+        .loader_config();
+        assert!(!chosen.create_analysis_files);
+        assert_eq!(chosen.cache.minimum_free_space, 1024 * 1024 * 1024);
+        assert_eq!(chosen.cache.maximum_size, None, "no limit set");
+        assert_eq!(chosen.cache.folder, PathBuf::from("/x"));
     }
 
     #[test]

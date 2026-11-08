@@ -2,8 +2,8 @@ use crate::defaults::is_default;
 use crate::id_walk::walk_ids;
 use crate::migrate;
 use crate::{
-    Arrangement, Clip, Device, GroovePool, KeyMapping, MidiMapping, NoteData, Scene, Track,
-    TrackKind, Tuning,
+    Arrangement, Clip, ClipContent, Device, DeviceKind, FileRef, GroovePool, KeyMapping,
+    MidiMapping, NoteData, Scene, Track, TrackKind, Tuning,
 };
 use rlive_core::{ids::reserve_id, Quantize, TimeSignature, TrackId, PPQ};
 use serde::{Deserialize, Serialize};
@@ -198,6 +198,75 @@ impl Project {
     }
 
     /// A clip or group track, or a return track.
+    /// Calls `f` for every reference to an audio file in the project: clips in Session slots, on
+    /// the Arrangement and in take lanes, and the samples of devices at any depth.
+    pub fn for_each_file_ref(&self, f: &mut impl FnMut(&FileRef)) {
+        for t in self.tracks.iter().chain(&self.returns) {
+            for c in t.clips.iter().flatten() {
+                if let ClipContent::Audio { file, .. } = &c.content {
+                    f(file);
+                }
+            }
+            for c in t
+                .arrangement
+                .iter()
+                .chain(t.take_lanes.iter().flat_map(|l| &l.clips))
+            {
+                if let ClipContent::Audio { file, .. } = &c.clip.content {
+                    f(file);
+                }
+            }
+            for d in &t.devices {
+                d.for_each(&mut |d| {
+                    if let DeviceKind::Builtin { samples, .. } = &d.kind {
+                        samples.iter().flatten().for_each(&mut *f);
+                    }
+                });
+            }
+        }
+        for d in &self.master.devices {
+            d.for_each(&mut |d| {
+                if let DeviceKind::Builtin { samples, .. } = &d.kind {
+                    samples.iter().flatten().for_each(&mut *f);
+                }
+            });
+        }
+    }
+
+    /// [`for_each_file_ref`](Self::for_each_file_ref), for filling references in.
+    pub fn for_each_file_ref_mut(&mut self, f: &mut impl FnMut(&mut FileRef)) {
+        for t in self.tracks.iter_mut().chain(self.returns.iter_mut()) {
+            for c in t.clips.iter_mut().flatten() {
+                if let ClipContent::Audio { file, .. } = &mut c.content {
+                    f(file);
+                }
+            }
+            for c in t
+                .arrangement
+                .iter_mut()
+                .chain(t.take_lanes.iter_mut().flat_map(|l| &mut l.clips))
+            {
+                if let ClipContent::Audio { file, .. } = &mut c.clip.content {
+                    f(file);
+                }
+            }
+            for d in &mut t.devices {
+                d.for_each_mut(&mut |d| {
+                    if let DeviceKind::Builtin { samples, .. } = &mut d.kind {
+                        samples.iter_mut().flatten().for_each(&mut *f);
+                    }
+                });
+            }
+        }
+        for d in &mut self.master.devices {
+            d.for_each_mut(&mut |d| {
+                if let DeviceKind::Builtin { samples, .. } = &mut d.kind {
+                    samples.iter_mut().flatten().for_each(&mut *f);
+                }
+            });
+        }
+    }
+
     pub fn track(&self, id: TrackId) -> Option<&Track> {
         self.tracks.iter().chain(&self.returns).find(|t| t.id == id)
     }

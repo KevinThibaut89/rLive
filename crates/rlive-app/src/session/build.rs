@@ -2,12 +2,12 @@
 
 use super::automation::routes_for;
 use super::ChainRef;
-use crate::peaks::Peaks;
+use rlive_audio_io::{SampleCache, SampleStatus};
 use rlive_core::envelope::segment_value;
 use rlive_core::time::{BarMap, TempoMap, TempoPoint, TimeMaps};
 use rlive_core::warp::{self, WarpMap};
 use rlive_core::{DeviceId, ParamInfo, Ports, Processor, Section, ViewChannel};
-use rlive_devices::{DeviceInit, DeviceRole, SampleBuffer};
+use rlive_devices::{DeviceInit, DeviceRole};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
     mix_cell, ArrangementLane, AudioClip, BusLayout, ChainNode, ClipData, DeviceSlot, ExprPoint,
@@ -21,7 +21,6 @@ use rlive_project::{
     Track, TrackKind, Warp, WarpMode as ProjectWarpMode,
 };
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
@@ -125,34 +124,6 @@ fn warp_mode(warp: &Warp) -> warp::WarpMode {
     }
 }
 
-/// Loads audio files once and shares them.
-#[derive(Default)]
-pub struct SampleCache {
-    samples: HashMap<PathBuf, Arc<SampleBuffer>>,
-    peaks: HashMap<PathBuf, Arc<Peaks>>,
-}
-
-impl SampleCache {
-    pub fn get(&mut self, path: &Path) -> Result<Arc<SampleBuffer>, String> {
-        if let Some(s) = self.samples.get(path) {
-            return Ok(s.clone());
-        }
-        let s = Arc::new(
-            rlive_devices::load_wav(path).map_err(|e| format!("{}: {e}", path.display()))?,
-        );
-        self.peaks
-            .insert(path.to_path_buf(), Arc::new(Peaks::build(&s.left)));
-        self.samples.insert(path.to_path_buf(), s.clone());
-        Ok(s)
-    }
-
-    /// The waveform summary of a loaded file, with its sample rate.
-    pub fn peaks(&self, path: &Path) -> Option<(Arc<Peaks>, f64)> {
-        let sample_rate = self.samples.get(path)?.sample_rate;
-        Some((self.peaks.get(path)?.clone(), sample_rate))
-    }
-}
-
 /// Builds engine nodes from project data.
 pub struct Builder<'a> {
     pub sample_rate: f64,
@@ -221,9 +192,11 @@ impl Builder<'_> {
                     let loaded = (0..sample_slots)
                         .map(|slot| {
                             let file = samples.get(slot).and_then(Option::as_ref)?;
-                            match self.samples.get(&file.path) {
-                                Ok(s) => Some(s),
-                                Err(e) => {
+                            match self.samples.request(&file.path) {
+                                SampleStatus::Ready(s) => Some(s),
+                                // The sample is handed over once it has finished loading.
+                                SampleStatus::Loading => None,
+                                SampleStatus::Failed(e) => {
                                     error = Some(e);
                                     None
                                 }
@@ -382,8 +355,10 @@ impl Builder<'_> {
         node
     }
 
-    pub fn clip(&mut self, clip: &Clip) -> Result<Arc<ClipData>, String> {
-        Ok(Arc::new(match &clip.content {
+    /// Compiles a clip. `None` means its sample hasn't finished loading or won't: the clip stays
+    /// out of the engine, so it can't be played, and the failure has already been reported.
+    pub fn clip(&mut self, clip: &Clip) -> Option<Arc<ClipData>> {
+        Some(Arc::new(match &clip.content {
             ClipContent::Midi { notes, .. } => {
                 // Deactivated notes never reach the engine.
                 let notes: Vec<Note> = notes
@@ -408,7 +383,9 @@ impl Builder<'_> {
                 warp,
                 ..
             } => {
-                let sample = self.samples.get(&file.path)?;
+                let SampleStatus::Ready(sample) = self.samples.request(&file.path) else {
+                    return None;
+                };
                 let sample_rate = sample.sample_rate;
                 let audio = AudioClip {
                     sample,
@@ -430,22 +407,17 @@ impl Builder<'_> {
         }))
     }
 
-    /// Compiles a timeline. Clips that fail to load are left out and reported.
-    pub fn lane(
-        &mut self,
-        clips: &[ArrangementClip],
-        errors: &mut Vec<String>,
-    ) -> Arc<ArrangementLane> {
+    /// Compiles a timeline. Clips whose sample isn't there are left out.
+    pub fn lane(&mut self, clips: &[ArrangementClip]) -> Arc<ArrangementLane> {
         let mut lane = Vec::with_capacity(clips.len());
         for c in clips {
-            match self.clip(&c.clip) {
-                Ok(data) => lane.push(LaneClip {
+            if let Some(data) = self.clip(&c.clip) {
+                lane.push(LaneClip {
                     start: c.start,
                     end: c.end(),
                     offset: c.offset,
                     data,
-                }),
-                Err(e) => errors.push(e),
+                });
             }
         }
         Arc::new(ArrangementLane { clips: lane })
@@ -483,14 +455,11 @@ impl Builder<'_> {
         node.routes = routes_for(&track.automation, ChainRef::Track(track.id), &layout);
         layouts.insert(ChainRef::Track(track.id), layout);
         for (i, c) in track.clips.iter().enumerate() {
-            if let Some(c) = c {
-                match self.clip(c) {
-                    Ok(data) => node.set_slot(i, Some(data)),
-                    Err(e) => errors.push(e),
-                }
+            if let Some(data) = c.as_ref().and_then(|c| self.clip(c)) {
+                node.set_slot(i, Some(data));
             }
         }
-        node.set_lane(self.lane(&track.arrangement, errors));
+        node.set_lane(self.lane(&track.arrangement));
         Box::new(node)
     }
 
@@ -723,6 +692,7 @@ mod tests {
         rlive_devices::write_wav(path, &frames, &frames, 48_000).unwrap();
 
         let mut samples = SampleCache::default();
+        samples.wait_for([path]);
         let plugins = PluginCache::default();
         let mut b = Builder {
             sample_rate: 48_000.0,
@@ -736,12 +706,12 @@ mod tests {
             ..Clip::default()
         };
         // Warp off, the common case, stays the plain variant.
-        assert!(matches!(&*b.clip(&clip).unwrap(), ClipData::Audio(_)));
+        assert!(matches!(b.clip(&clip).as_deref(), Some(ClipData::Audio(_))));
         if let ClipContent::Audio { warp, .. } = &mut clip.content {
             warp.enabled = true;
             warp.mode = ProjectWarpMode::Complex;
         }
-        let built = b.clip(&clip).unwrap();
+        let built = b.clip(&clip).expect("loaded above");
         std::fs::remove_dir_all(&dir).ok();
         let ClipData::Warped(w) = &*built else {
             panic!("expected warped clip data");

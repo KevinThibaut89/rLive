@@ -1,6 +1,7 @@
 //! Device chains, nested to any depth: adding, removing and changing devices.
 
 use super::{build, Session};
+use rlive_audio_io::SampleStatus;
 use rlive_core::param::mixer;
 use rlive_core::{ChainId, DeviceId, ParamId, ParamInfo, TrackId};
 use rlive_devices::DeviceRole;
@@ -418,12 +419,20 @@ impl Session {
         slot: usize,
         path: PathBuf,
     ) {
-        if self.write_device_sample(chain, id, slot, FileRef::new(path)) {
+        if matches!(self.samples.status(&path), Some(SampleStatus::Failed(_))) {
+            // Asking for a file again is a reason to look at it again.
+            self.samples.forget(&path);
+        }
+        let file = FileRef::new(path);
+        if matches!(self.samples.request(&file.path), SampleStatus::Loading) {
+            // The sample it has now carries on until the new one is ready or turns out not to be.
+            self.queue_device_sample(chain, id, slot, file);
+        } else if self.write_device_sample(chain, id, slot, file) {
             self.mark_edit("Change Sample");
         }
     }
 
-    /// Loads a file into a device's sample slot, in the project and the engine.
+    /// Puts a file in a device's sample slot, in the project and, once it has loaded, the engine.
     pub(super) fn write_device_sample(
         &mut self,
         chain: ChainRef,
@@ -431,15 +440,18 @@ impl Session {
         slot: usize,
         file: FileRef,
     ) -> bool {
-        let loaded = self.samples.get(&file.path);
-        let error = loaded.as_ref().err().cloned();
+        let loaded = self.samples.request(&file.path);
+        let error = match &loaded {
+            SampleStatus::Failed(e) => Some(e.clone()),
+            _ => None,
+        };
         if let Some(rt) = self.runtimes.get_mut(&id) {
             rt.error = error.clone();
         }
-        let Ok(sample) = loaded else {
+        if error.is_some() {
             self.messages.extend(error);
             return false;
-        };
+        }
         let Some(dev) = self
             .chain_mut(chain)
             .and_then(|v| v.iter_mut().find(|d| d.id == id))
@@ -452,12 +464,14 @@ impl Session {
             }
             samples[slot] = Some(file);
         }
-        self.send_edits(vec![GraphOp::SetResource {
-            target: chain.into(),
-            device: id,
-            slot: slot as u32,
-            resource: sample,
-        }]);
+        if let SampleStatus::Ready(sample) = loaded {
+            self.send_edits(vec![GraphOp::SetResource {
+                target: chain.into(),
+                device: id,
+                slot: slot as u32,
+                resource: sample,
+            }]);
+        }
         true
     }
 

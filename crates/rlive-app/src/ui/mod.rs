@@ -150,6 +150,7 @@ impl RliveApp {
         let sender = handle.take_midi_sender();
         let plugins = PluginCache::load(&PluginCache::default_path());
         let mut session = Session::new(handle, Project::new_default(), plugins);
+        session.samples.configure(settings.samples.loader_config());
         let routing = MidiRouting {
             sender: Arc::new(Mutex::new(sender)),
             targets: session.midi_targets.clone(),
@@ -1132,6 +1133,9 @@ impl eframe::App for RliveApp {
         // Repaint continuously only while something animates; otherwise egui repaints on input.
         if self.session.is_playing() || meters_moving || self.ui.scan_rx.is_some() {
             ctx.request_repaint();
+        } else if self.session.samples.any_loading() {
+            // Soon enough to show a sample becoming ready without waiting for input.
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
         } else {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }

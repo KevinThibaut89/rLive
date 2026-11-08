@@ -618,6 +618,7 @@ fn track_column(
         let over_launch = resp.hover_pos().is_some_and(|pos| launch.contains(pos));
         let is_playing = playing_slot == slot as i32;
         let is_queued = queued_slot == slot as i32;
+        let waiting_for_sample = session.clip_waiting_for_sample(id, slot);
 
         match &clip_info {
             Some((cname, ccol, clen)) => {
@@ -637,7 +638,9 @@ fn track_column(
                     },
                 );
                 p.rect_filled(launch, 1.0, theme::darken(fill, 0.25));
-                let tri = if is_playing || (is_queued && blink) {
+                let tri = if waiting_for_sample {
+                    pal().text_faint
+                } else if is_playing || (is_queued && blink) {
                     pal().play_green
                 } else if over_launch {
                     hex(0xffffff)
@@ -1869,7 +1872,7 @@ fn clip_menu(
         if kind == TrackKind::Audio && ui.button("Load Audio File…").clicked() {
             ui.close();
             if let Some(path) = rfd::FileDialog::new()
-                .add_filter("WAV", &["wav"])
+                .add_filter("Audio", rlive_audio_io::AUDIO_EXTENSIONS)
                 .pick_file()
             {
                 match session.audio_clip_from_file(&path, id) {

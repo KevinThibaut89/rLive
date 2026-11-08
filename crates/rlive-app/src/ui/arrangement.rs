@@ -10,6 +10,7 @@ use super::widgets::{self, info, info_note, rgb};
 use super::{BrowserItem, Detail, UiState};
 use crate::session::{ArrMove, ChainRef, ClipRef, InfoTarget, Session, TrimEdge};
 use egui::{Align2, Color32, CursorIcon, Layout, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
+use rlive_audio_io::SampleStatus;
 use rlive_core::{ArrClipId, TrackId, PPQ};
 use rlive_project::{ArrangementClip, Clip, ClipContent, TrackKind};
 use std::sync::atomic::Ordering;
@@ -23,6 +24,8 @@ const CLIP_TITLE_H: f32 = 13.0;
 const RETURN_ROW_H: f32 = 24.0;
 const EDGE_W: f32 = 6.0;
 const ADD_ZONE_H: f32 = 64.0;
+/// How tall a clip must be for its waveform to split into left and right.
+const MIN_STEREO_H: f32 = 36.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DragKind {
@@ -351,7 +354,11 @@ fn paint_clip(
     if muted {
         color = theme::darken(color, 0.45);
     }
-    let body = theme::darken(color, 0.55);
+    let body = if session.content_waiting_for_sample(&c.clip.content) {
+        pal().panel_dark
+    } else {
+        theme::darken(color, 0.55)
+    };
     p.rect_filled(rect, 1.0, body);
     let title = Rect::from_min_max(
         rect.min,
@@ -498,35 +505,83 @@ fn paint_waveform(
     axis: &TimeAxis,
     color: Color32,
 ) {
+    if let Some(SampleStatus::Failed(_)) = session.samples.status(path) {
+        let galley = p.layout_no_wrap(
+            "Missing or unreadable file".to_string(),
+            theme::font(10.0),
+            pal().text_dim,
+        );
+        let at = Pos2::new(
+            content.left().max(lanes.left()) + 3.0,
+            content.center().y - galley.size().y / 2.0,
+        );
+        p.galley(at, galley, Color32::WHITE);
+        return;
+    }
+    // Greyed until the sample has loaded, as Live does while analysing.
+    let loading = !session.samples.is_ready(path);
     let Some((peaks, sample_rate)) = session.samples.peaks(path) else {
+        p.line_segment(
+            [
+                Pos2::new(content.left().max(lanes.left()), content.center().y),
+                Pos2::new(content.right().min(lanes.right()), content.center().y),
+            ],
+            Stroke::new(1.0, pal().text_faint),
+        );
         return;
     };
-    let shape = theme::darken(color, 0.15);
-    let mid = content.center().y;
-    let half = content.height() / 2.0 - 1.0;
+    let shape = if loading {
+        pal().text_faint
+    } else {
+        theme::darken(color, 0.15)
+    };
     let frames_per_tick = 60.0 / session.project.tempo / PPQ as f64 * sample_rate;
     let (from, to) = (
         content.left().max(lanes.left()) as i32,
         content.right().min(lanes.right()) as i32,
     );
-    for px in from..to {
-        let t0 = axis.tick(px as f32).max(c.start as f64) as u64;
-        let t1 = axis.tick(px as f32 + 1.0).max(c.start as f64) as u64;
-        let (Some(a), Some(b)) = (content_tick(c, t0), content_tick(c, t1.max(t0 + 1))) else {
-            continue;
-        };
-        let (a, b) = if b > a { (a, b) } else { (a, a + 1) };
-        let (lo, hi) = peaks.min_max(
-            (a as f64 * frames_per_tick) as usize,
-            (b as f64 * frames_per_tick) as usize + 1,
-        );
-        p.line_segment(
-            [
-                Pos2::new(px as f32 + 0.5, mid - hi.clamp(-1.0, 1.0) * half),
-                Pos2::new(px as f32 + 0.5, mid - lo.clamp(-1.0, 1.0) * half + 1.0),
-            ],
-            Stroke::new(1.0, shape),
-        );
+    let split = peaks.is_stereo() && content.height() >= MIN_STEREO_H;
+    let waves = if split {
+        vec![
+            (
+                Rect::from_min_max(content.min, Pos2::new(content.right(), content.center().y)),
+                0usize,
+            ),
+            (
+                Rect::from_min_max(Pos2::new(content.left(), content.center().y), content.max),
+                1usize,
+            ),
+        ]
+    } else {
+        vec![(content, 0usize)]
+    };
+    for (wave, channel) in waves {
+        let mid = wave.center().y;
+        let half = wave.height() / 2.0 - 1.0;
+        for px in from..to {
+            let t0 = axis.tick(px as f32).max(c.start as f64) as u64;
+            let t1 = axis.tick(px as f32 + 1.0).max(c.start as f64) as u64;
+            let (Some(a), Some(b)) = (content_tick(c, t0), content_tick(c, t1.max(t0 + 1))) else {
+                continue;
+            };
+            let (a, b) = if b > a { (a, b) } else { (a, a + 1) };
+            let (start, end) = (
+                (a as f64 * frames_per_tick) as usize,
+                (b as f64 * frames_per_tick) as usize + 1,
+            );
+            let (lo, hi) = if split {
+                peaks.min_max(channel, start, end)
+            } else {
+                peaks.min_max_mixed(start, end)
+            };
+            p.line_segment(
+                [
+                    Pos2::new(px as f32 + 0.5, mid - hi.clamp(-1.0, 1.0) * half),
+                    Pos2::new(px as f32 + 0.5, mid - lo.clamp(-1.0, 1.0) * half + 1.0),
+                ],
+                Stroke::new(1.0, shape),
+            );
+        }
     }
 }
 

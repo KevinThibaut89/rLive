@@ -84,6 +84,7 @@ impl Session {
     }
 
     fn after_restore(&mut self) {
+        self.record_fingerprints();
         self.history.pending = None;
         self.history.was_busy = false;
         self.history.settling = 0;

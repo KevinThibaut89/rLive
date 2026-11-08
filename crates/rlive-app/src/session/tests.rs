@@ -25,6 +25,12 @@ fn commit(s: &mut Session) {
     s.commit_edits(false);
 }
 
+/// Waits for loading samples to finish and hands them over, as the next UI frame would.
+fn samples_arrive(s: &mut Session) {
+    s.samples.wait_idle();
+    s.idle();
+}
+
 fn poly_param(s: &Session, t: TrackId) -> (DeviceId, u32) {
     let d = s.devices(ChainRef::Track(t))[0].id;
     (d, s.runtimes[&d].params[0].id)
@@ -997,9 +1003,11 @@ fn undo_restores_a_samplers_sample() {
     let dev = s.devices(chain)[1].id;
     commit(&mut s);
     s.set_device_sample(chain, dev, a.clone());
+    samples_arrive(&mut s);
     commit(&mut s);
     render(&mut engine, &mut s, 512);
     s.set_device_sample(chain, dev, b.clone());
+    samples_arrive(&mut s);
     commit(&mut s);
     assert_eq!(s.devices(chain)[1].sample(0).unwrap().path, b);
     s.undo();
@@ -1220,6 +1228,7 @@ fn swapping_a_sample_keeps_held_notes_sounding_and_recycles_the_old_one() {
     s.add_builtin(chain, "rlive.sampler");
     let dev = s.devices(chain)[0].id;
     s.set_device_sample(chain, dev, a.clone());
+    samples_arrive(&mut s);
     render(&mut engine, &mut s, 512);
 
     let mut midi = s.engine.take_midi_sender().unwrap();
@@ -1240,6 +1249,7 @@ fn swapping_a_sample_keeps_held_notes_sounding_and_recycles_the_old_one() {
     let old = s.samples.get(&a).unwrap();
     let refs_with_device = Arc::strong_count(&old);
     s.set_device_sample(chain, dev, b.clone());
+    samples_arrive(&mut s);
     let (mut l, mut r) = (vec![0.0; 512], vec![0.0; 512]);
     rlive_testkit::assert_no_alloc(|| engine.process_stereo(&mut l, &mut r));
     assert!(
@@ -1266,6 +1276,7 @@ fn a_sample_that_will_not_load_leaves_the_current_one_in_place() {
     s.add_builtin(chain, "rlive.sampler");
     let dev = s.devices(chain)[1].id;
     s.set_device_sample(chain, dev, PathBuf::from("/nonexistent/x.wav"));
+    samples_arrive(&mut s);
     assert!(s.runtimes[&dev].error.is_some());
     assert!(s.project.tracks[0].devices[1].sample(0).is_none());
     render(&mut engine, &mut s, 512);

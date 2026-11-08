@@ -2,6 +2,7 @@
 
 use super::Session;
 use crate::settings::ClipColor;
+use rlive_audio_io::SampleStatus;
 use rlive_core::{ArrClipId, TrackId};
 use rlive_engine::{ClipCmd, EngineCommand};
 use rlive_project::{Clip, ClipContent};
@@ -83,31 +84,25 @@ impl Session {
 
     /// Recompile a slot's clip and send it to the engine (call after editing notes).
     pub fn sync_clip(&mut self, track: TrackId, slot: usize) {
+        self.send_clip(track, slot);
+        self.mark_edit("Edit Clip");
+    }
+
+    /// Sends a slot's clip to the engine as the project has it, without recording an edit.
+    pub(super) fn send_clip(&mut self, track: TrackId, slot: usize) {
         let clip = self
             .project
             .track(track)
             .and_then(|t| t.clips.get(slot))
             .cloned()
             .flatten();
-        let data = match clip {
-            Some(c) => {
-                let (mut b, _) = self.builder();
-                match b.clip(&c) {
-                    Ok(d) => Some(d),
-                    Err(e) => {
-                        self.messages.push(e);
-                        None
-                    }
-                }
-            }
-            None => None,
-        };
+        let (mut b, _) = self.builder();
+        let data = clip.and_then(|c| b.clip(&c));
         self.send(EngineCommand::Clip(ClipCmd::SetClip {
             track,
             slot,
             clip: data,
         }));
-        self.mark_edit("Edit Clip");
     }
 
     pub fn clip(&self, track: TrackId, slot: usize) -> Option<&Clip> {
@@ -145,8 +140,6 @@ impl Session {
         }
     }
 
-    /// Create an audio clip from a WAV file; its loop length follows the file length at the
-    /// current tempo (rounded to beats).
     /// The colour for a new clip on `track`.
     pub fn new_clip_color(&self, track: TrackId) -> [u8; 3] {
         match self.colors.new_clip {
@@ -158,13 +151,32 @@ impl Session {
         }
     }
 
+    /// Creates an audio clip from a file, and starts loading the file if nothing has yet. Its
+    /// loop length follows the file's length at the current tempo, rounded to beats. The length
+    /// comes from the file's header, which is all this reads; a clip made before its audio has
+    /// loaded can't play until it has.
     pub fn audio_clip_from_file(&mut self, path: &Path, track: TrackId) -> Result<Clip, String> {
-        let s = self.samples.get(path)?;
-        let beats = (s.duration_secs() * self.project.tempo / 60.0)
-            .round()
-            .max(1.0);
+        // Asking for a file again is a reason to look at it again.
+        if matches!(self.samples.status(path), Some(SampleStatus::Failed(_))) {
+            self.samples.forget(path);
+        }
+        let seconds = match self.samples.get(path) {
+            Some(s) => s.duration_secs(),
+            None => {
+                let info =
+                    rlive_audio_io::probe(path).map_err(|e| format!("{}: {e}", path.display()))?;
+                self.samples.request(path);
+                // A format that doesn't state its length gets a one-beat clip.
+                info.duration_secs().unwrap_or(0.0)
+            }
+        };
+        let beats = (seconds * self.project.tempo / 60.0).round().max(1.0);
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         Ok(Clip {
-            name: s.name.clone(),
+            name,
             color: self.new_clip_color(track),
             length: (beats as u64) * rlive_core::PPQ,
             looped: true,

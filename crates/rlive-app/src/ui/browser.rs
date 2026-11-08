@@ -25,7 +25,11 @@ pub fn list_samples(dir: &Path) -> Vec<PathBuf> {
             let p = e.path();
             if p.is_dir() {
                 walk(&p, depth + 1, out);
-            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("wav")) {
+            } else if p.extension().is_some_and(|x| {
+                rlive_audio_io::AUDIO_EXTENSIONS
+                    .iter()
+                    .any(|e| x.eq_ignore_ascii_case(e))
+            }) {
                 out.push(p);
             }
         }

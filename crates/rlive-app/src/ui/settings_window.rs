@@ -132,7 +132,7 @@ impl RliveApp {
                             Tab::Audio => self.audio_tab(ui),
                             Tab::Link => link_tab(ui),
                             Tab::TempoMidi => self.tempo_midi_tab(ui),
-                            Tab::FileFolder => file_folder_tab(ui),
+                            Tab::FileFolder => self.file_folder_tab(ui),
                             Tab::Library => self.library_tab(ui),
                             Tab::PlugIns => self.plugins_tab(ui),
                             Tab::RecordWarpLaunch => record_warp_launch_tab(ui),
@@ -144,6 +144,11 @@ impl RliveApp {
         self.ui.show_settings = open;
         if self.settings != before {
             self.settings.save();
+            if self.settings.samples != before.samples {
+                self.session
+                    .samples
+                    .configure(self.settings.samples.loader_config());
+            }
         }
     }
 
@@ -469,6 +474,75 @@ impl RliveApp {
         });
     }
 
+    fn file_folder_tab(&mut self, ui: &mut egui::Ui) {
+        let samples = &mut self.settings.samples;
+        widgets::section_label(ui, "FILES");
+        grid(ui, "files", |ui| {
+            label(ui, "Create Analysis Files");
+            ui.checkbox(&mut samples.create_analysis_files, "");
+            ui.end_row();
+            soon(ui, "Sample Editor", "None", "C13");
+            soon(ui, "Temporary Folder", "Default", "A11");
+        });
+        ui.add_space(10.0);
+        widgets::section_label(ui, "DECODING CACHE");
+        grid(ui, "cache", |ui| {
+            label(ui, "Minimum Free Space");
+            ui.add(
+                egui::DragValue::new(&mut samples.minimum_free_space_gb)
+                    .range(0.0..=1000.0)
+                    .speed(0.1)
+                    .suffix(" GB"),
+            );
+            ui.end_row();
+            label(ui, "Maximum Cache Size");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut samples.limit_cache_size, "");
+                ui.add_enabled(
+                    samples.limit_cache_size,
+                    egui::DragValue::new(&mut samples.maximum_cache_size_gb)
+                        .range(0.1..=4000.0)
+                        .speed(0.5)
+                        .suffix(" GB"),
+                );
+            });
+            ui.end_row();
+            label(ui, "Cache Folder");
+            ui.horizontal(|ui| {
+                let shown = samples
+                    .cache_folder
+                    .as_ref()
+                    .map_or("Default".to_string(), |p| p.display().to_string());
+                ui.label(RichText::new(shown).color(pal().text_dim));
+                if ui.small_button("Browse…").clicked() {
+                    if let Some(d) = rfd::FileDialog::new().pick_folder() {
+                        samples.cache_folder = Some(d);
+                    }
+                }
+                if samples.cache_folder.is_some() && ui.small_button("Use Default").clicked() {
+                    samples.cache_folder = None;
+                }
+            });
+            ui.end_row();
+            label(ui, "Cleanup");
+            if ui
+                .small_button("Delete files not used by this Set")
+                .clicked()
+            {
+                let done = self.session.cleanup_decoding_cache();
+                self.ui.status = format!(
+                    "Removed {} decoded files ({:.1} MB)",
+                    done.files,
+                    done.bytes as f64 / (1024.0 * 1024.0)
+                );
+            }
+            ui.end_row();
+        });
+        ui.add_space(10.0);
+        widgets::section_label(ui, "MAX");
+        grid(ui, "max", |ui| soon(ui, "Max Application", "None", "out"));
+    }
+
     fn plugins_tab(&mut self, ui: &mut egui::Ui) {
         widgets::section_label(ui, "PLUG-IN SOURCES");
         ui.label(
@@ -539,24 +613,6 @@ fn link_tab(ui: &mut egui::Ui) {
         soon_check(ui, "Start Stop Sync", false, "A16");
         soon_check(ui, "Link Audio", false, "A16");
     });
-}
-
-fn file_folder_tab(ui: &mut egui::Ui) {
-    widgets::section_label(ui, "FILES");
-    grid(ui, "files", |ui| {
-        soon_check(ui, "Create Analysis Files", true, "A6");
-        soon(ui, "Sample Editor", "None", "C13");
-        soon(ui, "Temporary Folder", "Default", "A11");
-    });
-    ui.add_space(10.0);
-    widgets::section_label(ui, "DECODING CACHE");
-    grid(ui, "cache", |ui| {
-        soon(ui, "Minimum Free Space", "2 GB", "A6");
-        soon(ui, "Maximum Cache Size", "20 GB", "A6");
-    });
-    ui.add_space(10.0);
-    widgets::section_label(ui, "MAX");
-    grid(ui, "max", |ui| soon(ui, "Max Application", "None", "out"));
 }
 
 fn record_warp_launch_tab(ui: &mut egui::Ui) {

@@ -3,11 +3,12 @@
 use super::graph::compile_with;
 use super::timing::{compensation_ops, RuntimeLatency, Timing};
 use super::{Builder, Session};
+use rlive_audio_io::SampleStatus;
 use rlive_core::Quantize;
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{EngineCommand, GraphOp, GraphTxn, LaunchCmd, TransportCmd, MAX_TRACKS};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 impl Session {
@@ -52,6 +53,15 @@ impl Session {
         path: &Path,
     ) -> Result<(), String> {
         self.capture_plugin_states();
+        // An export must have every sample in it, so this is the one place that waits for them.
+        let paths = self.project_audio_paths();
+        self.samples.wait_for(paths.iter().map(PathBuf::as_path));
+        for path in &paths {
+            if let Some(SampleStatus::Failed(reason)) = self.samples.status(path) {
+                self.messages
+                    .push(format!("Exported without a sample: {reason}"));
+            }
+        }
         let sample_rate = self.engine.sample_rate;
         let max_block = 512;
         let (mut engine, mut handle) = rlive_engine::create_engine(sample_rate, max_block);
@@ -78,6 +88,8 @@ impl Session {
             ));
         }
         let master = b.master(p, &mut runtimes, &mut layouts, &mut errors);
+        self.messages.extend(errors);
+        let p = &self.project;
         let maps = super::build::time_maps(p);
         let timing = Timing::measure(p, sample_rate, &RuntimeLatency(&runtimes));
         let plan = compile_with(p, &timing);

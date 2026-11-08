@@ -51,6 +51,11 @@ impl Session {
     }
 
     pub fn launch_clip(&mut self, track: TrackId, slot: usize) {
+        // Its sample isn't ready: the slot is empty as far as the engine knows, and launching an
+        // empty slot would stop the track.
+        if self.clip_waiting_for_sample(track, slot) {
+            return;
+        }
         self.re_enable_clip_automation(track, slot);
         self.send(EngineCommand::Launch(LaunchCmd::LaunchClip { track, slot }));
     }
@@ -61,8 +66,25 @@ impl Session {
 
     pub fn launch_scene(&mut self, scene: usize) {
         let tracks: Vec<TrackId> = self.project.tracks.iter().map(|t| t.id).collect();
-        for track in tracks {
+        for track in tracks.iter().copied() {
             self.re_enable_clip_automation(track, scene);
+        }
+        if tracks
+            .iter()
+            .any(|t| self.clip_waiting_for_sample(*t, scene))
+        {
+            // Launch the rest, leaving tracks whose clip can't play yet as they are.
+            let returns = self.project.returns.iter().map(|t| t.id);
+            let everyone: Vec<TrackId> = tracks.iter().copied().chain(returns).collect();
+            for track in everyone {
+                if !self.clip_waiting_for_sample(track, scene) {
+                    self.send(EngineCommand::Launch(LaunchCmd::LaunchClip {
+                        track,
+                        slot: scene,
+                    }));
+                }
+            }
+            return;
         }
         self.send(EngineCommand::Launch(LaunchCmd::LaunchScene(scene)));
     }

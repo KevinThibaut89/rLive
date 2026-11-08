@@ -2,7 +2,6 @@
 
 pub mod audio;
 pub mod midi_input;
-pub mod peaks;
 pub mod recording;
 pub mod session;
 pub mod settings;

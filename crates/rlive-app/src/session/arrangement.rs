@@ -184,10 +184,8 @@ impl Session {
         let Some(clips) = self.project.track(track).map(|t| t.arrangement.clone()) else {
             return;
         };
-        let mut errors = Vec::new();
         let (mut b, _) = self.builder();
-        let lane = b.lane(&clips, &mut errors);
-        self.messages.extend(errors);
+        let lane = b.lane(&clips);
         self.send(EngineCommand::Clip(ClipCmd::SetLane { track, lane }));
     }
 
