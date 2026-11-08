@@ -1,4 +1,13 @@
 [package]
 name = "rlive-test-clap"
+description = "Minimal CLAP plugins used to test rLive's plugin hosting"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+clap-sys.workspace = true
