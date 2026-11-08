@@ -7,6 +7,8 @@ use rlive_core::{
 use rlive_plugin_host::{instantiate, scanner, PluginDescriptor};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Build the fixture cdylib (in its own target dir to avoid fighting over cargo's lock)
@@ -15,27 +17,33 @@ fn fixture() -> PathBuf {
     fixture_named("rlive-clap")
 }
 
-/// The same, in a directory of its own so tests can clean up after themselves.
+/// The same, in a directory of its own so tests can clean up after themselves. The fixture is
+/// built once per test run, and each caller gets its own copy, so parallel tests can't race on it.
 fn fixture_named(dir_prefix: &str) -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let target = root.join("target/test-plugins");
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let status = Command::new(cargo)
-        .args(["build", "-q", "-p", "rlive-test-clap", "--target-dir"])
-        .arg(&target)
-        .current_dir(&root)
-        .status()
-        .expect("run cargo");
-    assert!(status.success(), "building rlive-test-clap failed");
-    let lib = target.join("debug").join(format!(
-        "{}rlive_test_clap.{}",
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_EXTENSION
-    ));
-    let dir = std::env::temp_dir().join(format!("{dir_prefix}-{}", std::process::id()));
+    static LIB: OnceLock<PathBuf> = OnceLock::new();
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let lib = LIB.get_or_init(|| {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let target = root.join("target/test-plugins");
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let status = Command::new(cargo)
+            .args(["build", "-q", "-p", "rlive-test-clap", "--target-dir"])
+            .arg(&target)
+            .current_dir(&root)
+            .status()
+            .expect("run cargo");
+        assert!(status.success(), "building rlive-test-clap failed");
+        target.join("debug").join(format!(
+            "{}rlive_test_clap.{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_EXTENSION
+        ))
+    });
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("{dir_prefix}-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let dest = dir.join("rlive-test.clap");
-    std::fs::copy(&lib, &dest).unwrap();
+    std::fs::copy(lib, &dest).unwrap();
     dest
 }
 

@@ -1,6 +1,7 @@
 //! Scenes and clips in Session slots.
 
 use super::Session;
+use crate::settings::ClipColor;
 use rlive_core::{ArrClipId, TrackId};
 use rlive_engine::{ClipCmd, EngineCommand};
 use rlive_project::{Clip, ClipContent};
@@ -146,14 +147,25 @@ impl Session {
 
     /// Create an audio clip from a WAV file; its loop length follows the file length at the
     /// current tempo (rounded to beats).
-    pub fn audio_clip_from_file(&mut self, path: &Path) -> Result<Clip, String> {
+    /// The colour for a new clip on `track`.
+    pub fn new_clip_color(&self, track: TrackId) -> [u8; 3] {
+        match self.colors.new_clip {
+            ClipColor::Track => self
+                .project
+                .track(track)
+                .map_or_else(|| self.project.next_color(), |t| t.color),
+            ClipColor::Random => self.project.next_color(),
+        }
+    }
+
+    pub fn audio_clip_from_file(&mut self, path: &Path, track: TrackId) -> Result<Clip, String> {
         let s = self.samples.get(path)?;
         let beats = (s.duration_secs() * self.project.tempo / 60.0)
             .round()
             .max(1.0);
         Ok(Clip {
             name: s.name.clone(),
-            color: self.project.next_color(),
+            color: self.new_clip_color(track),
             length: (beats as u64) * rlive_core::PPQ,
             looped: true,
             content: ClipContent::audio(path, 0.0),

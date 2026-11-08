@@ -1,12 +1,14 @@
 //! The Arrangement view: clips on a linear timeline, one lane per track.
 
 use super::icons;
+use super::info_view::edit_info_item;
+use super::keymap::{self, Platform};
 use super::session_view::{self, ClipDrag};
 use super::theme::{self, *};
 use super::timeline::{self, TimeAxis};
-use super::widgets::{self, info, rgb};
+use super::widgets::{self, info, info_note, rgb};
 use super::{BrowserItem, Detail, UiState};
-use crate::session::{ArrMove, ChainRef, ClipRef, Session, TrimEdge};
+use crate::session::{ArrMove, ChainRef, ClipRef, InfoTarget, Session, TrimEdge};
 use egui::{Align2, Color32, CursorIcon, Layout, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use rlive_core::{ArrClipId, TrackId, PPQ};
 use rlive_project::{ArrangementClip, Clip, ClipContent, TrackKind};
@@ -55,6 +57,15 @@ pub struct ArrangementState {
     context: Option<(TrackId, ArrClipId)>,
 }
 
+impl ArrangementState {
+    /// Zooms the time ruler around the left of the visible range.
+    pub fn zoom_ruler(&mut self, factor: f32) {
+        let beat = self.scroll.x / self.px_per_beat;
+        self.px_per_beat = (self.px_per_beat * factor).clamp(1.0, 240.0);
+        self.scroll.x = beat * self.px_per_beat;
+    }
+}
+
 impl Default for ArrangementState {
     fn default() -> Self {
         Self {
@@ -70,6 +81,7 @@ impl Default for ArrangementState {
 }
 
 /// One clip on screen this frame.
+#[derive(Clone, Copy)]
 struct Hit {
     track: TrackId,
     id: ArrClipId,
@@ -87,7 +99,7 @@ fn lane_rect(lanes: Rect, i: usize, h: f32, scroll_y: f32) -> Rect {
 pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let full = ui.max_rect();
     ui.allocate_rect(full, Sense::hover());
-    ui.painter().rect_filled(full, 0.0, GRID_BG);
+    ui.painter().rect_filled(full, 0.0, pal().grid_bg);
 
     let sig = session.project.time_signature;
     let bar = sig.ticks_per_bar();
@@ -141,7 +153,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         ui.painter_at(lanes).rect_filled(
             Rect::from_min_max(Pos2::new(x0, lanes.top()), Pos2::new(x1, lanes.bottom())),
             0.0,
-            Color32::from_white_alpha(6),
+            pal().overlay(6),
         );
     }
     let hits = paint_clips(ui, session, state, lanes, &axis);
@@ -154,13 +166,13 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let mx = axis.x(marker);
     p.line_segment(
         [Pos2::new(mx, ruler.bottom()), Pos2::new(mx, lanes.bottom())],
-        Stroke::new(1.0, Color32::from_white_alpha(90)),
+        Stroke::new(1.0, pal().overlay(90)),
     );
     if playing {
         let x = axis.x(tick);
         p.line_segment(
             [Pos2::new(x, ruler.top()), Pos2::new(x, lanes.bottom())],
-            Stroke::new(1.0, hex(0xf0f0f0)),
+            Stroke::new(1.0, shade(0xf0f0f0)),
         );
     }
 
@@ -186,7 +198,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let p = ui.painter();
     p.line_segment(
         [headers.left_top(), Pos2::new(headers.left(), full.bottom())],
-        Stroke::new(1.0, SEPARATOR),
+        Stroke::new(1.0, pal().separator),
     );
     scrollbars(
         ui, state, lanes, headers, full, content_w, content_h, max_x, max_y,
@@ -248,16 +260,16 @@ fn paint_lane_backgrounds(ui: &egui::Ui, session: &Session, state: &UiState, lan
             continue;
         }
         let fill = if selected == Some(t.id) {
-            hex(0x2e2e2e)
+            shade(0x2e2e2e)
         } else if i % 2 == 0 {
-            hex(0x282828)
+            shade(0x282828)
         } else {
-            hex(0x252525)
+            shade(0x252525)
         };
         p.rect_filled(r, 0.0, fill);
         p.line_segment(
             [r.left_bottom(), r.right_bottom()],
-            Stroke::new(1.0, SEPARATOR),
+            Stroke::new(1.0, pal().separator),
         );
     }
 }
@@ -269,9 +281,9 @@ fn paint_grid(ui: &egui::Ui, lanes: Rect, axis: &TimeAxis, grid: u64, bar: u64) 
     while axis.x(t as f64) <= lanes.right() {
         let x = axis.x(t as f64);
         let c = if t.is_multiple_of(bar) {
-            hex(0x141414)
+            pal().grid_line(shade(0x141414))
         } else {
-            hex(0x202020)
+            pal().grid_line(shade(0x202020))
         };
         p.line_segment(
             [Pos2::new(x, lanes.top()), Pos2::new(x, lanes.bottom())],
@@ -370,7 +382,7 @@ fn paint_clip(
     }
     p.line_segment(
         [rect.right_top(), rect.right_bottom()],
-        Stroke::new(1.0, SEPARATOR),
+        Stroke::new(1.0, pal().separator),
     );
     if selected {
         p.rect_stroke(
@@ -541,7 +553,7 @@ fn lane_interaction(
         Sense::click_and_drag(),
     );
     let m = ui.input(|i| i.modifiers);
-    let snapping = !m.alt;
+    let snapping = !keymap::ignores_grid(m, Platform::current());
     let hit = |pos: Pos2| hits.iter().rev().find(|h| h.rect.contains(pos));
     let edge = |h: &Hit, pos: Pos2| {
         if h.rect.width() >= EDGE_W * 2.5 && pos.x < h.rect.left() + EDGE_W {
@@ -621,11 +633,11 @@ fn lane_interaction(
     }
     let p = ui.painter_at(lanes);
     for ghost in &preview {
-        p.rect_filled(ghost.rect, 1.0, Color32::from_white_alpha(45));
+        p.rect_filled(ghost.rect, 1.0, pal().overlay(45));
         p.rect_stroke(
             ghost.rect,
             1.0,
-            Stroke::new(1.0, Color32::WHITE),
+            Stroke::new(1.0, pal().text),
             StrokeKind::Inside,
         );
     }
@@ -633,7 +645,7 @@ fn lane_interaction(
         if d.kind == DragKind::Rubber {
             let r = Rect::from_two_pos(d.origin, pos);
             p.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(120, 180, 255, 40));
-            p.rect_stroke(r, 0.0, Stroke::new(1.0, SELECT), StrokeKind::Inside);
+            p.rect_stroke(r, 0.0, Stroke::new(1.0, pal().select), StrokeKind::Inside);
             state.arr.selection = hits
                 .iter()
                 .filter(|h| h.rect.intersects(r))
@@ -643,15 +655,35 @@ fn lane_interaction(
     }
     if resp.drag_stopped() {
         if let Some(d) = state.arr.drag.take() {
-            finish_drag(session, state, d, &preview, m.command);
+            finish_drag(
+                session,
+                state,
+                d,
+                &preview,
+                keymap::copies_on_drag(m, Platform::current()),
+            );
         }
     }
 
     drops(session, state, &resp, lanes, axis, grid, snapping);
-    info(
+    let hovered = resp.hover_pos().and_then(|pos| hit(pos).copied());
+    let target = hovered.map(|h| ClipRef::Arr {
+        track: h.track,
+        id: h.id,
+    });
+    let resp = match target.and_then(|r| session.clip_at(r)) {
+        Some(c) => {
+            let text = format!("Clip '{}' — drag to move, double-click to edit, right-click for options", c.name);
+            info(resp, text)
+        }
+        None => info(
         resp,
-        "Click to place the insert marker · drag clips to move (Cmd = copy, Alt = no snap) · drag edges to trim · double-click to edit or add · Cmd+wheel zooms · Alt+wheel sets lane height",
-    );
+        "Arrangement — click to place the insert marker · drag clips to move (Alt = copy, Cmd = no snap) · drag edges to trim · double-click to edit or add · Cmd+wheel zooms · Alt+wheel sets lane height",
+        ),
+    };
+    if let Some(note) = target.and_then(|r| session.info_text(InfoTarget::Clip(r))) {
+        info_note(&resp, note);
+    }
 }
 
 fn toggle(selection: &mut Vec<(TrackId, ArrClipId)>, key: (TrackId, ArrClipId)) {
@@ -692,7 +724,8 @@ fn create_midi_clip(
     if t.kind != TrackKind::Midi {
         return;
     }
-    let (id, color) = (t.id, t.color);
+    let id = t.id;
+    let color = session.new_clip_color(id);
     let sig = session.project.time_signature;
     let start = ((axis.tick(pos.x) / grid as f64).floor().max(0.0) as u64) * grid;
     let placed = ArrangementClip::new(Clip::new_midi("MIDI Clip", color, 1, sig), start);
@@ -873,6 +906,12 @@ fn clip_context_menu(ui: &mut egui::Ui, session: &mut Session, state: &mut UiSta
         open_clip(state, track, id, true);
         ui.close();
     }
+    edit_info_item(
+        ui,
+        session,
+        state,
+        InfoTarget::Clip(ClipRef::Arr { track, id }),
+    );
     if ui.button("Duplicate").clicked() {
         let items = state.arr.selection.clone();
         state.arr.selection = session.arr_duplicate(&items);
@@ -920,12 +959,12 @@ fn drops(
     let lane = lane_rect(lanes, row, h, sy);
     resp.ctx.layer_painter(resp.layer_id).line_segment(
         [Pos2::new(x, lane.top()), Pos2::new(x, lane.bottom())],
-        Stroke::new(2.0, ACCENT),
+        Stroke::new(2.0, pal().accent),
     );
     if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
         match &*item {
             BrowserItem::Sample(path) if kind == TrackKind::Audio => {
-                match session.audio_clip_from_file(path) {
+                match session.audio_clip_from_file(path, target) {
                     Ok(c) => place_new(session, state, target, c, start),
                     Err(e) => state.status = e,
                 }
@@ -952,6 +991,57 @@ fn place_new(session: &mut Session, state: &mut UiState, track: TrackId, clip: C
     state.selected = Some(ChainRef::Track(track));
 }
 
+/// Locators, as flags along the ruler: hover for the user's notes, right-click to write them.
+fn paint_locators(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    ruler: Rect,
+    axis: &TimeAxis,
+) {
+    for i in 0..session.project.arrangement.locators.len() {
+        let locator = &session.project.arrangement.locators[i];
+        let x = axis.x(locator.tick as f64);
+        let name = locator.name.clone();
+        if x < ruler.left() || x > ruler.right() {
+            continue;
+        }
+        let rect = Rect::from_min_size(
+            Pos2::new(x, ruler.top() + LOOP_H),
+            Vec2::new(64.0, ruler.height() - LOOP_H),
+        );
+        let p = ui.painter_at(ruler);
+        p.line_segment(
+            [rect.left_top(), rect.left_bottom()],
+            Stroke::new(1.0, pal().accent),
+        );
+        p.text(
+            Pos2::new(x + 3.0, rect.top()),
+            Align2::LEFT_TOP,
+            &name,
+            theme::font(10.0),
+            pal().accent,
+        );
+        let resp = ui.interact(rect, ui.scope_id().with(("locator", i)), Sense::click());
+        let resp = info(
+            resp,
+            format!("Locator '{name}' — a named place in the Arrangement"),
+        );
+        info_note(
+            &resp,
+            session
+                .info_text(InfoTarget::Locator(i))
+                .unwrap_or_default(),
+        );
+        resp.context_menu(|ui| edit_info_item(ui, session, state, InfoTarget::Locator(i)));
+    }
+}
+
+/// Whether dragging snaps to the grid: holding the bypass key turns that off.
+fn snaps(ui: &egui::Ui) -> bool {
+    !ui.input(|i| keymap::ignores_grid(i.modifiers, Platform::current()))
+}
+
 fn paint_ruler(
     ui: &mut egui::Ui,
     session: &mut Session,
@@ -962,7 +1052,7 @@ fn paint_ruler(
     bar: u64,
 ) {
     let p = ui.painter_at(ruler);
-    p.rect_filled(ruler, 0.0, hex(0x333333));
+    p.rect_filled(ruler, 0.0, shade(0x333333));
     let step = timeline::ruler_bar_step(axis.px_per_beat, bar) * bar;
     let first = (axis.tick(ruler.left()).max(0.0) as u64 / step) * step;
     let mut t = first;
@@ -973,18 +1063,19 @@ fn paint_ruler(
                 Pos2::new(x, ruler.top() + LOOP_H),
                 Pos2::new(x, ruler.bottom()),
             ],
-            Stroke::new(1.0, hex(0x6a6a6a)),
+            Stroke::new(1.0, shade(0x6a6a6a)),
         );
         p.text(
             Pos2::new(x + 3.0, ruler.bottom() - 2.0),
             Align2::LEFT_BOTTOM,
             (t / bar + 1).to_string(),
             theme::font(10.5),
-            TEXT_DIM,
+            pal().text_dim,
         );
         t += step;
     }
 
+    paint_locators(ui, session, state, ruler, axis);
     let a = session.project.arrangement.clone();
     let (x0, x1) = (axis.x(a.loop_start as f64), axis.x(a.loop_end as f64));
     let brace = Rect::from_min_max(
@@ -995,9 +1086,9 @@ fn paint_ruler(
         brace,
         0.0,
         if a.loop_enabled {
-            hex(0xb0b0b0)
+            shade(0xb0b0b0)
         } else {
-            hex(0x5a5a5a)
+            shade(0x5a5a5a)
         },
     );
 
@@ -1030,7 +1121,7 @@ fn paint_ruler(
     if let (Some((kind, origin, s0, e0)), Some(pos)) =
         (state.arr.loop_drag, loop_resp.interact_pointer_pos())
     {
-        let snapping = !ui.input(|i| i.modifiers.alt);
+        let snapping = snaps(ui);
         let dt = ((pos.x - origin) / axis.px_per_beat) as f64 * PPQ as f64;
         let snapped = |v: u64| timeline::snap(v as f64 + dt, grid, snapping).max(0) as u64;
         let (s, e) = match kind {
@@ -1059,12 +1150,12 @@ fn paint_ruler(
     );
     if seek.clicked() || seek.dragged() {
         if let Some(pos) = seek.interact_pointer_pos() {
-            let snapping = !ui.input(|i| i.modifiers.alt);
+            let snapping = snaps(ui);
             let t = timeline::snap(axis.tick(pos.x), grid, snapping).max(0);
             session.seek(t as f64);
         }
     }
-    info(seek, "Click to move the song position");
+    info(seek, "Timeline — click to move the song position");
 
     let marker = axis.x(session.insert_marker());
     let tri = vec![
@@ -1074,12 +1165,12 @@ fn paint_ruler(
     ];
     p.add(egui::Shape::convex_polygon(
         tri,
-        hex(0xe0e0e0),
+        shade(0xe0e0e0),
         Stroke::NONE,
     ));
     p.line_segment(
         [ruler.left_bottom(), ruler.right_bottom()],
-        Stroke::new(1.0, SEPARATOR),
+        Stroke::new(1.0, pal().separator),
     );
 }
 
@@ -1107,10 +1198,10 @@ fn return_rows(
     lanes_right: f32,
 ) {
     let p = ui.painter().clone();
-    p.rect_filled(area, 0.0, PANEL_DARK);
+    p.rect_filled(area, 0.0, pal().panel_dark);
     p.line_segment(
         [area.left_top(), area.right_top()],
-        Stroke::new(2.0, SEPARATOR),
+        Stroke::new(2.0, pal().separator),
     );
     let returns: Vec<TrackId> = session.project.returns.iter().map(|t| t.id).collect();
     for (i, id) in returns.iter().enumerate() {
@@ -1130,9 +1221,9 @@ fn return_rows(
         row,
         0.0,
         if selected {
-            hex(0x3b3b3b)
+            shade(0x3b3b3b)
         } else {
-            hex(0x303030)
+            shade(0x303030)
         },
     );
     p.text(
@@ -1140,7 +1231,7 @@ fn return_rows(
         Align2::LEFT_CENTER,
         "Master",
         theme::font_bold(11.0),
-        TEXT,
+        pal().text,
     );
     if resp.clicked() {
         state.selected = Some(ChainRef::Master);
@@ -1168,14 +1259,14 @@ fn return_row(
         row,
         0.0,
         if selected {
-            hex(0x3b3b3b)
+            shade(0x3b3b3b)
         } else {
-            hex(0x303030)
+            shade(0x303030)
         },
     );
     p.line_segment(
         [row.left_bottom(), row.right_bottom()],
-        Stroke::new(1.0, SEPARATOR),
+        Stroke::new(1.0, pal().separator),
     );
     p.rect_filled(
         Rect::from_min_size(row.min, Vec2::new(6.0, row.height())),
@@ -1191,7 +1282,7 @@ fn return_row(
         Align2::LEFT_CENTER,
         name.as_str(),
         theme::font_bold(10.5),
-        TEXT,
+        pal().text,
     );
     let row_h = RETURN_ROW_H - 6.0;
     let letter = (b'A' + index as u8) as char;
@@ -1208,7 +1299,7 @@ fn return_row(
         &mut mu,
         mute_r.size(),
         !mute,
-        ACTIVATOR,
+        pal().activator,
         &letter.to_string(),
     );
     if info(r, "Track Activator — click to mute/unmute").clicked() {
@@ -1218,7 +1309,7 @@ fn return_row(
         session.sync_mix(id);
     }
     let mut su = ui.new_child(egui::UiBuilder::new().max_rect(solo_r));
-    let r = widgets::state_button(&mut su, solo_r.size(), solo, SOLO_BLUE, "S");
+    let r = widgets::state_button(&mut su, solo_r.size(), solo, pal().solo_blue, "S");
     if info(
         r,
         "Solo the return — every other track's main output goes silent",
@@ -1232,7 +1323,14 @@ fn return_row(
         state.selected = Some(ChainRef::Track(id));
         state.detail = Detail::Devices;
     }
-    let resp = info(resp, format!("Return track '{name}'"));
+    let resp = info(
+        resp,
+        format!("Return track '{name}' — click to select, right-click for options"),
+    );
+    info_note(
+        &resp,
+        session.info_text(InfoTarget::Track(id)).unwrap_or_default(),
+    );
     resp.context_menu(|ui| session_view::return_menu(ui, session, state, id, &name));
 }
 
@@ -1272,14 +1370,14 @@ fn track_header(
         rect,
         0.0,
         if selected {
-            hex(0x3b3b3b)
+            shade(0x3b3b3b)
         } else {
-            hex(0x303030)
+            shade(0x303030)
         },
     );
     p.line_segment(
         [rect.left_bottom(), rect.right_bottom()],
-        Stroke::new(1.0, SEPARATOR),
+        Stroke::new(1.0, pal().separator),
     );
     let swatch = Rect::from_min_size(rect.min, Vec2::new(6.0, rect.height()));
     p.rect_filled(swatch, 0.0, rgb(color));
@@ -1293,7 +1391,7 @@ fn track_header(
             &p,
             Rect::from_min_size(inner.min, Vec2::splat(16.0)),
             !folded,
-            TEXT_DIM,
+            pal().text_dim,
         );
         16.0
     } else {
@@ -1303,12 +1401,32 @@ fn track_header(
         inner.min + Vec2::new(fold_w, 0.0),
         Vec2::new(inner.width() - fold_w, 16.0),
     );
-    let galley = p.layout_no_wrap(name.clone(), theme::font_bold(11.0), TEXT);
-    p.with_clip_rect(top.intersect(headers)).galley(
-        top.left_center() - Vec2::new(0.0, galley.size().y / 2.0),
-        galley,
-        TEXT,
-    );
+    if matches!(&state.renaming, Some((tid, _)) if *tid == id) {
+        let mut done = false;
+        if let Some((_, text)) = &mut state.renaming {
+            let r = cu.put(
+                top,
+                egui::TextEdit::singleline(text).font(theme::font(11.0)),
+            );
+            r.request_focus();
+            done = r.lost_focus();
+        }
+        if done {
+            if let Some((_, text)) = state.renaming.take() {
+                if let Some(t) = session.project.track_mut(id) {
+                    t.name = text;
+                }
+                session.dirty = true;
+            }
+        }
+    } else {
+        let galley = p.layout_no_wrap(name.clone(), theme::font_bold(11.0), pal().text);
+        p.with_clip_rect(top.intersect(headers)).galley(
+            top.left_center() - Vec2::new(0.0, galley.size().y / 2.0),
+            galley,
+            pal().text,
+        );
+    }
 
     let btn_h = 16.0;
     if rect.height() >= 36.0 {
@@ -1328,7 +1446,7 @@ fn track_header(
             &mut bu,
             Vec2::new(bw, btn_h),
             !mute,
-            ACTIVATOR,
+            pal().activator,
             &(index + 1).to_string(),
         );
         if info(r, "Track Activator — click to mute/unmute").clicked() {
@@ -1337,25 +1455,30 @@ fn track_header(
             }
             session.sync_mix(id);
         }
-        let r = widgets::state_button(&mut bu, Vec2::new(bw, btn_h), solo, SOLO_BLUE, "S");
+        let r = widgets::state_button(&mut bu, Vec2::new(bw, btn_h), solo, pal().solo_blue, "S");
         if holds_solo && !solo {
             let half =
                 Rect::from_min_size(r.rect.min, Vec2::new(r.rect.width() / 2.0, r.rect.height()));
-            p.rect_filled(half, 1.0, SOLO_BLUE);
+            p.rect_filled(half, 1.0, pal().solo_blue);
             p.text(
                 r.rect.center(),
                 Align2::CENTER_CENTER,
                 "S",
                 theme::font(10.5),
-                TEXT,
+                pal().text,
             );
         }
         if info(r, "Solo — Cmd-click to solo several tracks").clicked() {
             session_view::toggle_solo(session, id, solo, bu.input(|i| i.modifiers.command));
         }
         if kind != TrackKind::Group {
-            let r =
-                widgets::icon_button(&mut bu, Vec2::new(bw, btn_h), arm, ARM_RED, icons::record);
+            let r = widgets::icon_button(
+                &mut bu,
+                Vec2::new(bw, btn_h),
+                arm,
+                pal().arm_red,
+                icons::record,
+            );
             if info(
                 r,
                 "Arm — record MIDI onto this track (Cmd-click to arm several)",
@@ -1395,6 +1518,10 @@ fn track_header(
         resp,
         format!("Track '{name}' — click to select, right-click for options"),
     );
+    info_note(
+        &resp,
+        session.info_text(InfoTarget::Track(id)).unwrap_or_default(),
+    );
     resp.context_menu(|ui| session_view::track_menu(ui, session, state, id, &name));
 }
 
@@ -1410,9 +1537,8 @@ fn scrollbars(
     max_x: f32,
     max_y: f32,
 ) {
-    let thumb_color = |r: &egui::Response| {
-        Color32::from_white_alpha(if r.hovered() || r.dragged() { 90 } else { 45 })
-    };
+    let thumb_color =
+        |r: &egui::Response| pal().overlay(if r.hovered() || r.dragged() { 90 } else { 45 });
     if max_x > 0.0 {
         let track = Rect::from_min_max(
             Pos2::new(lanes.left(), full.bottom() - SCROLLBAR + 1.0),

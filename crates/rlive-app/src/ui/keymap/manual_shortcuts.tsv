@@ -1,0 +1,293 @@
+# section	Windows/Linux chords	macOS chords	(| separates alternatives, ~ marks a pointer gesture or held modifier)
+42.1	F11	Ctrl+Cmd+F
+42.1	Ctrl+Shift+W	Cmd+Shift+W
+42.1	Tab	Tab
+42.1	Shift+Tab|F12	Shift+Tab|F12
+42.1	~Alt click view toggle	~Alt click view toggle
+42.1	Q	Q
+42.1	D	D
+42.1	?	?
+42.1	Ctrl+Alt+V	Cmd+Alt+V
+42.1	Ctrl+Alt+B|Ctrl+Alt+5	Cmd+Alt+B|Cmd+Alt+5
+42.1	Ctrl+Alt+O	Cmd+Alt+O
+42.1	Ctrl+Alt+I	Cmd+Alt+I
+42.1	Ctrl+Alt+S	Cmd+Alt+S
+42.1	Ctrl+Alt+M	Cmd+Alt+M
+42.1	Ctrl+Alt+3	Cmd+Alt+3
+42.1	Ctrl+Alt+4	Cmd+Alt+4
+42.1	Ctrl+Alt+6	Cmd+Alt+6
+42.1	Ctrl+Alt+7	Cmd+Alt+7
+42.1	Ctrl+,	Cmd+,
+42.1	Esc	Esc
+42.2	Alt+0	Alt+0
+42.2	Alt+1	Alt+1
+42.2	Alt+2	Alt+2
+42.2	Alt+3	Alt+3
+42.2	Alt+4	Alt+4
+42.2	Alt+5	Alt+5
+42.2	Alt+6	Alt+6
+42.2	Alt+7	Alt+7
+42.2	Alt+8	Alt+8
+42.2	Alt+Shift+P	Alt+Shift+P
+42.2	Tab	Tab
+42.2	Shift+Tab	Shift+Tab
+42.2	Ctrl+Tab	Alt+Tab
+42.2	Ctrl+Shift+Tab	Alt+Shift+Tab
+42.3	Ctrl+N	Cmd+N
+42.3	Ctrl+O	Cmd+O
+42.3	Ctrl+S	Cmd+S
+42.3	Ctrl+Shift+S	Cmd+Shift+S
+42.3	Ctrl+Q	Cmd+Q
+42.3		Cmd+H
+42.3	Ctrl+Shift+R	Cmd+Shift+R
+42.3	Ctrl+Shift+E	Cmd+Shift+E
+42.4	Ctrl+G	Cmd+G
+42.4	Ctrl+Shift+G	Cmd+Shift+G
+42.4	~Hold Alt and click on device activator	~Hold Alt and click on device activator
+42.4	~Shift click	~Shift click
+42.4	~right-click on Device View selector	~right-click on Device View selector
+42.4	~Delete or double-click	~Delete or double-click
+42.4	Enter	Enter
+42.4	Q	Q
+42.4	Ctrl+Alt+P	Cmd+Alt+P
+42.4	~Ctrl	~Cmd
+42.4	P	P
+42.5	Ctrl+X	Cmd+X
+42.5	Ctrl+C	Cmd+C
+42.5	Ctrl+V	Cmd+V
+42.5	Ctrl+D	Cmd+D
+42.5	Delete	Delete
+42.5	Ctrl+Z	Cmd+Z
+42.5	Ctrl+Y	Cmd+Shift+Z
+42.5	Ctrl+R	Cmd+R
+42.5	Ctrl+A	Cmd+A
+42.5	~Ctrl click	~Cmd click
+42.5	~Shift click	~Shift click
+42.5	Tab	Tab
+42.5	~Alt	~Cmd
+42.5	~Shift	~Shift
+42.5	~Shift	~Shift
+42.5	~Alt	~Alt
+42.6	Up|Down	Up|Down
+42.6	Shift+Up|Shift+Down	Shift+Up|Shift+Down
+42.6	~Shift	~Shift
+42.6	Delete	Delete
+42.6	0|1|2|3|4|5|6|7|8|9	0|1|2|3|4|5|6|7|8|9
+42.6	.|,	.|,
+42.6	Esc	Esc
+42.6	Enter	Enter
+42.7	A	A
+42.7	~Shift	~Shift
+42.7	~Alt	~Alt
+42.7	F	F
+42.7	Ctrl+Delete	Cmd+Delete
+42.7	~Alt	~Cmd
+42.8	Ctrl+F9	Cmd+F9
+42.8	Ctrl+F10	Cmd+F10
+42.8	Ctrl+F11	Cmd+F11
+42.8	Ctrl+F12	Cmd+F12
+42.8	~Ctrl click	~Cmd click
+42.8	~Ctrl Shift click	~Cmd Shift click
+42.8	Left|Right	Left|Right
+42.8	Up|Down	Up|Down
+42.8	Ctrl+Up|Ctrl+Down	Cmd+Up|Cmd+Down
+42.8	Ctrl+Left|Ctrl+Right	Cmd+Left|Cmd+Right
+42.8	Ctrl+Shift+L	Cmd+Shift+L
+42.9	Ctrl++	Cmd++
+42.9	Ctrl+-	Cmd+-
+42.9	+	+
+42.9	-	-
+42.9	Alt+Shift+F	Alt+Shift+F
+42.9	~Shift scroll	~Shift scroll
+42.9	~Ctrl Alt	~Cmd Alt
+42.9	~Shift click or drag	~Shift click or drag
+42.9	~Shift click	~Shift click
+42.9	~Ctrl click	~Cmd click
+42.10	Ctrl+Tab	Alt+Tab
+42.10	Ctrl+Tab	Alt+Tab
+42.10	Alt+Shift+1	Alt+Shift+1
+42.10	Alt+Shift+2	Alt+Shift+2
+42.10	Alt+Shift+3	Alt+Shift+3
+42.11	Ctrl+U	Cmd+U
+42.11	Ctrl+Shift+U	Cmd+Shift+U
+42.11	Left|Right	Left|Right
+42.11	Ctrl+Left|Ctrl+Right	Cmd+Left|Cmd+Right
+42.11	Ctrl+Shift+F	Alt+Shift+F
+42.11	Shift+Left|Shift+Right	Shift+Left|Shift+Right
+42.11	Z	Z
+42.11	X	X
+42.11	Ctrl+I	Cmd+I
+42.11	Delete	Delete
+42.11	Ctrl+Shift+I	Cmd+Shift+I
+42.11	Ctrl+Shift+Delete	Cmd+Shift+Delete
+42.11	W	W
+42.11	H	H
+42.12	Ctrl+A	Cmd+A
+42.12	~Ctrl drag	~Alt drag
+42.12	Ctrl+E	Cmd+E
+42.12	~Ctrl E drag up/down	~Cmd E drag up/down
+42.12	~Ctrl Shift E drag up/ down	~Cmd Shift E drag up/down
+42.12	~Hold E then click to split, drag to move	~Hold E then click to split, drag to move
+42.12	Ctrl+J	Cmd+J
+42.12	Ctrl+Alt+J	Cmd+Alt+J
+42.12	W	W
+42.12	H	H
+42.12	Ctrl+U	Cmd+U
+42.12	Ctrl+Shift+U	Cmd+Shift+U
+42.12	PageUp|PageDown	PageUp|PageDown
+42.12	Shift+PageUp|Shift+PageDown	Shift+PageUp|Shift+PageDown
+42.12	Ctrl+PageUp|Ctrl+PageDown	Cmd+PageUp|Cmd+PageDown
+42.12	~Alt drag	~Cmd drag
+42.12	Home	Home
+42.12	End	End
+42.12	Alt+Up|Alt+Down	Alt+Up|Alt+Down
+42.12	Alt+Left|Alt+Right	Alt+Left|Alt+Right
+42.12	Ctrl+Shift+F	Alt+Shift+F
+42.12	Shift+Left|Shift+Right	Shift+Left|Shift+Right
+42.12	Z	Z
+42.12	X	X
+42.12	+|-	+|-
+42.12	~Type a value between 0-127 and press Enter	~Type a value between 0-127 and press Enter
+42.12	Ctrl+Up|Ctrl+Down	Cmd+Up|Cmd+Down
+42.12	Ctrl+Shift+Up|Ctrl+Shift+Down	Cmd+Shift+Up|Cmd+Shift+Down
+42.12	Ctrl+Alt+Up|Ctrl+Alt+Down	Cmd+Alt+Up|Cmd+Alt+Down
+42.12	Ctrl+Alt+E	Cmd+Alt+E
+42.12	Ctrl+G	Cmd+G
+42.12	Ctrl+Shift+G	Cmd+Shift+G
+42.12	Ctrl+Enter	Cmd+Enter
+42.12	Ctrl+Shift+A	Cmd+Shift+A
+42.12	K	K
+42.12	Ctrl+Shift+E	Cmd+Shift+E
+42.12	Ctrl+Shift+F	Cmd+Shift+F
+42.13	B	B
+42.13	Ctrl+1	Cmd+1
+42.13	Ctrl+2	Cmd+2
+42.13	Ctrl+3	Cmd+3
+42.13	Ctrl+4	Cmd+4
+42.13	Ctrl+5	Cmd+5
+42.13	~Alt	~Cmd
+42.14	Ctrl+6	Cmd+6
+42.14	Ctrl+7	Cmd+7
+42.14	Ctrl+8	Cmd+8
+42.14	Ctrl+9	Cmd+9
+42.14	Ctrl+0	Cmd+0
+42.15	Enter	Enter
+42.15	Up|Down|Left|Right	Up|Down|Left|Right
+42.15	Ctrl+A	Cmd+A
+42.15	~Ctrl drag	~Alt drag
+42.15	Ctrl+E	Cmd+E
+42.15	Ctrl+Enter	Cmd+Enter
+42.15	Ctrl+Shift+M	Cmd+Shift+M
+42.15	Ctrl+I	Cmd+I
+42.15	Ctrl+Shift+I	Cmd+Shift+I
+42.15	Up|Down	Up|Down
+42.15	PageUp|PageDown	PageUp|PageDown
+42.15	Ctrl+Shift+F9	Cmd+Shift+F9
+42.15	Shift+Enter	Shift+Enter
+42.15	Ctrl+Shift+Enter	Cmd+Shift+Enter
+42.15	Ctrl+Left|Ctrl+Right	Cmd+Left|Cmd+Right
+42.15	Ctrl+Up|Ctrl+Down	Cmd+Up|Cmd+Down
+42.15	~Ctrl	~Cmd
+42.15	0	0
+42.15	Esc	Esc
+42.15	Home	Home
+42.15	End	End
+42.15	End	End
+42.15	S	S
+42.16	Ctrl+E	Cmd+E
+42.16	Ctrl+J	Cmd+J
+42.16	Ctrl+Shift+J	Cmd+Shift+J
+42.16	~Enter left and right arrow	~Enter left and right arrow
+42.16	~Shift Alt drag	~Shift Alt drag
+42.16	~Shift drag in clip title bar	~Shift drag in clip title bar
+42.16	~Shift Alt drag in clip title bar	~Shift Alt drag in clip title bar
+42.16	Ctrl+Alt+F	Cmd+Alt+F
+42.16	Ctrl+Alt+Delete	Cmd+Alt+Delete
+42.16	F	F
+42.16	Ctrl+L	Cmd+L
+42.16	Ctrl+Left|Ctrl+Right	Cmd+Left|Cmd+Right
+42.16	Ctrl+Shift+L	Cmd+Shift+L
+42.16	Ctrl+I	Cmd+I
+42.16	Ctrl+Shift+X	Cmd+Shift+X
+42.16	Ctrl+Shift+C	Cmd+Shift+C
+42.16	Ctrl+Shift+V	Cmd+Shift+V
+42.16	Ctrl+Shift+D	Cmd+Shift+D
+42.16	Ctrl+Shift+Delete	Cmd+Shift+Delete
+42.16	U|Left|Right	U|Left|Right
+42.16	Alt+U	Alt+U
+42.16	Alt++|Alt+-	Alt++|Alt+-
+42.16	Ctrl+Shift+F	Alt+Shift+F
+42.16	~Ctrl Alt drag	~Cmd Alt drag
+42.16	H	H
+42.16	W	W
+42.16	0	0
+42.16	Left|Right	Left|Right
+42.16	R	R
+42.16	Z	Z
+42.16	X	X
+42.16	Ctrl+Space	Alt+Space
+42.16	Ctrl+Shift+Space	Cmd+Shift+Space
+42.16	Esc	Esc
+42.16	Alt+Shift+M	Alt+Shift+M
+42.17	Ctrl+Alt+U	Cmd+Alt+U
+42.17	Enter	Enter
+42.17	T	T
+42.17	Alt+Shift+T	Alt+Shift+T
+42.17	Ctrl+D	Cmd+D
+42.17	Ctrl+Up|Ctrl+Down	Cmd+Up|Cmd+Down
+42.18	Ctrl+B	Cmd+B
+42.18	Ctrl+Alt+V	Cmd+Alt+V
+42.19	Ctrl+T	Cmd+T
+42.19	Ctrl+Shift+T	Cmd+Shift+T
+42.19	Ctrl+Alt+T	Cmd+Alt+T
+42.19	Ctrl+R	Cmd+R
+42.19	Tab	Tab
+42.19	Ctrl+G	Cmd+G
+42.19	Ctrl+Shift+G	Cmd+Shift+G
+42.19	+	+
+42.19	-	-
+42.19	U	U
+42.19	Ctrl+Alt+R	Cmd+Alt+R
+42.19	Ctrl+Up|Ctrl+Down|Ctrl+Left|Ctrl+Right	Cmd+Up|Cmd+Down|Cmd+Left|Cmd+Right
+42.19	C	C
+42.19	S	S
+42.19	Enter	Enter
+42.19	0	0
+42.19	Ctrl+Alt+Shift+F	Cmd+Alt+Shift+F
+42.19	Delete	Delete
+42.20	Space	Space
+42.20	Shift+Space	Shift+Space
+42.20	Ctrl+Space	Alt+Space
+42.20	Space	Space
+42.20	Home	Home
+42.20	F9	F9
+42.20	Shift+F9	Shift+F9
+42.20	Ctrl+Shift+F9	Cmd+Shift+F9
+42.20	F10	F10
+42.20	F1|F2|F3|F4|F5|F6|F7|F8	F1|F2|F3|F4|F5|F6|F7|F8
+42.20	O	O
+42.21	Ctrl+Alt+Shift+E	Cmd+Alt+Shift+E
+42.22	Up|Down	Up|Down
+42.22	Ctrl+Alt+B	Cmd+Alt+B
+42.22	Left|Right	Left|Right
+42.22	Enter	Enter
+42.22	Shift+Enter|Right	Shift+Enter|Right
+42.22	Ctrl+F	Cmd+F
+42.22	Down|Enter	Down|Enter
+42.22	1|2|3|4|5|6|7	1|2|3|4|5|6|7
+42.22	0	0
+42.22	Ctrl+Shift+F	Cmd+Shift+F
+42.22	Ctrl+[	Cmd+[
+42.22	Ctrl+]	Cmd+]
+42.22	Ctrl+Alt+G	Cmd+Alt+G
+42.22	Ctrl+Shift+E	Cmd+Shift+E
+42.23	Ctrl+Right	Cmd+Right
+42.23	Ctrl+Left	Cmd+Left
+42.23	Ctrl+Up	Cmd+Up
+42.23	Ctrl+Down	Cmd+Down
+42.23	~Alt	~Alt
+42.24	Ctrl+M	Cmd+M
+42.24	Ctrl+K	Cmd+K
+42.24	M	M
+42.24	X|Z	X|Z
+42.24	C|V	C|V

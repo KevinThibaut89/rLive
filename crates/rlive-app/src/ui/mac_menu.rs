@@ -3,7 +3,10 @@
 //! Menu callbacks only queue a [`MenuCommand`]; the app runs it on its next
 //! frame, because commands can open blocking dialogs and need the app's state.
 
-use super::commands::{self, shortcut, Entry, MenuCommand, MenuState};
+use super::commands::app::App;
+use super::commands::edit::{self, Edit};
+use super::commands::{self, Entry, MenuCommand, MenuState};
+use super::keymap;
 use egui::{Event, Key, Modifiers, RawInput};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, Sel};
@@ -16,8 +19,6 @@ use objc2_foundation::NSString;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::cell::RefCell;
 use std::rc::Rc;
-
-use MenuCommand as C;
 
 struct MenuShared {
     queue: RefCell<Vec<MenuCommand>>,
@@ -38,13 +39,16 @@ impl MenuShared {
 
 /// The standard responder-chain action for an Edit command.
 fn responder_action(c: MenuCommand) -> Option<Sel> {
+    let MenuCommand::Edit(c) = c else {
+        return None;
+    };
     Some(match c {
-        C::Undo => sel!(undo:),
-        C::Redo => sel!(redo:),
-        C::Cut => sel!(cut:),
-        C::Copy => sel!(copy:),
-        C::Paste => sel!(paste:),
-        C::SelectAll => sel!(selectAll:),
+        Edit::Undo => sel!(undo:),
+        Edit::Redo => sel!(redo:),
+        Edit::Cut => sel!(cut:),
+        Edit::Copy => sel!(copy:),
+        Edit::Paste => sel!(paste:),
+        Edit::SelectAll => sel!(selectAll:),
         _ => return None,
     })
 }
@@ -59,7 +63,7 @@ define_class!(
     impl MenuTarget {
         #[unsafe(method(perform:))]
         fn perform(&self, item: &NSMenuItem) {
-            let Some(c) = MenuCommand::ALL.get(item.tag() as usize).copied() else {
+            let Some(c) = MenuCommand::all().get(item.tag() as usize).copied() else {
                 return;
             };
             let shared = self.ivars();
@@ -103,7 +107,7 @@ impl MenuTarget {
         if item.action() == Some(sel!(closeKeyWindow:)) {
             return foreign;
         }
-        let Some(c) = MenuCommand::ALL.get(item.tag() as usize).copied() else {
+        let Some(c) = MenuCommand::all().get(item.tag() as usize).copied() else {
             return true;
         };
         let state = shared.state.borrow();
@@ -114,7 +118,11 @@ impl MenuTarget {
         });
         if foreign && responder_action(c).is_some() {
             // A plugin's editor decides what these do.
-            if let Some(t) = commands::plain_title(c) {
+            let plain = match c {
+                MenuCommand::Edit(e) => edit::plain_title(e),
+                _ => None,
+            };
+            if let Some(t) = plain {
                 item.setTitle(&NSString::from_str(t));
             }
             return true;
@@ -140,13 +148,7 @@ pub struct MacMenu {
 }
 
 fn key_equivalent(key: Key) -> String {
-    match key {
-        Key::Comma => ",".into(),
-        Key::Equals => "=".into(),
-        Key::Minus => "-".into(),
-        Key::Num0 => "0".into(),
-        other => other.name().to_lowercase(),
-    }
+    key.symbol_or_name().to_lowercase()
 }
 
 fn modifier_mask(m: Modifiers) -> NSEventModifierFlags {
@@ -184,12 +186,13 @@ impl Builder<'_> {
 
     /// An item handled by rLive.
     fn command(&self, title: &str, c: MenuCommand) -> Retained<NSMenuItem> {
-        let key = shortcut(c).map(|s| key_equivalent(s.logical_key));
+        let shortcut = keymap::menu_shortcut(c);
+        let key = shortcut.map(|s| key_equivalent(s.logical_key));
         let item = self.raw_item(title, sel!(perform:), key.as_deref().unwrap_or(""));
-        if let Some(s) = shortcut(c) {
+        if let Some(s) = shortcut {
             item.setKeyEquivalentModifierMask(modifier_mask(s.modifiers));
         }
-        item.setTag(c as isize);
+        item.setTag(c.index() as isize);
         // SAFETY: the target outlives the menu; MacMenu retains both.
         unsafe { item.setTarget(Some(self.target)) };
         item
@@ -255,9 +258,9 @@ impl MacMenu {
 
         // The app menu must stay first: eframe retitles item 0.
         let rlive = b.submenu(&bar, "rLive");
-        rlive.addItem(&b.command("About rLive", C::About));
+        rlive.addItem(&b.command("About rLive", App::About.into()));
         b.separator(&rlive);
-        rlive.addItem(&b.command("Preferences…", C::Preferences));
+        rlive.addItem(&b.command("Settings…", App::Preferences.into()));
         b.separator(&rlive);
         let services = b.submenu(&rlive, "Services");
         app.setServicesMenu(Some(&services));
@@ -272,13 +275,13 @@ impl MacMenu {
         );
         b.system(&rlive, "Show All", sel!(unhideAllApplications:), "", none);
         b.separator(&rlive);
-        rlive.addItem(&b.command("Quit rLive", C::Quit));
+        rlive.addItem(&b.command("Quit rLive", App::Quit.into()));
 
-        b.entries(&b.submenu(&bar, "File"), commands::FILE_MENU);
-        b.entries(&b.submenu(&bar, "Edit"), commands::EDIT_MENU);
-        b.entries(&b.submenu(&bar, "Create"), commands::CREATE_MENU);
-        b.entries(&b.submenu(&bar, "View"), commands::VIEW_MENU);
-        b.entries(&b.submenu(&bar, "Options"), commands::OPTIONS_MENU);
+        b.entries(&b.submenu(&bar, "File"), commands::file::MENU);
+        b.entries(&b.submenu(&bar, "Edit"), commands::edit::MENU);
+        b.entries(&b.submenu(&bar, "Create"), commands::create::MENU);
+        b.entries(&b.submenu(&bar, "View"), commands::view::MENU);
+        b.entries(&b.submenu(&bar, "Options"), commands::options::MENU);
 
         let window = b.submenu(&bar, "Window");
         b.system(&window, "Minimize", sel!(performMiniaturize:), "m", cmd);
@@ -353,24 +356,27 @@ fn inject_text_edit(c: MenuCommand, raw: &mut RawInput) -> bool {
         shift: true,
         ..Modifiers::COMMAND
     };
+    let MenuCommand::Edit(c) = c else {
+        return false;
+    };
     let (key, modifiers) = match c {
-        C::Cut => {
+        Edit::Cut => {
             raw.events.push(Event::Cut);
             return true;
         }
-        C::Copy => {
+        Edit::Copy => {
             raw.events.push(Event::Copy);
             return true;
         }
-        C::Paste => {
+        Edit::Paste => {
             if let Some(text) = pasteboard_text() {
                 raw.events.push(Event::Paste(text));
             }
             return true;
         }
-        C::SelectAll => (Key::A, Modifiers::COMMAND),
-        C::Undo => (Key::Z, Modifiers::COMMAND),
-        C::Redo => (Key::Z, shift),
+        Edit::SelectAll => (Key::A, Modifiers::COMMAND),
+        Edit::Undo => (Key::Z, Modifiers::COMMAND),
+        Edit::Redo => (Key::Z, shift),
         _ => return false,
     };
     for pressed in [true, false] {

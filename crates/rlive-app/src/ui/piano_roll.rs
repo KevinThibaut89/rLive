@@ -1,6 +1,7 @@
 //! Clip view, styled after Live: a "Clip" properties box on the left and the note editor
 //! (ruler with loop brace, piano keys, note grid, velocity lane) on the right.
 
+use super::keymap::{self, Platform};
 use super::theme::{self, *};
 use super::timeline::snap;
 use super::widgets::{self, info, rgb};
@@ -219,16 +220,16 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let full = ui.max_rect();
     // Claim the whole panel so egui keeps its size (children don't advance the cursor).
     ui.expand_to_include_rect(full);
-    ui.painter().rect_filled(full, 0.0, PANEL_DARK);
+    ui.painter().rect_filled(full, 0.0, pal().panel_dark);
     let narrow = full.width() < 760.0;
     let box_w = if narrow { 140.0 } else { CLIP_BOX_W };
     let boxr = Rect::from_min_size(full.min, Vec2::new(box_w, full.height()));
     let mut bu = ui.new_child(UiBuilder::new().max_rect(boxr.shrink(6.0)));
     bu.set_clip_rect(boxr.intersect(ui.clip_rect()));
-    ui.painter().rect_filled(boxr, 0.0, PANEL);
+    ui.painter().rect_filled(boxr, 0.0, pal().panel);
     ui.painter().line_segment(
         [boxr.right_top(), boxr.right_bottom()],
-        Stroke::new(1.0, SEPARATOR),
+        Stroke::new(1.0, pal().separator),
     );
     clip_box(&mut bu, session, state, cref);
 
@@ -254,13 +255,13 @@ fn clip_box(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, cref:
             ui.painter()
                 .rect_filled(r.shrink2(Vec2::new(0.0, 3.0)), 1.0, rgb(c.color));
             let resp = ui.add(egui::TextEdit::singleline(&mut c.name).desired_width(f32::INFINITY));
-            info(resp, "Clip name");
+            info(resp, "Clip Name — the name shown on the clip");
         });
         egui::Grid::new("clip_props")
             .num_columns(2)
             .spacing([6.0, 3.0])
             .show(ui, |ui| {
-                ui.label(RichText::new("Length").color(TEXT_DIM));
+                ui.label(RichText::new("Length").color(pal().text_dim));
                 let mut bars = c.length as f64 / bar_ticks as f64;
                 let r = ui.add(
                     egui::DragValue::new(&mut bars)
@@ -276,18 +277,18 @@ fn clip_box(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, cref:
                 }
                 info(
                     r,
-                    "Loop length in bars (you can also drag the loop end in the ruler)",
+                    "Loop Length — in bars; you can also drag the loop end in the ruler",
                 );
                 ui.end_row();
-                ui.label(RichText::new("Loop").color(TEXT_DIM));
+                ui.label(RichText::new("Loop").color(pal().text_dim));
                 let r = widgets::state_button(
                     ui,
                     Vec2::new(44.0, 16.0),
                     c.looped,
-                    ACCENT,
+                    pal().accent,
                     if c.looped { "On" } else { "Off" },
                 );
-                if info(r, "Loop the clip, or play it once").clicked() {
+                if info(r, "Loop — repeat the clip, or play it once").clicked() {
                     c.looped = !c.looped;
                     changed = true;
                 }
@@ -301,7 +302,7 @@ fn clip_box(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, cref:
             .num_columns(2)
             .spacing([6.0, 3.0])
             .show(ui, |ui| {
-                ui.label(RichText::new("Grid").color(TEXT_DIM));
+                ui.label(RichText::new("Grid").color(pal().text_dim));
                 let r = egui::ComboBox::from_id_salt("grid")
                     .width(62.0)
                     .selected_text(grid_label(state.piano.grid))
@@ -312,22 +313,27 @@ fn clip_box(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, cref:
                     });
                 info(
                     r.response,
-                    "Grid for drawing and snapping notes (hold Alt to ignore)",
+                    "Grid — for drawing and snapping notes (hold the grid-bypass key to ignore)",
                 );
                 ui.end_row();
-                ui.label(RichText::new("Velocity").color(TEXT_DIM));
+                ui.label(RichText::new("Velocity").color(pal().text_dim));
                 let r = ui.add(
                     egui::DragValue::new(&mut state.piano.new_velocity)
                         .range(0.05..=1.0)
                         .speed(0.01)
                         .fixed_decimals(2),
                 );
-                info(r, "Velocity for new notes");
+                info(r, "New Note Velocity — how hard new notes are played");
                 ui.end_row();
             });
         ui.horizontal_wrapped(|ui| {
             let r = ui.button("Duplicate Loop");
-            if info(r, "Double the clip length and copy its notes").clicked() {
+            if info(
+                r,
+                "Duplicate Loop — double the clip length and copy its notes",
+            )
+            .clicked()
+            {
                 if let Some(c) = session.clip_at_mut(cref) {
                     let len = c.length;
                     if let Some(notes) = c.notes_mut() {
@@ -345,7 +351,7 @@ fn clip_box(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, cref:
                 }
             }
             let r = ui.button("Quantize");
-            if info(r, "Snap selected (or all) notes to the grid").clicked() {
+            if info(r, "Quantize — snap selected, or all, notes to the grid").clicked() {
                 let grid = state.piano.grid;
                 let sel = state.piano.selected.clone();
                 if let Some(notes) = session.clip_at_mut(cref).and_then(|c| c.notes_mut()) {
@@ -372,7 +378,7 @@ fn audio_clip_panel(
     gain_db: f32,
 ) {
     widgets::section_label(ui, "SAMPLE");
-    ui.label(RichText::new(path.display().to_string()).color(TEXT_DIM));
+    ui.label(RichText::new(path.display().to_string()).color(pal().text_dim));
     let mut g = gain_db;
     ui.horizontal(|ui| {
         ui.label("Gain");
@@ -392,13 +398,13 @@ fn audio_clip_panel(
         let h = (ui.available_height() - 24.0).max(40.0);
         let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::hover());
         let p = ui.painter_at(rect);
-        p.rect_filled(rect, 1.0, GRID_BG);
+        p.rect_filled(rect, 1.0, pal().grid_bg);
         let n = sample.len().max(1);
         let cols = rect.width() as usize;
         let color = session
             .clip_at(cref)
             .map(|c| rgb(c.color))
-            .unwrap_or(ACCENT);
+            .unwrap_or(pal().accent);
         if let Some((peaks, _)) = session.samples.peaks(path) {
             for x in 0..cols {
                 let a = x * n / cols;
@@ -422,7 +428,7 @@ fn audio_clip_panel(
                 sample.sample_rate
             ))
             .small()
-            .color(TEXT_DIM),
+            .color(pal().text_dim),
         );
     }
 }
@@ -542,7 +548,7 @@ fn note_editor(
     // Grid rows
     {
         let p = ui.painter_at(grid);
-        p.rect_filled(grid, 0.0, hex(0x2a2a2a));
+        p.rect_filled(grid, 0.0, shade(0x2a2a2a));
         let first = ((scroll.y / kh).floor() as i32).max(0);
         let last = (((scroll.y + grid.height()) / kh).ceil() as i32).min(128);
         for row in first..last {
@@ -550,12 +556,12 @@ fn note_editor(
             let y = to_y(key);
             let r = Rect::from_min_size(Pos2::new(grid.left(), y), Vec2::new(grid.width(), kh));
             if is_black(key) {
-                p.rect_filled(r, 0.0, hex(0x242424));
+                p.rect_filled(r, 0.0, shade(0x242424));
             }
             if key.is_multiple_of(12) {
                 p.line_segment(
                     [r.left_bottom(), r.right_bottom()],
-                    Stroke::new(1.0, hex(0x171717)),
+                    Stroke::new(1.0, shade(0x171717)),
                 );
             }
         }
@@ -567,11 +573,11 @@ fn note_editor(
         while to_x(t as f64) <= grid.right() {
             let x = to_x(t as f64);
             let (w, c) = if t.is_multiple_of(bar) {
-                (1.0, hex(0x0f0f0f))
+                (1.0, pal().grid_line(shade(0x0f0f0f)))
             } else if t.is_multiple_of(PPQ) {
-                (1.0, hex(0x1c1c1c))
+                (1.0, pal().grid_line(shade(0x1c1c1c)))
             } else {
-                (1.0, hex(0x242424))
+                (1.0, pal().grid_line(shade(0x242424)))
             };
             p.line_segment(
                 [Pos2::new(x, grid.top()), Pos2::new(x, grid.bottom())],
@@ -597,7 +603,7 @@ fn note_editor(
             }
             let sel = state.piano.selected.contains(&i);
             let fill = if sel {
-                hex(0xb5e0ff)
+                shade(0xb5e0ff)
             } else {
                 color.gamma_multiply(0.45 + 0.55 * n.velocity)
             };
@@ -613,7 +619,7 @@ fn note_editor(
             let x = to_x(playhead);
             p.line_segment(
                 [Pos2::new(x, grid.top()), Pos2::new(x, grid.bottom())],
-                Stroke::new(1.0, PLAY_GREEN),
+                Stroke::new(1.0, pal().play_green),
             );
         }
     }
@@ -622,7 +628,7 @@ fn note_editor(
     // Ruler with bar numbers and loop brace
     {
         let p = ui.painter_at(ruler);
-        p.rect_filled(ruler, 0.0, hex(0x333333));
+        p.rect_filled(ruler, 0.0, shade(0x333333));
         let bar = sig.ticks_per_bar();
         let mut b = (scroll.x / ppb * PPQ as f32) as u64 / bar;
         let label_every = if bar as f32 / PPQ as f32 * ppb < 40.0 {
@@ -637,7 +643,7 @@ fn note_editor(
                     Pos2::new(x, ruler.bottom() - 6.0),
                     Pos2::new(x, ruler.bottom()),
                 ],
-                Stroke::new(1.0, TEXT_DIM),
+                Stroke::new(1.0, pal().text_dim),
             );
             if b.is_multiple_of(label_every) {
                 p.text(
@@ -645,7 +651,7 @@ fn note_editor(
                     Align2::LEFT_TOP,
                     format!("{}", b + 1),
                     theme::font(10.0),
-                    TEXT_DIM,
+                    pal().text_dim,
                 );
             }
             b += 1;
@@ -659,9 +665,9 @@ fn note_editor(
             brace,
             0.0,
             if clip.looped {
-                hex(0x9a9a9a)
+                shade(0x9a9a9a)
             } else {
-                hex(0x5a5a5a)
+                shade(0x5a5a5a)
             },
         );
         let handle =
@@ -671,9 +677,9 @@ fn note_editor(
             Rect::from_center_size(Pos2::new(x1, ruler.bottom() - 7.0), Vec2::new(4.0, 12.0)),
             1.0,
             if hr.hovered() || hr.dragged() {
-                ACCENT
+                pal().accent
             } else {
-                hex(0xcfcfcf)
+                shade(0xcfcfcf)
             },
         );
         if hr.hovered() || hr.dragged() {
@@ -705,7 +711,7 @@ fn note_editor(
     // Keyboard
     {
         let p = ui.painter_at(keys);
-        p.rect_filled(keys, 0.0, hex(0x202020));
+        p.rect_filled(keys, 0.0, shade(0x202020));
         let first = ((scroll.y / kh).floor() as i32).max(0);
         let last = (((scroll.y + grid.height()) / kh).ceil() as i32).min(128);
         for row in first..last {
@@ -714,7 +720,7 @@ fn note_editor(
             let r = Rect::from_min_size(Pos2::new(keys.left(), y), Vec2::new(KEYBOARD_W, kh));
             let held = ps.preview == Some(key);
             let fill = if held {
-                ACCENT
+                pal().accent
             } else if is_black(key) {
                 hex(0x1a1a1a)
             } else {
@@ -754,13 +760,13 @@ fn note_editor(
         } else if ps.preview.is_some() && ps.preview_from_keys {
             preview_off = true;
         }
-        info(kresp, "Click keys to preview notes");
+        info(kresp, "Piano Keys — click keys to preview notes");
     }
     // Corner above the keyboard
     ui.painter().rect_filled(
         Rect::from_min_max(area.min, Pos2::new(grid.left(), ruler.bottom())),
         0.0,
-        hex(0x333333),
+        shade(0x333333),
     );
 
     // ================= grid interaction
@@ -791,7 +797,12 @@ fn note_editor(
             });
         }
     }
-    let (shift, no_snap) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+    let (shift, no_snap) = ui.input(|i| {
+        (
+            i.modifiers.shift,
+            keymap::ignores_grid(i.modifiers, Platform::current()),
+        )
+    });
     if resp.double_clicked() {
         if let Some(pos) = resp.interact_pointer_pos() {
             match hit(pos) {
@@ -898,15 +909,15 @@ fn note_editor(
         session.sync_ref(cref);
         preview_off = true;
     }
-    info(resp, "Double-click to add/remove notes · drag to move (Alt = no snap) · drag the right edge to resize · Cmd+wheel zooms");
+    info(resp, "Note Editor — double-click to add or remove notes · drag to move (Cmd = no snap) · drag the right edge to resize · Cmd+wheel zooms");
 
     // ================= velocity lane
     if vel_h > 0.0 {
         let p = ui.painter_at(vel);
-        p.rect_filled(vel, 0.0, hex(0x262626));
+        p.rect_filled(vel, 0.0, shade(0x262626));
         p.line_segment(
             [vel.left_top(), vel.right_top()],
-            Stroke::new(1.0, SEPARATOR),
+            Stroke::new(1.0, pal().separator),
         );
         let inner = vel.shrink2(Vec2::new(0.0, 4.0));
         let live: Vec<NoteData> = session
@@ -920,7 +931,7 @@ fn note_editor(
             }
             let y = inner.bottom() - inner.height() * n.velocity;
             let sel = state.piano.selected.contains(&i);
-            let c = if sel { hex(0xb5e0ff) } else { color };
+            let c = if sel { shade(0xb5e0ff) } else { color };
             p.line_segment(
                 [Pos2::new(x, inner.bottom()), Pos2::new(x, y)],
                 Stroke::new(1.5, c),

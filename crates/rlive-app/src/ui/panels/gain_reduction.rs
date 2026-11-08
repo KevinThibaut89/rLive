@@ -44,25 +44,25 @@ fn draw(ui: &mut egui::Ui, panel: &mut PanelCtx) {
         Align2::CENTER_CENTER,
         "GR",
         theme::font(10.0),
-        TEXT_DIM,
+        pal().text_dim,
     );
     let bar = Rect::from_min_size(
         Pos2::new(rect.center().x - 5.0, rect.top() + 14.0),
         Vec2::new(10.0, rect.height() - 30.0),
     );
-    p.rect_filled(bar, 0.0, KNOB_TRACK);
+    p.rect_filled(bar, 0.0, pal().knob_track);
     let fill = (db / RANGE_DB).clamp(0.0, 1.0) * bar.height();
     p.rect_filled(
         Rect::from_min_size(bar.min, Vec2::new(bar.width(), fill)),
         0.0,
-        ACCENT,
+        pal().accent,
     );
     p.text(
         Pos2::new(rect.center().x, rect.bottom() - 8.0),
         Align2::CENTER_CENTER,
         format!("-{db:.1}"),
         theme::font(10.0),
-        TEXT_DIM,
+        pal().text_dim,
     );
 }
 

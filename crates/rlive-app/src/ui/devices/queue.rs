@@ -24,6 +24,8 @@ pub(crate) enum Action {
     ShowAll(DeviceId),
     /// Show this chain of a rack.
     OpenChain(DeviceId, ChainId),
+    /// Open the Info View's editor on this device.
+    EditInfo(DeviceId),
     /// Something dropped from the browser into a chain.
     Add(BrowserItem),
 }
@@ -95,6 +97,7 @@ fn apply(
             }
         }
         Action::Reload(id) => session.reload_device(chain, id),
+        Action::EditInfo(id) => view.edit_info = Some((chain, id)),
         Action::ShowAll(id) => {
             let all = &mut view.show_all;
             if !all.insert(id) {

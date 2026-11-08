@@ -10,6 +10,7 @@ mod clips;
 mod devices;
 mod export;
 mod graph;
+mod info;
 mod recording;
 mod routing;
 mod tracks;
@@ -30,8 +31,10 @@ pub use build::{descriptor_for, mix_of, Builder, DeviceRuntime, SampleCache};
 pub use clips::ClipRef;
 pub use devices::ChainRef;
 pub use graph::compile_plan;
+pub use info::InfoTarget;
 
 use crate::recording::Recording;
+use crate::settings::ColorSettings;
 use rlive_core::{DeviceId, PluginFormat, TrackId};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
@@ -61,6 +64,8 @@ pub struct Session {
     pub messages: Vec<String>,
     pub dirty: bool,
     pub history: History,
+    /// How new tracks and clips are coloured.
+    pub colors: ColorSettings,
     recording: Option<Recording>,
     automation: automation::AutomationRecorder,
 }
@@ -81,6 +86,7 @@ impl Session {
             messages: Vec::new(),
             dirty: false,
             history,
+            colors: ColorSettings::default(),
             recording: None,
             automation: automation::AutomationRecorder::default(),
         };

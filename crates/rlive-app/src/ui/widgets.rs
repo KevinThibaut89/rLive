@@ -5,13 +5,37 @@ use super::theme::{self, *};
 use egui::{Align2, Color32, Id, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, Vec2};
 use rlive_core::{db_to_gain, gain_to_db, ParamInfo, ParamKind};
 
-pub use theme::{ACCENT, PLAY_GREEN, TEXT_DIM};
-
 pub fn rgb(c: [u8; 3]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
 }
 
 // ------------------------------------------------------------------ info view
+
+/// What the Info View shows for a hovered control.
+#[derive(Clone, Default, PartialEq, Debug)]
+pub struct InfoEntry {
+    pub name: String,
+    pub purpose: String,
+    /// The user's own text, when the thing under the pointer has some.
+    pub note: String,
+}
+
+impl InfoEntry {
+    /// Splits "Name — what it does" into its two parts. Text with no dash is all name.
+    pub fn parse(text: &str) -> Self {
+        match text.split_once(" — ") {
+            Some((name, purpose)) => Self {
+                name: name.to_string(),
+                purpose: purpose.to_string(),
+                note: String::new(),
+            },
+            None => Self {
+                name: text.to_string(),
+                ..Self::default()
+            },
+        }
+    }
+}
 
 fn info_current() -> Id {
     Id::unique("rlive_info_current")
@@ -21,30 +45,51 @@ fn info_shown() -> Id {
     Id::unique("rlive_info_shown")
 }
 
-/// Describe a control in the Info View (bottom-left) while it is hovered or dragged.
+/// Describe a control in the Info View while it is hovered or dragged. Write the text as
+/// "Name — what it does".
 pub fn info(resp: Response, text: impl Into<String>) -> Response {
     if resp.hovered() || resp.dragged() {
-        let text = text.into();
-        resp.ctx.data_mut(|d| d.insert_temp(info_current(), text));
+        let entry = InfoEntry::parse(&text.into());
+        resp.ctx.data_mut(|d| d.insert_temp(info_current(), entry));
     }
     resp
+}
+
+/// Adds the user's own text to what [`info`] just recorded for this control.
+pub fn info_note(resp: &Response, note: &str) {
+    if !note.is_empty() && (resp.hovered() || resp.dragged()) {
+        resp.ctx.data_mut(|d| {
+            d.get_temp_mut_or_default::<InfoEntry>(info_current()).note = note.to_string();
+        });
+    }
 }
 
 /// Call once at the start of a frame: what was hovered last frame becomes visible.
 pub fn info_begin_frame(ctx: &egui::Context) {
     ctx.data_mut(|d| {
-        let cur: Option<String> = d.remove_temp(info_current());
+        let cur: Option<InfoEntry> = d.remove_temp(info_current());
         match cur {
             Some(t) => {
                 d.insert_temp(info_shown(), t);
             }
-            None => d.remove::<String>(info_shown()),
+            None => d.remove::<InfoEntry>(info_shown()),
         }
     });
 }
 
-pub fn info_text(ctx: &egui::Context) -> Option<String> {
+/// What the Info View should show right now.
+pub fn info_entry(ctx: &egui::Context) -> Option<InfoEntry> {
     ctx.data(|d| d.get_temp(info_shown()))
+}
+
+/// The same, on one line.
+pub fn info_text(ctx: &egui::Context) -> Option<String> {
+    let e = info_entry(ctx)?;
+    Some(if e.purpose.is_empty() {
+        e.name
+    } else {
+        format!("{} — {}", e.name, e.purpose)
+    })
 }
 
 // ------------------------------------------------------------------ buttons
@@ -56,9 +101,9 @@ pub fn state_button(ui: &mut Ui, size: Vec2, on: bool, on_color: Color32, label:
     let fill = if on {
         on_color
     } else if resp.hovered() {
-        RAISED_HOVER
+        pal().raised_hover
     } else {
-        RAISED
+        pal().raised
     };
     p.rect_filled(rect, 1.0, fill);
     p.text(
@@ -66,7 +111,11 @@ pub fn state_button(ui: &mut Ui, size: Vec2, on: bool, on_color: Color32, label:
         Align2::CENTER_CENTER,
         label,
         font(10.5),
-        if on { theme::text_on(on_color) } else { TEXT },
+        if on {
+            theme::text_on(on_color)
+        } else {
+            pal().text
+        },
     );
     resp
 }
@@ -84,9 +133,9 @@ pub fn icon_button(
     let (fill, fg) = if on {
         (on_color, theme::text_on(on_color))
     } else if resp.hovered() {
-        (RAISED_HOVER, hex(0xf0f0f0))
+        (pal().raised_hover, shade(0xf0f0f0))
     } else {
-        (RAISED, TEXT)
+        (pal().raised, pal().text)
     };
     p.rect_filled(rect, 1.0, fill);
     draw(p, rect, fg);
@@ -101,9 +150,9 @@ pub fn bare_icon(
 ) -> Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let c = if resp.hovered() {
-        hex(0xffffff)
+        shade(0xffffff)
     } else {
-        TEXT_DIM
+        pal().text_dim
     };
     draw(ui.painter(), rect, c);
     resp
@@ -143,13 +192,13 @@ pub fn paint_knob(
 ) {
     p.add(Shape::line(
         arc_points(center, radius, 0.0, 1.0),
-        Stroke::new(3.0, KNOB_TRACK),
+        Stroke::new(3.0, pal().knob_track),
     ));
     let (a, b) = if bipolar { (0.5, norm) } else { (0.0, norm) };
     let arc = match tone {
-        KnobTone::Normal => KNOB_ARC,
-        KnobTone::Active => hex(0xffc070),
-        KnobTone::Disabled => TEXT_FAINT,
+        KnobTone::Normal => pal().knob_arc,
+        KnobTone::Active => shade(0xffc070),
+        KnobTone::Disabled => pal().text_faint,
     };
     if (b - a).abs() > 0.001 {
         p.add(Shape::line(
@@ -158,9 +207,9 @@ pub fn paint_knob(
         ));
     }
     let needle = if tone == KnobTone::Disabled {
-        TEXT_DIM
+        pal().text_dim
     } else {
-        hex(0xf0f0f0)
+        shade(0xf0f0f0)
     };
     let ang = std::f32::consts::PI * 0.75 + std::f32::consts::PI * 1.5 * norm;
     p.line_segment(
@@ -176,7 +225,7 @@ pub fn paint_knob(
 pub fn paint_mod_ring(p: &egui::Painter, center: Pos2, radius: f32, span: (f32, f32)) {
     p.add(Shape::line(
         arc_points(center, radius + 3.0, span.0, span.1),
-        Stroke::new(1.5, SOLO_BLUE),
+        Stroke::new(1.5, pal().solo_blue),
     ));
 }
 
@@ -227,9 +276,9 @@ impl Led {
     pub fn paint(self, p: &egui::Painter, at: Pos2) {
         let color = match self {
             Self::Off => return,
-            Self::Automated => ARM_RED,
-            Self::Overridden => hex(0x8a8a8a),
-            Self::Modulated => SOLO_BLUE,
+            Self::Automated => pal().arm_red,
+            Self::Overridden => shade(0x8a8a8a),
+            Self::Modulated => pal().solo_blue,
         };
         p.circle_filled(at, 2.5, color);
     }
@@ -290,11 +339,11 @@ pub fn knob(
     let p = ui.painter_at(rect.expand(2.0));
     let name: String = param.name.chars().take(12).collect();
     let name_color = if state.disabled {
-        TEXT_FAINT
+        pal().text_faint
     } else if active {
-        TEXT
+        pal().text
     } else {
-        hex(0xb8b8b8)
+        shade(0xb8b8b8)
     };
     p.text(
         Pos2::new(rect.center().x, rect.top() + 6.0),
@@ -308,9 +357,9 @@ pub fn knob(
         let r = Rect::from_center_size(center, Vec2::new(30.0, 15.0));
         let on = value >= 0.5;
         let fill = match (on, state.disabled) {
-            (true, false) => ACCENT,
-            (true, true) => TEXT_FAINT,
-            (false, _) => RAISED,
+            (true, false) => pal().accent,
+            (true, true) => pal().text_faint,
+            (false, _) => pal().raised,
         };
         p.rect_filled(r, 1.0, fill);
         p.text(
@@ -318,7 +367,7 @@ pub fn knob(
             Align2::CENTER_CENTER,
             if on { "On" } else { "Off" },
             font(10.0),
-            if on { TEXT_DARK } else { TEXT_DIM },
+            if on { pal().text_dark } else { pal().text_dim },
         );
     } else {
         let bipolar = param.min < 0.0 && param.max > 0.0;
@@ -344,7 +393,7 @@ pub fn knob(
         Vec2::new(54.0, 13.0),
     );
     if active && !toggle && !state.disabled {
-        p.rect_filled(val, 1.0, FIELD_BG);
+        p.rect_filled(val, 1.0, pal().field_bg);
     }
     // Toggles already show their state on the button.
     let display = if toggle { "" } else { display };
@@ -354,9 +403,9 @@ pub fn knob(
         display,
         font(10.0),
         if active && !state.disabled {
-            ACCENT
+            pal().accent
         } else {
-            TEXT_DIM
+            pal().text_dim
         },
     );
     let hint = if state.disabled {
@@ -402,11 +451,11 @@ pub fn slider(
     let active = !state.disabled && (resp.hovered() || resp.dragged());
     let p = ui.painter();
     let (name_color, value_color) = if state.disabled {
-        (TEXT_FAINT, TEXT_FAINT)
+        (pal().text_faint, pal().text_faint)
     } else if active {
-        (TEXT, ACCENT)
+        (pal().text, pal().accent)
     } else {
-        (hex(0xb8b8b8), TEXT_DIM)
+        (shade(0xb8b8b8), pal().text_dim)
     };
     p.text(
         rect.left_top(),
@@ -426,17 +475,17 @@ pub fn slider(
         Pos2::new(rect.left(), rect.bottom() - 9.0),
         Vec2::new(rect.width(), 5.0),
     );
-    p.rect_filled(bar, 0.0, KNOB_TRACK);
+    p.rect_filled(bar, 0.0, pal().knob_track);
     let fill = Rect::from_min_size(bar.min, Vec2::new(bar.width() * norm, bar.height()));
     p.rect_filled(
         fill,
         0.0,
         if state.disabled {
-            TEXT_FAINT
+            pal().text_faint
         } else if active {
-            hex(0xffc070)
+            shade(0xffc070)
         } else {
-            KNOB_ARC
+            pal().knob_arc
         },
     );
     if let Some(span) = state
@@ -448,7 +497,7 @@ pub fn slider(
             Pos2::new(bar.left() + bar.width() * span.0, bar.bottom() + 1.0),
             Pos2::new(bar.left() + bar.width() * span.1, bar.bottom() + 3.0),
         );
-        p.rect_filled(ring, 0.0, SOLO_BLUE);
+        p.rect_filled(ring, 0.0, pal().solo_blue);
     }
     let hint = if state.disabled {
         "controlled by a Macro"
@@ -472,10 +521,10 @@ pub fn toggle(ui: &mut Ui, param: &ParamInfo, value: f64, state: ControlState) -
     };
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(56.0, 18.0), sense);
     let fill = match (on, state.disabled) {
-        (true, false) => ACCENT,
-        (true, true) => TEXT_FAINT,
-        (false, _) if resp.hovered() => RAISED_HOVER,
-        (false, _) => RAISED,
+        (true, false) => pal().accent,
+        (true, true) => pal().text_faint,
+        (false, _) if resp.hovered() => pal().raised_hover,
+        (false, _) => pal().raised,
     };
     let p = ui.painter();
     p.rect_filled(rect, 1.0, fill);
@@ -485,7 +534,7 @@ pub fn toggle(ui: &mut Ui, param: &ParamInfo, value: f64, state: ControlState) -
         Align2::CENTER_CENTER,
         name,
         font(10.0),
-        if on { theme::text_on(fill) } else { TEXT },
+        if on { theme::text_on(fill) } else { pal().text },
     );
     let hint = if state.disabled {
         "controlled by a Macro"
@@ -506,9 +555,9 @@ pub fn menu(ui: &mut Ui, param: &ParamInfo, value: f64, state: ControlState) -> 
     let current = labels.get(selected).map_or("?", String::as_str);
     let mut chosen = selected;
     let name_color = if state.disabled {
-        TEXT_FAINT
+        pal().text_faint
     } else {
-        hex(0xb8b8b8)
+        shade(0xb8b8b8)
     };
     let outer = ui.add_enabled_ui(!state.disabled, |ui| {
         ui.vertical(|ui| {
@@ -552,8 +601,13 @@ fn menu_entries(param: &ParamInfo) -> (Vec<String>, f64) {
 
 /// Paint a scope's view data: samples in -1..1, spectrum bins in 0..1, or left/right pairs.
 pub fn paint_scope(p: &egui::Painter, rect: Rect, kind: rlive_core::ScopeKind, data: &[f32]) {
-    p.rect_filled(rect, 0.0, hex(0x121212));
-    p.rect_stroke(rect, 0.0, Stroke::new(1.0, SEPARATOR), StrokeKind::Inside);
+    p.rect_filled(rect, 0.0, shade(0x121212));
+    p.rect_stroke(
+        rect,
+        0.0,
+        Stroke::new(1.0, pal().separator),
+        StrokeKind::Inside,
+    );
     let inner = rect.shrink(2.0);
     let points: Vec<Pos2> = match kind {
         rlive_core::ScopeKind::Waveform => data
@@ -588,10 +642,10 @@ pub fn paint_scope(p: &egui::Painter, rect: Rect, kind: rlive_core::ScopeKind, d
     };
     let clipped = p.with_clip_rect(rect);
     if points.len() > 1 && kind != rlive_core::ScopeKind::Vectorscope {
-        clipped.add(Shape::line(points, Stroke::new(1.0, ACCENT)));
+        clipped.add(Shape::line(points, Stroke::new(1.0, pal().accent)));
     } else {
         for point in points {
-            clipped.circle_filled(point, 0.75, ACCENT);
+            clipped.circle_filled(point, 0.75, pal().accent);
         }
     }
 }
@@ -657,7 +711,7 @@ fn pos_to_db(pos: f32) -> f32 {
 
 /// Paint a stereo peak meter into `rect`.
 pub fn paint_meter(p: &egui::Painter, rect: Rect, peaks: (f32, f32)) {
-    p.rect_filled(rect, 0.0, hex(0x121212));
+    p.rect_filled(rect, 0.0, shade(0x121212));
     let gap = 1.0;
     let w = ((rect.width() - gap) / 2.0).max(1.0);
     for (i, peak) in [peaks.0, peaks.1].into_iter().enumerate() {
@@ -669,19 +723,19 @@ pub fn paint_meter(p: &egui::Painter, rect: Rect, peaks: (f32, f32)) {
         let y12 = rect.bottom() - rect.height() * db_to_pos(-12.0);
         let y0 = rect.bottom() - rect.height() * db_to_pos(0.0);
         let green = Rect::from_min_max(Pos2::new(x0, full.top().max(y12)), full.max);
-        p.rect_filled(green, 0.0, hex(0x46d160));
+        p.rect_filled(green, 0.0, shade(0x46d160));
         if full.top() < y12 {
             p.rect_filled(
                 Rect::from_min_max(Pos2::new(x0, full.top().max(y0)), Pos2::new(x0 + w, y12)),
                 0.0,
-                hex(0xe5d14a),
+                shade(0xe5d14a),
             );
         }
         if full.top() < y0 {
             p.rect_filled(
                 Rect::from_min_max(full.min, Pos2::new(x0 + w, y0)),
                 0.0,
-                hex(0xff4a3d),
+                shade(0xff4a3d),
             );
         }
     }
@@ -708,7 +762,7 @@ pub fn fader(ui: &mut Ui, size: Vec2, db: f32, peaks: (f32, f32), color: Color32
         changed = Some(0.0);
     }
     let p = ui.painter();
-    p.rect_filled(track, 1.0, hex(0x141414));
+    p.rect_filled(track, 1.0, shade(0x141414));
     let y = track.bottom() - track.height() * pos;
     p.rect_filled(
         Rect::from_min_max(Pos2::new(track.left(), y), track.max),
@@ -722,7 +776,7 @@ pub fn fader(ui: &mut Ui, size: Vec2, db: f32, peaks: (f32, f32), color: Color32
             Pos2::new(track.left() - 4.0, y0),
             Pos2::new(track.right() + 4.0, y0),
         ],
-        Stroke::new(1.0, TEXT_FAINT),
+        Stroke::new(1.0, pal().text_faint),
     );
     // Handle: a triangle pointing at the track (like Live).
     let hx = track.right() + 1.0;
@@ -733,7 +787,11 @@ pub fn fader(ui: &mut Ui, size: Vec2, db: f32, peaks: (f32, f32), color: Color32
             Pos2::new(hx + 7.0, y - 5.0),
             Pos2::new(hx + 7.0, y + 5.0),
         ],
-        if active { hex(0xffffff) } else { hex(0xcfcfcf) },
+        if active {
+            shade(0xffffff)
+        } else {
+            shade(0xcfcfcf)
+        },
         Stroke::NONE,
     ));
     paint_meter(p, meter, peaks);
@@ -783,7 +841,7 @@ pub fn section_label(ui: &mut Ui, text: &str) {
     ui.label(
         egui::RichText::new(text)
             .font(font_bold(11.0))
-            .color(TEXT_DIM),
+            .color(pal().text_dim),
     );
 }
 

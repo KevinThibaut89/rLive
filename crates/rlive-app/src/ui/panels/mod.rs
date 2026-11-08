@@ -123,7 +123,7 @@ pub fn draw(name: &str, ui: &mut egui::Ui, panel: &mut PanelCtx) {
         ui.painter().rect_stroke(
             rect,
             1.0,
-            Stroke::new(1.0, super::theme::ARM_RED),
+            Stroke::new(1.0, super::theme::pal().arm_red),
             StrokeKind::Inside,
         );
         ui.painter().text(
@@ -131,7 +131,7 @@ pub fn draw(name: &str, ui: &mut egui::Ui, panel: &mut PanelCtx) {
             Align2::CENTER_CENTER,
             "Missing panel",
             super::theme::font(10.0),
-            super::theme::TEXT_DIM,
+            super::theme::pal().text_dim,
         );
         return;
     };

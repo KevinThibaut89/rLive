@@ -39,7 +39,7 @@ impl Session {
         let mut t = Track::new(
             &name,
             kind,
-            self.project.next_color(),
+            self.colors.track_color(&self.project),
             self.project.scenes.len(),
         );
         t.devices.extend(device);

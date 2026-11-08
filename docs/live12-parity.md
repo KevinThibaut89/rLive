@@ -23,17 +23,17 @@ Features that rLive already had when this list was created stay `[ ]` until thei
 - `[out]` Licence authorization, two machines per licence [M CLOUD]
 - `[out]` Learn View: video lessons, topic filter, completion tracking, resume last page, reload; online only [L CLOUD CONTENT]
 - `[out]` Always-on-top picture-in-picture lesson video, 15 s skips, resumes position [M CLOUD]
-- `[ ]` Info View: name and purpose of any hovered control [M] → control metadata registry
-- `[ ]` User info text on tracks, clips, devices, scenes, locators, saved in Set [S] → Info View
-- `[ ]` Settings window with 10 tabs [S]
+- `[~]` Info View: name and purpose of any hovered control [M] → control metadata registry
+- `[~]` User info text on tracks, clips, devices, scenes, locators, saved in Set [S] → Info View
+- `[x]` Settings window with 10 tabs [S]
 - `[ ]` Display: UI language [L]; independent zoom for main, second and Settings windows [M]
 - `[ ]` Focus outline, scroll bar mode, Follow behaviour, show/hide labels [S]
 - `[ ]` Keyboard: Tab moves focus, continuous Tab within section, arrows move clips [M]
 - `[ ]` Input: Pen Tablet Mode, Permanent Scrub Areas (default on), pitch-locked drawing [S each]
 - `[ ]` Restore suppressed warning dialogs [S]
-- `[ ]` Themes: named themes, light/dark/follow OS, warm/cool/neutral tone, high contrast [M]
-- `[ ]` Grid opacity, brightness, colour intensity, hue [S]
-- `[ ]` Auto track colours, default colour, reduced palette; new clips random or track colour [S]
+- `[x]` Themes: named themes, light/dark/follow OS, warm/cool/neutral tone, high contrast [M]
+- `[x]` Grid opacity, brightness, colour intensity, hue [S]
+- `[x]` Auto track colours, default colour, reduced palette; new clips random or track colour [S]
 - `[ ]` Audio: driver type, CoreAudio/ASIO, device I/O, sample rate, latency, calibration tests [M]; macOS follow-system output [S]
 - `[ ]` Link and Link Audio configuration [L PROP] → ch. 37
 - `[ ]` Tempo & MIDI: per-port roles for notes, sync, remote; resync hardware to clock [M] → chs. 34, 37
@@ -1320,10 +1320,40 @@ Notation: **Cmd** is Ctrl on Windows; **Alt** is Option on Mac; W:/M: marks diff
 - `[ ]` **Latching:** holding ~500 ms on A, B, S, Z, F1-F8, Tab; Options.txt can disable. **Menus:** W: Alt+letter; M: Cmd+?; Menu or Shift+F10 / VO+Shift+M.
 
 Manual inconsistencies to resolve:
-- `[ ]` Export is Cmd+Shift+R on p. 1016 but Cmd+R on p. 1008.
-- `[ ]` Note next/previous is Alt on p. 1023 but Ctrl (Win) on p. 1009.
+- `[x]` Export is Cmd+Shift+R on p. 1016 but Cmd+R on p. 1008.
+- `[x]` Note next/previous is Alt on p. 1023 but Ctrl (Win) on p. 1009.
 
 Requirement: Cmd+Shift+F, Cmd+Shift+E, Cmd+I, Cmd+E and Z/X all change meaning by focus, so the keymap must be context-scoped.
+
+Shortcuts declared in the keymap that do nothing yet, by milestone. This list is generated from `crates/rlive-app/src/ui/keymap/bindings.rs`.
+
+<!-- pending-shortcuts:begin -->
+- `[ ]` **A11:** Arm recording in Arrangement; Record to Session View
+- `[ ]` **A12:** Bounce to new track; Freeze or unfreeze tracks; Paste bounced audio
+- `[ ]` **A14:** Focus Groove Pool; Hide/show Groove Pool
+- `[ ]` **A17:** Hide/show plug-in windows; Keep several plug-in windows open
+- `[ ]` **A19:** Next similar sample; Previous similar sample; Return to reference; Save as similarity reference; Show similar-sample swap controls; Similarity search
+- `[ ]` **A5:** Audio engine on/off; Hide/show In/Out
+- `[ ]` **A9:** Delete Warp Marker; Delete transient; Insert Warp Marker; Insert transient; Move Warp Marker left; Move Warp Marker right; Quantize; Quantize settings; Reverse audio selection; Select next Warp Marker; Select previous Warp Marker; Stretch warped clip
+- `[ ]` **C10:** MPE tab
+- `[ ]` **C11:** Apply MIDI Tool settings
+- `[ ]` **C12:** Add device from browser; Assign colour 1; Assign colour 2; Assign colour 3; Assign colour 4; Assign colour 5; Assign colour 6; Assign colour 7; Browser history back; Browser history forward; Close folder; Drop browser clips as a scene; Hide/show Filter View; Hide/show Tag Editor; Hot-swap selected device; Jump to search results; Load selected device; Load selected item; Open folder; Preview selected file; Reset assigned colour; Scroll down; Scroll up; Search in Browser; Toggle Hot-Swap Mode
+- `[ ]` **C14:** Export MIDI File
+- `[ ]` **C15:** Add device to selection; All devices in a group on/off; Compare A/B; Group devices; List a track's devices; Solo selected chain; Toggle Drum Rack/last selected pad; Ungroup devices
+- `[ ]` **C16:** Toggle Key Map Mode; Toggle MIDI Map Mode
+- `[ ]` **C17:** Hide/show Sends; Hide/show return tracks; Toggle second window
+- `[ ]` **C18:** Hide/show video window
+- `[ ]` **C19:** Cancel value entry; Confirm value entry; Current scene from the last track; Decrement value; Delete track from title bar; Eight scenes down; Eight scenes up; First track of the scene; Focus Mixer; Increment value; Jump to highlighted track title; Last track of the scene; Move nonadjacent tracks down; Move nonadjacent tracks left; Move nonadjacent tracks right; Move nonadjacent tracks up; Next control; Next field; Next name while renaming; Next neighbouring control; Next track while renaming; Previous control; Previous neighbouring control; Return to default; Scene down; Scene up; Select all clips and slots; Select clip above; Select clip below; Select clip left; Select clip right; Type a value; Value down by an octave or fine step; Value up by an octave or fine step
+- `[ ]` **C2:** Double loop length; Envelopes tab; Fit content to view height; Fit content to view width; Fixed or zoom-adaptive grid; Focus clip panels; Focus selected clip panel; Follow playback; Halve loop length; Hide/show Overview; Lengthen loop; Lengthen loop brace; Move clip region left with start marker; Move clip region right with start marker; Move end marker to position; Move loop by its length, down; Move loop by its length, up; Move start marker to position; Narrow grid; Nudge loop brace left; Nudge loop brace right; Sample or Notes tab; Select loop brace contents; Select material in loop; Set end marker; Set loop end; Set loop start; Set start marker; Shorten loop; Shorten loop brace; Show Device and Clip View together; Snap to grid; Switch Notes/Envelopes/MPE tabs; Switch Sample/Envelopes tabs; Toggle full-size Clip View; Triplet grid; Widen grid; Zoom back from clip selection; Zoom to clip selection
+- `[ ]` **C3:** Curve an automation segment; Delete the selected envelope; Edit the selected part of an envelope; Finer envelope resolution; Ignore grid while dragging breakpoints; Toggle Automation Mode
+- `[ ]` **C4:** Consolidate selection; Copy time; Crop selected clips; Cut time; Deactivate selection; Delete time; Duplicate time; Edit clips and slots across all tracks; Edit time across all tracks; Fold or unfold selected tracks; Fold selected tracks; Insert marker to playhead; Insert silence; Nudge selection left; Nudge selection right; Optimize height; Optimize width; Pan beside a selection; Paste time; Play from insert marker in clip; Play the selection; Resize clip at the insert marker; Select time within a clip; Shorter tracks or clips; Slide waveform; Split Arrangement clip at time selection; Split clip at selection; Stop at the end of the selection; Taller tracks or clips; Unfold all tracks; Unfold selected tracks; Zoom back from time selection; Zoom to time selection
+- `[ ]` **C5:** Create fade or crossfade; Delete fades in selected clips; Toggle fade controls for a moment; Toggle fade handles for a moment
+- `[ ]` **C6:** Add take area to the main lane; Add take lane; Audition take lane; Duplicate take lane; Next take into the main clip; Previous take into the main clip; Show take lanes
+- `[ ]` **C7:** Add or remove stop button; Deactivate selected clip; Insert captured scene; Move nonadjacent scenes down; Move nonadjacent scenes up
+- `[ ]` **C8:** Create Follow Action chain; Toggle Follow Actions
+- `[ ]` **C9:** Change velocity from the note editor; Chop notes or split at time selection; Chop notes, one at a time; Chop notes, two at a time; Copy notes; Fit notes to time range; Fit notes to view height; Fit notes to view width; Group notes (play all); Highlight scale; Insert marker to beginning; Insert marker to end; Invert note selection; Join notes; Lower note chance; Lower note velocity; Lower velocity deviation; Quantize; Quantize settings; Raise note chance; Raise note velocity; Raise velocity deviation; Scroll editor down; Scroll editor down, fine; Scroll editor left; Scroll editor right; Scroll editor up; Scroll editor up, fine; Select next note; Select next note in key track; Select previous note; Select previous note in key track; Set note velocity by typing; Show/hide note filters; Split notes at an exact place; Toggle Draw Mode; Ungroup notes; Zoom back from clip selection; Zoom in horizontally; Zoom out horizontally; Zoom to clip selection
+- `[ ]` **out:** Focus Learn View; Hide/show Learn View
+<!-- pending-shortcuts:end -->
 
 
 ## 43. Credits (1037-1039)

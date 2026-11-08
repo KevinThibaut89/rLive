@@ -1,0 +1,539 @@
+//! Every shortcut in the manual's keyboard chapter, one row each.
+//!
+//! Rows follow the manual's section order. A row whose feature doesn't exist yet is
+//! `Pending("<milestone>")` and does nothing; flip it to `L(...)` when the milestone builds it.
+
+use super::super::commands::app::App;
+use super::super::commands::create::Create;
+use super::super::commands::edit::Edit;
+use super::super::commands::file::File;
+use super::super::commands::options::Options;
+use super::super::commands::track::Track;
+use super::super::commands::transport::Transport as Tr;
+use super::super::commands::view::View;
+use super::super::commands::MenuCommand as M;
+use super::{Area, Binding, Chord, Exec, Mods, Status, Trigger, When};
+use egui::Key;
+
+const NO: Mods = Mods {
+    cmd: false,
+    ctrl: false,
+    alt: false,
+    shift: false,
+};
+const CMD: Mods = Mods { cmd: true, ..NO };
+const ALT: Mods = Mods { alt: true, ..NO };
+const SHIFT: Mods = Mods { shift: true, ..NO };
+const CMD_SHIFT: Mods = Mods {
+    cmd: true,
+    shift: true,
+    ..NO
+};
+const CMD_ALT: Mods = Mods {
+    cmd: true,
+    alt: true,
+    ..NO
+};
+const ALT_SHIFT: Mods = Mods {
+    alt: true,
+    shift: true,
+    ..NO
+};
+const CMD_ALT_SHIFT: Mods = Mods {
+    cmd: true,
+    alt: true,
+    shift: true,
+    ctrl: false,
+};
+const CTRL_CMD: Mods = Mods {
+    ctrl: true,
+    cmd: true,
+    ..NO
+};
+
+const fn ch(mods: Mods, key: Key) -> Chord {
+    Chord { mods, key }
+}
+
+const fn k(mods: Mods, key: Key) -> Trigger {
+    Trigger::Keys(ch(mods, key))
+}
+
+/// A chord that differs by platform, macOS first.
+const fn pl(mac: Chord, other: Chord) -> Trigger {
+    Trigger::Platform { mac, other }
+}
+
+/// A modifier held during a click or drag.
+const fn g(mac: &'static str, other: &'static str) -> Trigger {
+    Trigger::Gesture { mac, other }
+}
+
+/// One gesture, written the same on every platform.
+const fn g1(both: &'static str) -> Trigger {
+    g(both, both)
+}
+
+/// Live: runs a command.
+#[allow(non_snake_case)]
+const fn L(c: M) -> Status {
+    Status::Live(Exec::Command(c))
+}
+
+/// Live: handled by a widget or gesture.
+const W: Status = Status::Live(Exec::Widget);
+
+const fn b(
+    section: &'static str,
+    area: Area,
+    when: When,
+    label: &'static str,
+    trigger: Trigger,
+    status: Status,
+) -> Binding {
+    Binding {
+        section,
+        area,
+        when,
+        label,
+        trigger,
+        status,
+    }
+}
+
+const fn a(
+    section: &'static str,
+    area: Area,
+    label: &'static str,
+    trigger: Trigger,
+    status: Status,
+) -> Binding {
+    b(section, area, When::Always, label, trigger, status)
+}
+
+use Area::{
+    Arrangement as Arr, Browser as Brw, Clip, ClipNotes as Notes, ClipSample as Sample,
+    Device as Dev, Global as All, Main, Session as Ses, Timeline as Time,
+};
+use When as Wh;
+
+macro_rules! p {
+    ($m:literal) => {
+        Status::Pending($m)
+    };
+}
+
+#[rustfmt::skip]
+pub static BINDINGS: &[Binding] = &[
+    // 42.1 Showing and hiding views
+    a("42.1", All, "Toggle full screen", pl(ch(CTRL_CMD, Key::F), ch(NO, Key::F11)), L(M::View(View::ToggleFullScreen))),
+    a("42.1", All, "Toggle second window", k(CMD_SHIFT, Key::W), p!("C17")),
+    a("42.1", All, "Toggle Session/Arrangement", k(NO, Key::Tab), L(M::View(View::ToggleMainView))),
+    a("42.1", All, "Toggle Device/Clip View", k(SHIFT, Key::Tab), L(M::View(View::SwitchDetail))),
+    a("42.1", All, "Toggle Device/Clip View", k(NO, Key::F12), L(M::View(View::SwitchDetail))),
+    a("42.1", All, "Show Device and Clip View together", g1("Alt click view toggle"), p!("C2")),
+    a("42.1", All, "Toggle Hot-Swap Mode", k(NO, Key::Q), p!("C12")),
+    a("42.1", Dev, "Toggle Drum Rack/last selected pad", k(NO, Key::D), p!("C15")),
+    a("42.1", All, "Hide/show Info View", k(NO, Key::Questionmark), L(M::View(View::ToggleInfoView))),
+    a("42.1", All, "Hide/show video window", k(CMD_ALT, Key::V), p!("C18")),
+    a("42.1", All, "Hide/show Browser", k(CMD_ALT, Key::B), L(M::View(View::ToggleBrowser))),
+    a("42.1", All, "Hide/show Browser", k(CMD_ALT, Key::Num5), L(M::View(View::ToggleBrowser))),
+    a("42.1", All, "Hide/show Overview", k(CMD_ALT, Key::O), p!("C2")),
+    a("42.1", All, "Hide/show In/Out", k(CMD_ALT, Key::I), p!("A5")),
+    a("42.1", All, "Hide/show Sends", k(CMD_ALT, Key::S), p!("C17")),
+    a("42.1", All, "Hide/show Mixer", k(CMD_ALT, Key::M), L(M::View(View::ToggleMixer))),
+    a("42.1", All, "Hide/show Clip View", k(CMD_ALT, Key::Num3), L(M::View(View::ToggleClipView))),
+    a("42.1", All, "Hide/show Device View", k(CMD_ALT, Key::Num4), L(M::View(View::ToggleDeviceView))),
+    a("42.1", All, "Hide/show Groove Pool", k(CMD_ALT, Key::Num6), p!("A14")),
+    a("42.1", All, "Hide/show Learn View", k(CMD_ALT, Key::Num7), p!("out")),
+    a("42.1", All, "Open Settings", k(CMD, Key::Comma), L(M::App(App::Preferences))),
+    b("42.1", All, Wh::DialogOpen, "Close window or dialog", k(NO, Key::Escape), L(M::View(View::CloseDialog))),
+
+    // 42.2 Keyboard focus and navigation
+    a("42.2", All, "Focus Control Bar", k(ALT, Key::Num0), L(M::View(View::FocusControlBar))),
+    a("42.2", All, "Focus Session View", k(ALT, Key::Num1), L(M::View(View::FocusSession))),
+    a("42.2", All, "Focus Arrangement View", k(ALT, Key::Num2), L(M::View(View::FocusArrangement))),
+    a("42.2", All, "Focus Clip View", k(ALT, Key::Num3), L(M::View(View::FocusClip))),
+    a("42.2", All, "Focus Device View", k(ALT, Key::Num4), L(M::View(View::FocusDevice))),
+    a("42.2", All, "Focus Browser", k(ALT, Key::Num5), L(M::View(View::FocusBrowser))),
+    a("42.2", All, "Focus Groove Pool", k(ALT, Key::Num6), p!("A14")),
+    a("42.2", All, "Focus Learn View", k(ALT, Key::Num7), p!("out")),
+    a("42.2", All, "Focus selected clip panel", k(ALT, Key::Num8), p!("C2")),
+    a("42.2", All, "Focus clip panels", k(ALT_SHIFT, Key::P), p!("C2")),
+    b("42.2", All, Wh::TabFocus, "Next control", k(NO, Key::Tab), p!("C19")),
+    b("42.2", All, Wh::TabFocus, "Previous control", k(SHIFT, Key::Tab), p!("C19")),
+    b("42.2", All, Wh::TabFocus, "Next neighbouring control", pl(ch(ALT, Key::Tab), ch(CMD, Key::Tab)), p!("C19")),
+    b("42.2", All, Wh::TabFocus, "Previous neighbouring control", pl(ch(ALT_SHIFT, Key::Tab), ch(CMD_SHIFT, Key::Tab)), p!("C19")),
+
+    // 42.3 Sets and the program
+    a("42.3", All, "New Live Set", k(CMD, Key::N), L(M::File(File::NewSet))),
+    a("42.3", All, "Open Live Set", k(CMD, Key::O), L(M::File(File::Open))),
+    a("42.3", All, "Save Live Set", k(CMD, Key::S), L(M::File(File::Save))),
+    a("42.3", All, "Save Live Set As", k(CMD_SHIFT, Key::S), L(M::File(File::SaveAs))),
+    a("42.3", All, "Quit", k(CMD, Key::Q), L(M::App(App::Quit))),
+    a("42.3", All, "Hide", Trigger::MacOnly(ch(CMD, Key::H)), Status::Live(Exec::Native)),
+    a("42.3", All, "Export Audio/Video", k(CMD_SHIFT, Key::R), L(M::File(File::ExportAudio))),
+    a("42.3", All, "Export MIDI File", k(CMD_SHIFT, Key::E), p!("C14")),
+
+    // 42.4 Devices and plug-ins
+    a("42.4", Dev, "Group devices", k(CMD, Key::G), p!("C15")),
+    a("42.4", Dev, "Ungroup devices", k(CMD_SHIFT, Key::G), p!("C15")),
+    a("42.4", Dev, "All devices in a group on/off", g1("Hold Alt and click on device activator"), p!("C15")),
+    a("42.4", Dev, "Add device to selection", g1("Shift click"), p!("C15")),
+    a("42.4", Dev, "List a track's devices", g1("right-click on Device View selector"), p!("C15")),
+    a("42.4", Dev, "Reset parameter", g1("Delete or double-click"), W),
+    a("42.4", Brw, "Load selected device", k(NO, Key::Enter), p!("C12")),
+    a("42.4", Dev, "Hot-swap selected device", k(NO, Key::Q), p!("C12")),
+    a("42.4", All, "Hide/show plug-in windows", k(CMD_ALT, Key::P), p!("A17")),
+    a("42.4", Dev, "Keep several plug-in windows open", g("Cmd", "Ctrl"), p!("A17")),
+    a("42.4", Dev, "Compare A/B", k(NO, Key::P), p!("C15")),
+
+    // 42.5 Editing
+    a("42.5", All, "Cut", k(CMD, Key::X), L(M::Edit(Edit::Cut))),
+    a("42.5", All, "Copy", k(CMD, Key::C), L(M::Edit(Edit::Copy))),
+    a("42.5", All, "Paste", k(CMD, Key::V), L(M::Edit(Edit::Paste))),
+    a("42.5", All, "Duplicate", k(CMD, Key::D), L(M::Edit(Edit::Duplicate))),
+    a("42.5", All, "Delete", k(NO, Key::Delete), L(M::Edit(Edit::Delete))),
+    a("42.5", All, "Undo", k(CMD, Key::Z), L(M::Edit(Edit::Undo))),
+    a("42.5", All, "Redo", pl(ch(CMD_SHIFT, Key::Z), ch(CMD, Key::Y)), L(M::Edit(Edit::Redo))),
+    a("42.5", All, "Rename", k(CMD, Key::R), L(M::Edit(Edit::Rename))),
+    a("42.5", All, "Select all", k(CMD, Key::A), L(M::Edit(Edit::SelectAll))),
+    a("42.5", All, "Select several items", g("Cmd click", "Ctrl click"), W),
+    a("42.5", All, "Select a range of items", g1("Shift click"), W),
+    b("42.5", All, Wh::Renaming, "Next name while renaming", k(NO, Key::Tab), p!("C19")),
+    a("42.5", All, "Ignore grid while dragging", g("Cmd", "Alt"), W),
+    a("42.5", All, "Edit clips and slots across all tracks", g1("Shift"), p!("C4")),
+    a("42.5", All, "Edit time across all tracks", g1("Shift"), p!("C4")),
+    a("42.5", All, "Edit the selected part of an envelope", g1("Alt"), p!("C3")),
+
+    // 42.6 Adjusting values
+    b("42.6", All, Wh::ValueControl, "Decrement value", k(NO, Key::ArrowDown), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Increment value", k(NO, Key::ArrowUp), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Value down by an octave or fine step", k(SHIFT, Key::ArrowDown), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Value up by an octave or fine step", k(SHIFT, Key::ArrowUp), p!("C19")),
+    a("42.6", All, "Finer resolution while dragging", g1("Shift"), W),
+    b("42.6", All, Wh::ValueControl, "Return to default", k(NO, Key::Delete), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Type a value", k(NO, Key::Num0), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Type a value", k(NO, Key::Num1), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Type a value", k(NO, Key::Num2), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Type a value", k(NO, Key::Num3), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Type a value", k(NO, Key::Num4), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Type a value", k(NO, Key::Num5), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Type a value", k(NO, Key::Num6), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Type a value", k(NO, Key::Num7), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Type a value", k(NO, Key::Num8), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Type a value", k(NO, Key::Num9), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Next field", k(NO, Key::Period), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Next field", k(NO, Key::Comma), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Cancel value entry", k(NO, Key::Escape), p!("C19")),
+    b("42.6", All, Wh::ValueControl, "Confirm value entry", k(NO, Key::Enter), p!("C19")),
+
+    // 42.7 Breakpoint envelopes
+    a("42.7", Arr, "Toggle Automation Mode", k(NO, Key::A), p!("C3")),
+    a("42.7", Time, "Finer envelope resolution", g1("Shift"), p!("C3")),
+    a("42.7", Time, "Curve an automation segment", g1("Alt"), p!("C3")),
+    a("42.7", Time, "Toggle fade controls for a moment", k(NO, Key::F), p!("C5")),
+    a("42.7", Time, "Delete the selected envelope", k(CMD, Key::Delete), p!("C3")),
+    a("42.7", Time, "Ignore grid while dragging breakpoints", g("Cmd", "Alt"), p!("C3")),
+
+    // 42.8 Loop brace and start/end markers
+    a("42.8", Time, "Set start marker", k(CMD, Key::F9), p!("C2")),
+    a("42.8", Time, "Set loop start", k(CMD, Key::F10), p!("C2")),
+    a("42.8", Time, "Set loop end", k(CMD, Key::F11), p!("C2")),
+    a("42.8", Time, "Set end marker", k(CMD, Key::F12), p!("C2")),
+    b("42.8", Time, Wh::LoopBrace, "Move start marker to position", g("Cmd click", "Ctrl click"), p!("C2")),
+    b("42.8", Time, Wh::LoopBrace, "Move end marker to position", g("Cmd Shift click", "Ctrl Shift click"), p!("C2")),
+    b("42.8", Time, Wh::LoopBrace, "Nudge loop brace left", k(NO, Key::ArrowLeft), p!("C2")),
+    b("42.8", Time, Wh::LoopBrace, "Nudge loop brace right", k(NO, Key::ArrowRight), p!("C2")),
+    b("42.8", Time, Wh::LoopBrace, "Move loop by its length, up", k(NO, Key::ArrowUp), p!("C2")),
+    b("42.8", Time, Wh::LoopBrace, "Move loop by its length, down", k(NO, Key::ArrowDown), p!("C2")),
+    b("42.8", Time, Wh::LoopBrace, "Double loop length", k(CMD, Key::ArrowUp), p!("C2")),
+    b("42.8", Time, Wh::LoopBrace, "Halve loop length", k(CMD, Key::ArrowDown), p!("C2")),
+    b("42.8", Time, Wh::LoopBrace, "Shorten loop", k(CMD, Key::ArrowLeft), p!("C2")),
+    b("42.8", Time, Wh::LoopBrace, "Lengthen loop", k(CMD, Key::ArrowRight), p!("C2")),
+    a("42.8", Time, "Select material in loop", k(CMD_SHIFT, Key::L), p!("C2")),
+
+    // 42.9 Zooming, display and selections
+    a("42.9", All, "Zoom window in", k(CMD, Key::Plus), L(M::View(View::ZoomIn))),
+    a("42.9", All, "Zoom window out", k(CMD, Key::Minus), L(M::View(View::ZoomOut))),
+    a("42.9", Arr, "Zoom time ruler in", k(NO, Key::Plus), L(M::View(View::RulerZoomIn))),
+    a("42.9", Arr, "Zoom time ruler out", k(NO, Key::Minus), L(M::View(View::RulerZoomOut))),
+    a("42.9", All, "Follow playback", k(ALT_SHIFT, Key::F), p!("C2")),
+    a("42.9", All, "Scroll left/right", g1("Shift scroll"), W),
+    a("42.9", All, "Pan beside a selection", g("Cmd Alt", "Ctrl Alt"), p!("C4")),
+    a("42.9", All, "Add items to a selection", g1("Shift click or drag"), W),
+    a("42.9", All, "Add adjacent items to a selection", g1("Shift click"), W),
+    a("42.9", All, "Add separate items to a selection", g("Cmd click", "Ctrl click"), W),
+
+    // 42.10 Clip View tabs
+    a("42.10", Sample, "Switch Sample/Envelopes tabs", pl(ch(ALT, Key::Tab), ch(CMD, Key::Tab)), p!("C2")),
+    a("42.10", Notes, "Switch Notes/Envelopes/MPE tabs", pl(ch(ALT, Key::Tab), ch(CMD, Key::Tab)), p!("C2")),
+    a("42.10", Clip, "Sample or Notes tab", k(ALT_SHIFT, Key::Num1), p!("C2")),
+    a("42.10", Clip, "Envelopes tab", k(ALT_SHIFT, Key::Num2), p!("C2")),
+    a("42.10", Clip, "MPE tab", k(ALT_SHIFT, Key::Num3), p!("C10")),
+
+    // 42.11 Sample Editor
+    a("42.11", Sample, "Quantize", k(CMD, Key::U), p!("A9")),
+    a("42.11", Sample, "Quantize settings", k(CMD_SHIFT, Key::U), p!("A9")),
+    b("42.11", Sample, Wh::WarpMarker, "Move Warp Marker left", k(NO, Key::ArrowLeft), p!("A9")),
+    b("42.11", Sample, Wh::WarpMarker, "Move Warp Marker right", k(NO, Key::ArrowRight), p!("A9")),
+    a("42.11", Sample, "Select previous Warp Marker", k(CMD, Key::ArrowLeft), p!("A9")),
+    a("42.11", Sample, "Select next Warp Marker", k(CMD, Key::ArrowRight), p!("A9")),
+    a("42.11", Sample, "Follow playback", pl(ch(ALT_SHIFT, Key::F), ch(CMD_SHIFT, Key::F)), p!("C2")),
+    a("42.11", Sample, "Move clip region left with start marker", k(SHIFT, Key::ArrowLeft), p!("C2")),
+    a("42.11", Sample, "Move clip region right with start marker", k(SHIFT, Key::ArrowRight), p!("C2")),
+    a("42.11", Sample, "Zoom to clip selection", k(NO, Key::Z), p!("C2")),
+    a("42.11", Sample, "Zoom back from clip selection", k(NO, Key::X), p!("C2")),
+    a("42.11", Sample, "Insert Warp Marker", k(CMD, Key::I), p!("A9")),
+    b("42.11", Sample, Wh::WarpMarker, "Delete Warp Marker", k(NO, Key::Delete), p!("A9")),
+    a("42.11", Sample, "Insert transient", k(CMD_SHIFT, Key::I), p!("A9")),
+    a("42.11", Sample, "Delete transient", k(CMD_SHIFT, Key::Delete), p!("A9")),
+    a("42.11", Sample, "Fit content to view width", k(NO, Key::W), p!("C2")),
+    a("42.11", Sample, "Fit content to view height", k(NO, Key::H), p!("C2")),
+
+    // 42.12 MIDI Note Editor
+    a("42.12", Notes, "Select all notes", k(CMD, Key::A), L(M::Edit(Edit::SelectAll))),
+    a("42.12", Notes, "Copy notes", g("Alt drag", "Ctrl drag"), p!("C9")),
+    a("42.12", Notes, "Chop notes or split at time selection", k(CMD, Key::E), p!("C9")),
+    a("42.12", Notes, "Chop notes, one at a time", g("Cmd E drag up/down", "Ctrl E drag up/down"), p!("C9")),
+    a("42.12", Notes, "Chop notes, two at a time", g("Cmd Shift E drag up/down", "Ctrl Shift E drag up/ down"), p!("C9")),
+    a("42.12", Notes, "Split notes at an exact place", g1("Hold E then click to split, drag to move"), p!("C9")),
+    a("42.12", Notes, "Join notes", k(CMD, Key::J), p!("C9")),
+    a("42.12", Notes, "Fit notes to time range", k(CMD_ALT, Key::J), p!("C9")),
+    a("42.12", Notes, "Fit notes to view width", k(NO, Key::W), p!("C9")),
+    a("42.12", Notes, "Fit notes to view height", k(NO, Key::H), p!("C9")),
+    a("42.12", Notes, "Quantize", k(CMD, Key::U), p!("C9")),
+    a("42.12", Notes, "Quantize settings", k(CMD_SHIFT, Key::U), p!("C9")),
+    a("42.12", Notes, "Scroll editor up", k(NO, Key::PageUp), p!("C9")),
+    a("42.12", Notes, "Scroll editor down", k(NO, Key::PageDown), p!("C9")),
+    a("42.12", Notes, "Scroll editor up, fine", k(SHIFT, Key::PageUp), p!("C9")),
+    a("42.12", Notes, "Scroll editor down, fine", k(SHIFT, Key::PageDown), p!("C9")),
+    a("42.12", Notes, "Scroll editor left", k(CMD, Key::PageUp), p!("C9")),
+    a("42.12", Notes, "Scroll editor right", k(CMD, Key::PageDown), p!("C9")),
+    a("42.12", Notes, "Change velocity from the note editor", g("Cmd drag", "Alt drag"), p!("C9")),
+    b("42.12", Notes, Wh::NoteInsertMarker, "Insert marker to beginning", k(NO, Key::Home), p!("C9")),
+    b("42.12", Notes, Wh::NoteInsertMarker, "Insert marker to end", k(NO, Key::End), p!("C9")),
+    a("42.12", Notes, "Select next note", k(ALT, Key::ArrowDown), p!("C9")),
+    a("42.12", Notes, "Select previous note", k(ALT, Key::ArrowUp), p!("C9")),
+    a("42.12", Notes, "Select previous note in key track", k(ALT, Key::ArrowLeft), p!("C9")),
+    a("42.12", Notes, "Select next note in key track", k(ALT, Key::ArrowRight), p!("C9")),
+    a("42.12", Notes, "Follow playback", pl(ch(ALT_SHIFT, Key::F), ch(CMD_SHIFT, Key::F)), p!("C2")),
+    a("42.12", Notes, "Move clip region left with start marker", k(SHIFT, Key::ArrowLeft), p!("C2")),
+    a("42.12", Notes, "Move clip region right with start marker", k(SHIFT, Key::ArrowRight), p!("C2")),
+    a("42.12", Notes, "Zoom to clip selection", k(NO, Key::Z), p!("C9")),
+    a("42.12", Notes, "Zoom back from clip selection", k(NO, Key::X), p!("C9")),
+    a("42.12", Notes, "Zoom in horizontally", k(NO, Key::Plus), p!("C9")),
+    a("42.12", Notes, "Zoom out horizontally", k(NO, Key::Minus), p!("C9")),
+    a("42.12", Notes, "Set note velocity by typing", g1("Type a value between 0-127 and press Enter"), p!("C9")),
+    a("42.12", Notes, "Raise note velocity", k(CMD, Key::ArrowUp), p!("C9")),
+    a("42.12", Notes, "Lower note velocity", k(CMD, Key::ArrowDown), p!("C9")),
+    a("42.12", Notes, "Raise velocity deviation", k(CMD_SHIFT, Key::ArrowUp), p!("C9")),
+    a("42.12", Notes, "Lower velocity deviation", k(CMD_SHIFT, Key::ArrowDown), p!("C9")),
+    a("42.12", Notes, "Raise note chance", k(CMD_ALT, Key::ArrowUp), p!("C9")),
+    a("42.12", Notes, "Lower note chance", k(CMD_ALT, Key::ArrowDown), p!("C9")),
+    a("42.12", Clip, "Toggle full-size Clip View", k(CMD_ALT, Key::E), p!("C2")),
+    a("42.12", Notes, "Group notes (play all)", k(CMD, Key::G), p!("C9")),
+    a("42.12", Notes, "Ungroup notes", k(CMD_SHIFT, Key::G), p!("C9")),
+    a("42.12", Notes, "Apply MIDI Tool settings", k(CMD, Key::Enter), p!("C11")),
+    a("42.12", Notes, "Invert note selection", k(CMD_SHIFT, Key::A), p!("C9")),
+    a("42.12", Notes, "Highlight scale", k(NO, Key::K), p!("C9")),
+    a("42.12", Arr, "Split Arrangement clip at time selection", k(CMD_SHIFT, Key::E), p!("C4")),
+    a("42.12", Notes, "Show/hide note filters", k(CMD_SHIFT, Key::F), p!("C9")),
+
+    // 42.13 Grid snapping and drawing
+    a("42.13", Time, "Toggle Draw Mode", k(NO, Key::B), p!("C9")),
+    a("42.13", Time, "Narrow grid", k(CMD, Key::Num1), p!("C2")),
+    a("42.13", Time, "Widen grid", k(CMD, Key::Num2), p!("C2")),
+    a("42.13", Time, "Triplet grid", k(CMD, Key::Num3), p!("C2")),
+    a("42.13", Time, "Snap to grid", k(CMD, Key::Num4), p!("C2")),
+    a("42.13", Time, "Fixed or zoom-adaptive grid", k(CMD, Key::Num5), p!("C2")),
+    a("42.13", Time, "Bypass snapping while dragging", g("Cmd", "Alt"), W),
+
+    // 42.14 Global quantization
+    a("42.14", All, "Sixteenth-note quantization", k(CMD, Key::Num6), L(M::Transport(Tr::QuantizeSixteenth))),
+    a("42.14", All, "Eighth-note quantization", k(CMD, Key::Num7), L(M::Transport(Tr::QuantizeEighth))),
+    a("42.14", All, "Quarter-note quantization", k(CMD, Key::Num8), L(M::Transport(Tr::QuantizeQuarter))),
+    a("42.14", All, "One-bar quantization", k(CMD, Key::Num9), L(M::Transport(Tr::QuantizeBar))),
+    a("42.14", All, "Quantization off", k(CMD, Key::Num0), L(M::Transport(Tr::QuantizeOff))),
+
+    // 42.15 Session View
+    a("42.15", Ses, "Launch selected clip or slot", k(NO, Key::Enter), L(M::Track(Track::LaunchSelectedClip))),
+    b("42.15", Ses, Wh::SlotSelected, "Select clip above", k(NO, Key::ArrowUp), p!("C19")),
+    b("42.15", Ses, Wh::SlotSelected, "Select clip below", k(NO, Key::ArrowDown), p!("C19")),
+    b("42.15", Ses, Wh::SlotSelected, "Select clip left", k(NO, Key::ArrowLeft), p!("C19")),
+    b("42.15", Ses, Wh::SlotSelected, "Select clip right", k(NO, Key::ArrowRight), p!("C19")),
+    b("42.15", Ses, Wh::SlotSelected, "Select all clips and slots", k(CMD, Key::A), p!("C19")),
+    a("42.15", Ses, "Copy clips", g("Alt drag", "Ctrl drag"), W),
+    a("42.15", Ses, "Add or remove stop button", k(CMD, Key::E), p!("C7")),
+    a("42.15", Ses, "Stop clips in the selected slot's track", k(CMD, Key::Enter), L(M::Track(Track::StopSelectedTrack))),
+    a("42.15", Ses, "Insert MIDI clip", k(CMD_SHIFT, Key::M), L(M::Track(Track::InsertMidiClip))),
+    a("42.15", Ses, "Insert scene", k(CMD, Key::I), L(M::Create(Create::NewScene))),
+    a("42.15", Ses, "Insert captured scene", k(CMD_SHIFT, Key::I), p!("C7")),
+    b("42.15", Ses, Wh::TrackTitle, "Scene up", k(NO, Key::ArrowUp), p!("C19")),
+    b("42.15", Ses, Wh::TrackTitle, "Scene down", k(NO, Key::ArrowDown), p!("C19")),
+    a("42.15", Ses, "Eight scenes up", k(NO, Key::PageUp), p!("C19")),
+    a("42.15", Ses, "Eight scenes down", k(NO, Key::PageDown), p!("C19")),
+    a("42.15", All, "Record to Session View", k(CMD_SHIFT, Key::F9), p!("A11")),
+    a("42.15", Ses, "Toggle Follow Actions", k(SHIFT, Key::Enter), p!("C8")),
+    a("42.15", Ses, "Create Follow Action chain", k(CMD_SHIFT, Key::Enter), p!("C8")),
+    a("42.15", Ses, "Move selected track left", k(CMD, Key::ArrowLeft), L(M::Track(Track::MoveLeft))),
+    a("42.15", Ses, "Move selected track right", k(CMD, Key::ArrowRight), L(M::Track(Track::MoveRight))),
+    a("42.15", Ses, "Move nonadjacent scenes up", k(CMD, Key::ArrowUp), p!("C7")),
+    a("42.15", Ses, "Move nonadjacent scenes down", k(CMD, Key::ArrowDown), p!("C7")),
+    a("42.15", Ses, "Drop browser clips as a scene", g("Cmd", "Ctrl"), p!("C12")),
+    b("42.15", Ses, Wh::SlotSelected, "Deactivate selected clip", k(NO, Key::Num0), p!("C7")),
+    b("42.15", Ses, Wh::TrackTitle, "Jump to highlighted track title", k(NO, Key::Escape), p!("C19")),
+    b("42.15", Ses, Wh::SlotSelected, "First track of the scene", k(NO, Key::Home), p!("C19")),
+    b("42.15", Ses, Wh::SlotSelected, "Last track of the scene", k(NO, Key::End), p!("C19")),
+    b("42.15", Ses, Wh::TrackTitle, "Current scene from the last track", k(NO, Key::End), p!("C19")),
+    b("42.15", Ses, Wh::ChainSelected, "Solo selected chain", k(NO, Key::S), p!("C15")),
+
+    // 42.16 Arrangement View
+    a("42.16", Arr, "Split clip at selection", k(CMD, Key::E), p!("C4")),
+    a("42.16", Arr, "Consolidate selection", k(CMD, Key::J), p!("C4")),
+    a("42.16", Arr, "Crop selected clips", k(CMD_SHIFT, Key::J), p!("C4")),
+    a("42.16", Arr, "Resize clip at the insert marker", g1("Enter left and right arrow"), p!("C4")),
+    a("42.16", Arr, "Slide waveform", g1("Shift Alt drag"), p!("C4")),
+    a("42.16", Arr, "Stretch warped clip", g1("Shift drag in clip title bar"), p!("A9")),
+    a("42.16", Arr, "Select time within a clip", g1("Shift Alt drag in clip title bar"), p!("C4")),
+    a("42.16", Arr, "Create fade or crossfade", k(CMD_ALT, Key::F), p!("C5")),
+    a("42.16", Arr, "Delete fades in selected clips", k(CMD_ALT, Key::Delete), p!("C5")),
+    a("42.16", Arr, "Toggle fade handles for a moment", k(NO, Key::F), p!("C5")),
+    a("42.16", Arr, "Toggle loop brace", k(CMD, Key::L), L(M::Transport(Tr::ToggleLoop))),
+    b("42.16", Arr, Wh::LoopBrace, "Shorten loop brace", k(CMD, Key::ArrowLeft), p!("C2")),
+    b("42.16", Arr, Wh::LoopBrace, "Lengthen loop brace", k(CMD, Key::ArrowRight), p!("C2")),
+    a("42.16", Arr, "Select loop brace contents", k(CMD_SHIFT, Key::L), p!("C2")),
+    a("42.16", Arr, "Insert silence", k(CMD, Key::I), p!("C4")),
+    a("42.16", Arr, "Cut time", k(CMD_SHIFT, Key::X), p!("C4")),
+    a("42.16", Arr, "Copy time", k(CMD_SHIFT, Key::C), p!("C4")),
+    a("42.16", Arr, "Paste time", k(CMD_SHIFT, Key::V), p!("C4")),
+    a("42.16", Arr, "Duplicate time", k(CMD_SHIFT, Key::D), p!("C4")),
+    a("42.16", Arr, "Delete time", k(CMD_SHIFT, Key::Delete), p!("C4")),
+    b("42.16", Arr, Wh::TrackTitle, "Fold or unfold selected tracks", k(NO, Key::U), p!("C4")),
+    b("42.16", Arr, Wh::TrackTitle, "Fold selected tracks", k(NO, Key::ArrowLeft), p!("C4")),
+    b("42.16", Arr, Wh::TrackTitle, "Unfold selected tracks", k(NO, Key::ArrowRight), p!("C4")),
+    a("42.16", Arr, "Unfold all tracks", k(ALT, Key::U), p!("C4")),
+    a("42.16", Arr, "Taller tracks or clips", k(ALT, Key::Plus), p!("C4")),
+    a("42.16", Arr, "Shorter tracks or clips", k(ALT, Key::Minus), p!("C4")),
+    a("42.16", Arr, "Follow playback", pl(ch(ALT_SHIFT, Key::F), ch(CMD_SHIFT, Key::F)), p!("C2")),
+    a("42.16", Arr, "Pan beside a selection", g("Cmd Alt drag", "Ctrl Alt drag"), p!("C4")),
+    a("42.16", Arr, "Optimize height", k(NO, Key::H), p!("C4")),
+    a("42.16", Arr, "Optimize width", k(NO, Key::W), p!("C4")),
+    b("42.16", Arr, Wh::TimeSelection, "Deactivate selection", k(NO, Key::Num0), p!("C4")),
+    b("42.16", Arr, Wh::TimeSelection, "Nudge selection left", k(NO, Key::ArrowLeft), p!("C4")),
+    b("42.16", Arr, Wh::TimeSelection, "Nudge selection right", k(NO, Key::ArrowRight), p!("C4")),
+    a("42.16", Arr, "Reverse audio selection", k(NO, Key::R), p!("A9")),
+    a("42.16", Arr, "Zoom to time selection", k(NO, Key::Z), p!("C4")),
+    a("42.16", Arr, "Zoom back from time selection", k(NO, Key::X), p!("C4")),
+    a("42.16", Arr, "Play from insert marker in clip", pl(ch(ALT, Key::Space), ch(CMD, Key::Space)), p!("C4")),
+    a("42.16", Arr, "Insert marker to playhead", k(CMD_SHIFT, Key::Space), p!("C4")),
+    b("42.16", Arr, Wh::TrackTitle, "Jump to highlighted track title", k(NO, Key::Escape), p!("C19")),
+    a("42.16", Arr, "Focus Mixer", k(ALT_SHIFT, Key::M), p!("C19")),
+
+    // 42.17 Comping
+    a("42.17", Arr, "Show take lanes", k(CMD_ALT, Key::U), p!("C6")),
+    b("42.17", Arr, Wh::TakeLane, "Add take area to the main lane", k(NO, Key::Enter), p!("C6")),
+    b("42.17", Arr, Wh::TakeLane, "Audition take lane", k(NO, Key::T), p!("C6")),
+    a("42.17", Arr, "Add take lane", k(ALT_SHIFT, Key::T), p!("C6")),
+    b("42.17", Arr, Wh::TakeLane, "Duplicate take lane", k(CMD, Key::D), p!("C6")),
+    b("42.17", Arr, Wh::TakeLane, "Next take into the main clip", k(CMD, Key::ArrowUp), p!("C6")),
+    b("42.17", Arr, Wh::TakeLane, "Previous take into the main clip", k(CMD, Key::ArrowDown), p!("C6")),
+
+    // 42.18 Bounce to audio
+    a("42.18", All, "Bounce to new track", k(CMD, Key::B), p!("A12")),
+    a("42.18", Main, "Paste bounced audio", k(CMD_ALT, Key::V), p!("A12")),
+
+    // 42.19 Tracks
+    a("42.19", All, "Insert audio track", k(CMD, Key::T), L(M::Create(Create::NewAudioTrack))),
+    a("42.19", All, "Insert MIDI track", k(CMD_SHIFT, Key::T), L(M::Create(Create::NewMidiTrack))),
+    a("42.19", All, "Insert return track", k(CMD_ALT, Key::T), L(M::Create(Create::NewReturnTrack))),
+    a("42.19", All, "Rename selected track", k(CMD, Key::R), L(M::Edit(Edit::Rename))),
+    b("42.19", All, Wh::Renaming, "Next track while renaming", k(NO, Key::Tab), p!("C19")),
+    a("42.19", Main, "Group selected tracks", k(CMD, Key::G), L(M::Create(Create::GroupTracks))),
+    a("42.19", Main, "Ungroup tracks", k(CMD_SHIFT, Key::G), L(M::Create(Create::UngroupTracks))),
+    b("42.19", Main, Wh::GroupTrack, "Show grouped tracks", k(NO, Key::Plus), L(M::Track(Track::ShowGroupedTracks))),
+    b("42.19", Main, Wh::GroupTrack, "Hide grouped tracks", k(NO, Key::Minus), L(M::Track(Track::HideGroupedTracks))),
+    b("42.19", Main, Wh::GroupTrack, "Collapse or expand grouped tracks", k(NO, Key::U), L(M::Track(Track::ToggleGroupFold))),
+    a("42.19", All, "Hide/show return tracks", k(CMD_ALT, Key::R), p!("C17")),
+    b("42.19", Main, Wh::TrackTitle, "Move nonadjacent tracks up", k(CMD, Key::ArrowUp), p!("C19")),
+    b("42.19", Main, Wh::TrackTitle, "Move nonadjacent tracks down", k(CMD, Key::ArrowDown), p!("C19")),
+    b("42.19", Main, Wh::TrackTitle, "Move nonadjacent tracks left", k(CMD, Key::ArrowLeft), p!("C19")),
+    b("42.19", Main, Wh::TrackTitle, "Move nonadjacent tracks right", k(CMD, Key::ArrowRight), p!("C19")),
+    a("42.19", Main, "Arm selected tracks", k(NO, Key::C), L(M::Track(Track::Arm))),
+    a("42.19", Main, "Solo selected tracks", k(NO, Key::S), L(M::Track(Track::Solo))),
+    a("42.19", Brw, "Add device from browser", k(NO, Key::Enter), p!("C12")),
+    a("42.19", Main, "Deactivate selected track", k(NO, Key::Num0), L(M::Track(Track::ToggleActivator))),
+    a("42.19", All, "Freeze or unfreeze tracks", k(CMD_ALT_SHIFT, Key::F), p!("A12")),
+    b("42.19", Main, Wh::TrackTitle, "Delete track from title bar", k(NO, Key::Delete), p!("C19")),
+
+    // 42.20 Transport
+    a("42.20", All, "Play from start marker, or stop", k(NO, Key::Space), L(M::Transport(Tr::PlayStop))),
+    a("42.20", All, "Continue from the stop point", k(SHIFT, Key::Space), L(M::Transport(Tr::Continue))),
+    b("42.20", Arr, Wh::TimeSelection, "Stop at the end of the selection", pl(ch(ALT, Key::Space), ch(CMD, Key::Space)), p!("C4")),
+    b("42.20", Arr, Wh::TimeSelection, "Play the selection", k(NO, Key::Space), p!("C4")),
+    a("42.20", All, "Insert marker to beginning", k(NO, Key::Home), L(M::Transport(Tr::InsertMarkerToStart))),
+    a("42.20", All, "Record", k(NO, Key::F9), L(M::Transport(Tr::Record))),
+    a("42.20", All, "Arm recording in Arrangement", k(SHIFT, Key::F9), p!("A11")),
+    a("42.20", All, "Record to Session View", k(CMD_SHIFT, Key::F9), p!("A11")),
+    a("42.20", All, "Back to Arrangement", k(NO, Key::F10), L(M::Transport(Tr::BackToArrangement))),
+    a("42.20", All, "Activator, track 1", k(NO, Key::F1), L(M::Track(Track::Activator1))),
+    a("42.20", All, "Activator, track 2", k(NO, Key::F2), L(M::Track(Track::Activator2))),
+    a("42.20", All, "Activator, track 3", k(NO, Key::F3), L(M::Track(Track::Activator3))),
+    a("42.20", All, "Activator, track 4", k(NO, Key::F4), L(M::Track(Track::Activator4))),
+    a("42.20", All, "Activator, track 5", k(NO, Key::F5), L(M::Track(Track::Activator5))),
+    a("42.20", All, "Activator, track 6", k(NO, Key::F6), L(M::Track(Track::Activator6))),
+    a("42.20", All, "Activator, track 7", k(NO, Key::F7), L(M::Track(Track::Activator7))),
+    a("42.20", All, "Activator, track 8", k(NO, Key::F8), L(M::Track(Track::Activator8))),
+    a("42.20", All, "Toggle metronome", k(NO, Key::O), L(M::Transport(Tr::ToggleMetronome))),
+
+    // 42.21 Audio engine
+    a("42.21", All, "Audio engine on/off", k(CMD_ALT_SHIFT, Key::E), p!("A5")),
+
+    // 42.22 Browser
+    a("42.22", Brw, "Scroll down", k(NO, Key::ArrowDown), p!("C12")),
+    a("42.22", Brw, "Scroll up", k(NO, Key::ArrowUp), p!("C12")),
+    a("42.22", All, "Hide/show Browser", k(CMD_ALT, Key::B), L(M::View(View::ToggleBrowser))),
+    a("42.22", Brw, "Close folder", k(NO, Key::ArrowLeft), p!("C12")),
+    a("42.22", Brw, "Open folder", k(NO, Key::ArrowRight), p!("C12")),
+    a("42.22", Brw, "Load selected item", k(NO, Key::Enter), p!("C12")),
+    a("42.22", Brw, "Preview selected file", k(SHIFT, Key::Enter), p!("C12")),
+    a("42.22", Brw, "Preview selected file", k(NO, Key::ArrowRight), p!("C12")),
+    a("42.22", Brw, "Search in Browser", k(CMD, Key::F), p!("C12")),
+    a("42.22", Brw, "Jump to search results", k(NO, Key::ArrowDown), p!("C12")),
+    a("42.22", Brw, "Jump to search results", k(NO, Key::Enter), p!("C12")),
+    a("42.22", Brw, "Assign colour 1", k(NO, Key::Num1), p!("C12")),
+    a("42.22", Brw, "Assign colour 2", k(NO, Key::Num2), p!("C12")),
+    a("42.22", Brw, "Assign colour 3", k(NO, Key::Num3), p!("C12")),
+    a("42.22", Brw, "Assign colour 4", k(NO, Key::Num4), p!("C12")),
+    a("42.22", Brw, "Assign colour 5", k(NO, Key::Num5), p!("C12")),
+    a("42.22", Brw, "Assign colour 6", k(NO, Key::Num6), p!("C12")),
+    a("42.22", Brw, "Assign colour 7", k(NO, Key::Num7), p!("C12")),
+    a("42.22", Brw, "Reset assigned colour", k(NO, Key::Num0), p!("C12")),
+    a("42.22", Brw, "Similarity search", k(CMD_SHIFT, Key::F), p!("A19")),
+    a("42.22", Brw, "Browser history back", k(CMD, Key::OpenBracket), p!("C12")),
+    a("42.22", Brw, "Browser history forward", k(CMD, Key::CloseBracket), p!("C12")),
+    a("42.22", Brw, "Hide/show Filter View", k(CMD_ALT, Key::G), p!("C12")),
+    a("42.22", Brw, "Hide/show Tag Editor", k(CMD_SHIFT, Key::E), p!("C12")),
+
+    // 42.23 Similar sample swapping
+    b("42.23", Dev, Wh::SimilarSwap, "Next similar sample", k(CMD, Key::ArrowRight), p!("A19")),
+    b("42.23", Dev, Wh::SimilarSwap, "Previous similar sample", k(CMD, Key::ArrowLeft), p!("A19")),
+    b("42.23", Dev, Wh::SimilarSwap, "Save as similarity reference", k(CMD, Key::ArrowUp), p!("A19")),
+    b("42.23", Dev, Wh::SimilarSwap, "Return to reference", k(CMD, Key::ArrowDown), p!("A19")),
+    a("42.23", Dev, "Show similar-sample swap controls", g1("Alt"), p!("A19")),
+
+    // 42.24 Key/MIDI Map Mode and the Computer MIDI Keyboard
+    a("42.24", All, "Toggle MIDI Map Mode", k(CMD, Key::M), p!("C16")),
+    a("42.24", All, "Toggle Key Map Mode", k(CMD, Key::K), p!("C16")),
+    a("42.24", All, "Computer MIDI Keyboard", k(NO, Key::M), L(M::Options(Options::ToggleComputerKeys))),
+    b("42.24", All, Wh::ComputerKeys, "Computer keyboard octave up", k(NO, Key::X), L(M::Options(Options::OctaveUp))),
+    b("42.24", All, Wh::ComputerKeys, "Computer keyboard octave down", k(NO, Key::Z), L(M::Options(Options::OctaveDown))),
+    b("42.24", All, Wh::ComputerKeys, "Computer keyboard velocity down", k(NO, Key::C), L(M::Options(Options::VelocityDown))),
+    b("42.24", All, Wh::ComputerKeys, "Computer keyboard velocity up", k(NO, Key::V), L(M::Options(Options::VelocityUp))),
+
+    // Kept from before the manual pass: not in the manual, but harmless and already in use.
+    a("rlive", All, "Hide/show Detail View", k(CMD_ALT, Key::L), L(M::View(View::ToggleDetail))),
+    a("rlive", All, "Redo", pl(ch(CMD_SHIFT, Key::Z), ch(CMD_SHIFT, Key::Z)), L(M::Edit(Edit::Redo))),
+    // With Cmd held the OS reports the key's unshifted character, so Cmd+"+" often arrives as "=".
+    a("rlive", All, "Zoom window in", k(CMD, Key::Equals), L(M::View(View::ZoomIn))),
+];

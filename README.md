@@ -51,14 +51,14 @@ Plugins are found in the standard locations (`~/Library/Audio/Plug-Ins/{CLAP,VST
 | --- | --- |
 | Space | Play / stop |
 | ⌘N / ⌘O / ⌘S / ⇧⌘S | New / open / save / save as |
-| ⌘T | New MIDI track |
+| ⌘T / ⇧⌘T | New audio / MIDI track |
 | ⌘D | Duplicate selected clip |
 | Delete | Delete selected notes (piano roll) or clip |
 | A W S E D F T G Y H U J K | Play notes on the armed (or selected) track |
 | Z / X | Octave down / up |
 | Shift+Tab | Switch Device / Clip view |
 | ⌥⌘B / ⌥⌘L | Show/hide Browser / Detail View |
-| ⌘+ / ⌘− / ⌘0 | Zoom the whole UI in / out / reset |
+| ⌘+ / ⌘− | Zoom the whole UI in / out |
 
 The layout follows Live: track headers, the clip-stop row, the mixer and the Master/scene
 column stay in place while the clip grid scrolls (wheel, Shift+wheel for horizontal); track

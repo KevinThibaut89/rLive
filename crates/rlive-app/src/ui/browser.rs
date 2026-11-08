@@ -61,7 +61,7 @@ pub fn apply(session: &mut Session, ui_state: &mut UiState, item: &BrowserItem) 
                 }
                 _ => session.add_track(TrackKind::Audio, None),
             };
-            match session.audio_clip_from_file(path) {
+            match session.audio_clip_from_file(path, track) {
                 Ok(clip) => {
                     let slot = session
                         .project
@@ -119,7 +119,7 @@ fn row(
     );
     let p = ui.painter();
     if resp.hovered() || resp.dragged() {
-        p.rect_filled(rect, 0.0, hex(0x3d4a57));
+        p.rect_filled(rect, 0.0, shade(0x3d4a57));
     }
     let mut x = rect.left() + 8.0;
     if let Some(sub) = sub {
@@ -128,11 +128,11 @@ fn row(
             Align2::RIGHT_CENTER,
             sub,
             theme::font(9.5),
-            TEXT_FAINT,
+            pal().text_faint,
         );
         let _ = r;
     }
-    let galley = p.layout_no_wrap(text.to_string(), theme::font(11.5), TEXT);
+    let galley = p.layout_no_wrap(text.to_string(), theme::font(11.5), pal().text);
     let clip = Rect::from_min_max(
         Pos2::new(x, rect.top()),
         Pos2::new(
@@ -143,7 +143,7 @@ fn row(
     p.with_clip_rect(clip.intersect(ui.clip_rect())).galley(
         Pos2::new(x, rect.center().y - galley.size().y / 2.0),
         galley,
-        TEXT,
+        pal().text,
     );
     x += 0.0;
     let _ = x;
@@ -172,7 +172,7 @@ fn group_header(ui: &mut egui::Ui, text: &str) {
         Align2::LEFT_CENTER,
         text,
         theme::font_bold(10.0),
-        TEXT_DIM,
+        pal().text_dim,
     );
 }
 
@@ -213,7 +213,7 @@ fn list_category(
         Category::Plugins => {
             if session.plugins.plugins.is_empty() && filter.is_empty() {
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new("No plug-ins scanned yet.").color(TEXT_DIM));
+                ui.label(egui::RichText::new("No plug-ins scanned yet.").color(pal().text_dim));
                 if ui.button("Scan Plug-Ins").clicked() {
                     state.request_scan = true;
                 }
@@ -331,7 +331,7 @@ pub fn show(
     let body = Rect::from_min_max(Pos2::new(full.left(), search.bottom() + 6.0), full.max);
     ui.painter().line_segment(
         [body.left_top(), body.right_top()],
-        Stroke::new(1.0, SEPARATOR),
+        Stroke::new(1.0, pal().separator),
     );
     let filter = state.browser_filter.clone();
     let mut activate: Option<BrowserItem> = None;
@@ -339,10 +339,10 @@ pub fn show(
     // Categories column
     let cat_w = (full.width() * 0.38).clamp(92.0, 130.0);
     let cats = Rect::from_min_max(body.min, Pos2::new(body.left() + cat_w, body.bottom()));
-    ui.painter().rect_filled(cats, 0.0, PANEL_DARK);
+    ui.painter().rect_filled(cats, 0.0, pal().panel_dark);
     ui.painter().line_segment(
         [cats.right_top(), cats.right_bottom()],
-        Stroke::new(1.0, SEPARATOR),
+        Stroke::new(1.0, pal().separator),
     );
     let mut cu = ui.new_child(egui::UiBuilder::new().max_rect(cats.shrink2(Vec2::new(0.0, 4.0))));
     widgets_label(&mut cu, "CATEGORIES");
@@ -350,18 +350,23 @@ pub fn show(
         let (r, resp) = cu.allocate_exact_size(Vec2::new(cat_w, 20.0), Sense::click());
         let sel = state.browser_category == c && filter.is_empty();
         if sel {
-            cu.painter().rect_filled(r, 0.0, hex(0x46525e));
+            cu.painter().rect_filled(r, 0.0, shade(0x46525e));
         } else if resp.hovered() {
-            cu.painter().rect_filled(r, 0.0, RAISED);
+            cu.painter().rect_filled(r, 0.0, pal().raised);
         }
         cu.painter().text(
             Pos2::new(r.left() + 10.0, r.center().y),
             Align2::LEFT_CENTER,
             c.label(),
             theme::font(11.5),
-            if sel { hex(0xffffff) } else { TEXT },
+            if sel { shade(0xffffff) } else { pal().text },
         );
-        if info(resp, format!("Browse {}", c.label())).clicked() {
+        if info(
+            resp,
+            format!("{} — show this part of the Browser", c.label()),
+        )
+        .clicked()
+        {
             state.browser_category = c;
             state.browser_filter.clear();
         }
@@ -393,7 +398,7 @@ pub fn show(
                     total += list_category(ui, session, state, settings, c, &filter, &mut activate);
                 }
                 if total == 0 {
-                    ui.label(egui::RichText::new("No results").color(TEXT_DIM));
+                    ui.label(egui::RichText::new("No results").color(pal().text_dim));
                 }
             }
         });
@@ -409,7 +414,7 @@ fn widgets_label(ui: &mut egui::Ui, text: &str) {
         ui.label(
             egui::RichText::new(text)
                 .font(theme::font_bold(9.5))
-                .color(TEXT_FAINT),
+                .color(pal().text_faint),
         );
     });
 }

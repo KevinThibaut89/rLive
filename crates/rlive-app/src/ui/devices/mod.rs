@@ -16,7 +16,7 @@ use super::panels::{self, PanelCtx};
 use super::theme::{self, *};
 use super::widgets::{self, info, rgb, ControlState, Led};
 use super::{BrowserItem, UiState};
-use crate::session::{ChainRef, DeviceRuntime, Session};
+use crate::session::{ChainRef, DeviceRuntime, InfoTarget, Session};
 use egui::{Align2, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
 use layout::{Placed, TITLE_H};
 use rlive_core::{ChainId, DeviceId, Item, ParamFlags, ParamId, ParamInfo};
@@ -35,6 +35,8 @@ pub struct DeviceViewState {
     show_all: HashSet<DeviceId>,
     open_chains: HashMap<DeviceId, ChainId>,
     views: ViewStore,
+    /// A device whose info text was just asked to be edited.
+    edit_info: Option<(ChainRef, DeviceId)>,
 }
 
 impl DeviceViewState {
@@ -62,14 +64,14 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let full = ui.max_rect();
     // Claim the whole panel so egui keeps its size (children don't advance the cursor).
     ui.expand_to_include_rect(full);
-    ui.painter().rect_filled(full, 0.0, PANEL_DARK);
+    ui.painter().rect_filled(full, 0.0, pal().panel_dark);
     let Some(chain) = state.selected else {
         ui.painter().text(
             full.center(),
             Align2::CENTER_CENTER,
             "Select a track to see its devices",
             theme::font(12.0),
-            TEXT_DIM,
+            pal().text_dim,
         );
         return;
     };
@@ -123,18 +125,21 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
             });
     }
     queue.apply(session, &mut state.devices, &mut state.status);
+    if let Some((chain, id)) = state.devices.edit_info.take() {
+        state.edit_info_text(session, InfoTarget::Device(chain, id));
+    }
 }
 
 /// The name and colour on the left of the device view.
 fn chain_header(session: &Session, chain: ChainRef) -> (String, egui::Color32) {
     match chain {
-        ChainRef::Master => ("Master".to_string(), hex(0x9a9a9a)),
+        ChainRef::Master => ("Master".to_string(), shade(0x9a9a9a)),
         ChainRef::Track(t) => session
             .project
             .track(t)
             .map(|t| (t.name.clone(), rgb(t.color)))
             .unwrap_or_default(),
-        ChainRef::Nested(_) => ("Rack Chain".to_string(), hex(0x9a9a9a)),
+        ChainRef::Nested(_) => ("Rack Chain".to_string(), shade(0x9a9a9a)),
     }
 }
 
@@ -158,7 +163,14 @@ fn drop_zone(ui: &mut egui::Ui, cx: &mut DrawCx, chain: ChainRef, height: f32, w
     ui.painter().rect_stroke(
         rect.shrink(1.0),
         2.0,
-        Stroke::new(1.0, if hovering { ACCENT } else { hex(0x3a3a3a) }),
+        Stroke::new(
+            1.0,
+            if hovering {
+                pal().accent
+            } else {
+                shade(0x3a3a3a)
+            },
+        ),
         StrokeKind::Inside,
     );
     let text = if width >= DROP_ZONE_W {
@@ -171,14 +183,18 @@ fn drop_zone(ui: &mut egui::Ui, cx: &mut DrawCx, chain: ChainRef, height: f32, w
         Align2::CENTER_CENTER,
         text,
         theme::font(11.0),
-        if hovering { ACCENT } else { TEXT_FAINT },
+        if hovering {
+            pal().accent
+        } else {
+            pal().text_faint
+        },
     );
     if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
         cx.queue.push(chain, Action::Add((*item).clone()));
     }
     info(
         resp,
-        "Drag devices, plug-ins or samples from the browser into the chain",
+        "Device Chain — drag devices, plug-ins or samples from the browser here",
     );
 }
 
@@ -198,8 +214,17 @@ fn device(
 
     let (rect, bg) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     let p = ui.painter().clone();
-    p.rect_filled(rect, 1.0, if on { hex(0x3a3a3a) } else { hex(0x2f2f2f) });
-    p.rect_stroke(rect, 1.0, Stroke::new(1.0, SEPARATOR), StrokeKind::Inside);
+    p.rect_filled(
+        rect,
+        1.0,
+        if on { shade(0x3a3a3a) } else { shade(0x2f2f2f) },
+    );
+    p.rect_stroke(
+        rect,
+        1.0,
+        Stroke::new(1.0, pal().separator),
+        StrokeKind::Inside,
+    );
 
     // ---- title bar
     let title = Rect::from_min_size(rect.min, Vec2::new(width, TITLE_H));
@@ -210,10 +235,14 @@ fn device(
     );
     tu.spacing_mut().item_spacing.x = 2.0;
     if dev.expanded {
-        p.rect_filled(title, 1.0, if on { hex(0x505050) } else { hex(0x3a3a3a) });
+        p.rect_filled(
+            title,
+            1.0,
+            if on { shade(0x505050) } else { shade(0x3a3a3a) },
+        );
     }
     let r = widgets::bare_icon(&mut tu, Vec2::new(18.0, 18.0), |p, r, c| {
-        icons::power(p, r, if on { ACCENT } else { c })
+        icons::power(p, r, if on { pal().accent } else { c })
     });
     if info(
         r,
@@ -234,6 +263,7 @@ fn device(
     }
 
     let resp = info(bg, format!("{} — right-click for options", dev.name));
+    widgets::info_note(&resp, &dev.info);
     resp.context_menu(|ui| device_menu(ui, cx, chain, dev, index, count, is_plugin));
 
     match &node.body {
@@ -257,7 +287,7 @@ fn expanded_title(
     let r = widgets::bare_icon(tu, Vec2::new(14.0, 18.0), |p, r, c| {
         icons::fold(p, r, true, c)
     });
-    if info(r, "Fold device").clicked() {
+    if info(r, "Fold Device — collapse this device").clicked() {
         cx.queue.push(chain, Action::Fold(dev.id, false));
     }
     let name_w =
@@ -266,18 +296,18 @@ fn expanded_title(
     let galley = tu.painter().layout_no_wrap(
         dev.name.clone(),
         theme::font_bold(11.0),
-        if on { TEXT } else { TEXT_DIM },
+        if on { pal().text } else { pal().text_dim },
     );
     tu.painter().with_clip_rect(nr).galley(
         Pos2::new(nr.left() + 2.0, nr.center().y - galley.size().y / 2.0),
         galley,
-        TEXT,
+        pal().text,
     );
     if let Some(h) = node.rt.and_then(|r| r.plugin.as_ref()) {
         if h.has_editor() {
             let open = h.is_editor_open();
-            let r = widgets::state_button(tu, Vec2::new(40.0, 15.0), open, ACCENT, "Edit");
-            if info(r, "Show/hide the plug-in's own editor window").clicked() {
+            let r = widgets::state_button(tu, Vec2::new(40.0, 15.0), open, pal().accent, "Edit");
+            if info(r, "Plug-In Editor — show or hide the plug-in's own window").clicked() {
                 cx.queue.push(
                     chain,
                     if open {
@@ -316,24 +346,27 @@ fn folded_title(
         arrow,
         false,
         if ar.hovered() {
-            hex(0xffffff)
+            shade(0xffffff)
         } else {
-            TEXT_DIM
+            pal().text_dim
         },
     );
-    if info(ar, "Unfold device").clicked() {
+    if info(ar, "Unfold Device — expand this device").clicked() {
         cx.queue.push(chain, Action::Fold(dev.id, true));
     }
     let galley = p.layout_no_wrap(
         dev.name.clone(),
         theme::font_bold(11.0),
-        if on { TEXT } else { TEXT_DIM },
+        if on { pal().text } else { pal().text_dim },
     );
     let pos = Pos2::new(
         rect.center().x - galley.size().y / 2.0,
         rect.top() + FOLDED_NAME_Y + galley.size().x,
     );
-    p.add(egui::epaint::TextShape::new(pos, galley, TEXT).with_angle(-std::f32::consts::FRAC_PI_2));
+    p.add(
+        egui::epaint::TextShape::new(pos, galley, pal().text)
+            .with_angle(-std::f32::consts::FRAC_PI_2),
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -346,6 +379,10 @@ fn device_menu(
     count: usize,
     is_plugin: bool,
 ) {
+    if ui.button("Edit Info Text").clicked() {
+        cx.queue.push(chain, Action::EditInfo(dev.id));
+        ui.close();
+    }
     if index > 0 && ui.button("Move Left").clicked() {
         cx.queue.push(chain, Action::Move(dev.id, index - 1));
         ui.close();
@@ -366,7 +403,10 @@ fn device_menu(
         ui.close();
     }
     ui.separator();
-    if ui.button(RichText::new("Delete").color(ARM_RED)).clicked() {
+    if ui
+        .button(RichText::new("Delete").color(pal().arm_red))
+        .clicked()
+    {
         cx.queue.push(chain, Action::Remove(dev.id));
         ui.close();
     }
@@ -405,14 +445,14 @@ fn controls(
         bu.multiply_opacity(0.55);
     }
     let Some(rt) = node.rt else {
-        bu.label(RichText::new("Not loaded").color(ARM_RED));
+        bu.label(RichText::new("Not loaded").color(pal().arm_red));
         return;
     };
     let is_plugin = matches!(dev.kind, DeviceKind::Plugin { .. });
     if let Some(err) = &rt.error {
-        bu.label(RichText::new(err).color(ARM_RED).size(10.5));
+        bu.label(RichText::new(err).color(pal().arm_red).size(10.5));
         if is_plugin
-            && widgets::state_button(&mut bu, Vec2::new(44.0, 16.0), false, ACCENT, "Retry")
+            && widgets::state_button(&mut bu, Vec2::new(44.0, 16.0), false, pal().accent, "Retry")
                 .clicked()
         {
             cx.queue.push(chain, Action::Reload(dev.id));
@@ -432,7 +472,7 @@ fn controls(
                 Align2::LEFT_TOP,
                 section.title,
                 theme::font_bold(10.0),
-                TEXT_DIM,
+                pal().text_dim,
             );
         }
         let origin = Pos2::new(x, grid_top).to_vec2();
@@ -456,12 +496,12 @@ fn controls(
             Vec2::new(body.width(), 18.0),
         );
         let mut au = bu.new_child(UiBuilder::new().max_rect(r));
-        if widgets::state_button(&mut au, r.size(), false, ACCENT, &label).clicked() {
+        if widgets::state_button(&mut au, r.size(), false, pal().accent, &label).clicked() {
             cx.queue.push(chain, Action::ShowAll(dev.id));
         }
     }
     if plan.visible == 0 && rt.error.is_none() && !declared {
-        bu.label(RichText::new("No parameters").color(TEXT_DIM));
+        bu.label(RichText::new("No parameters").color(pal().text_dim));
     }
 }
 
@@ -483,15 +523,17 @@ fn sample_row(
             None => "No sample — drop one here".into(),
         };
         let (r, resp) = ui.allocate_exact_size(Vec2::new(width - 50.0, 18.0), Sense::hover());
-        ui.painter().rect_filled(r, 1.0, FIELD_BG);
-        let g = ui.painter().layout_no_wrap(name, theme::font(10.5), ACCENT);
+        ui.painter().rect_filled(r, 1.0, pal().field_bg);
+        let g = ui
+            .painter()
+            .layout_no_wrap(name, theme::font(10.5), pal().accent);
         ui.painter().with_clip_rect(r).galley(
             Pos2::new(r.left() + 4.0, r.center().y - g.size().y / 2.0),
             g,
-            ACCENT,
+            pal().accent,
         );
-        info(resp, "Sample used by this Sampler");
-        if widgets::state_button(ui, Vec2::new(44.0, 18.0), false, ACCENT, "Load").clicked() {
+        info(resp, "Sample — the audio this Sampler plays");
+        if widgets::state_button(ui, Vec2::new(44.0, 18.0), false, pal().accent, "Load").clicked() {
             cx.queue.push(chain, Action::LoadSample(dev.id, slot));
         }
     });
@@ -615,11 +657,11 @@ fn rack(
     }
     let dev = node.dev;
     if let Some(err) = node.rt.and_then(|r| r.error.as_ref()) {
-        bu.label(RichText::new(err).color(ARM_RED).size(10.5));
+        bu.label(RichText::new(err).color(pal().arm_red).size(10.5));
     }
 
     let list = Rect::from_min_size(body.min, Vec2::new(CHAIN_LIST_W, body.height()));
-    bu.painter().rect_filled(list, 1.0, FIELD_BG);
+    bu.painter().rect_filled(list, 1.0, pal().field_bg);
     let mut lu = bu.new_child(UiBuilder::new().max_rect(list.shrink(2.0)));
     lu.spacing_mut().item_spacing = Vec2::new(0.0, 1.0);
     egui::ScrollArea::vertical()
@@ -654,7 +696,7 @@ fn rack(
                 Align2::CENTER_CENTER,
                 "No chains",
                 theme::font(11.0),
-                TEXT_FAINT,
+                pal().text_faint,
             );
         }
     }
@@ -670,9 +712,9 @@ fn chain_row(
     let (rect, resp) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), CHAIN_ROW_H), Sense::click());
     let fill = if selected {
-        RAISED_HOVER
+        pal().raised_hover
     } else if resp.hovered() {
-        RAISED
+        pal().raised
     } else {
         egui::Color32::TRANSPARENT
     };
@@ -685,12 +727,16 @@ fn chain_row(
     let g = p.layout_no_wrap(
         chain.name.clone(),
         theme::font(10.5),
-        if chain.mix.active { TEXT } else { TEXT_FAINT },
+        if chain.mix.active {
+            pal().text
+        } else {
+            pal().text_faint
+        },
     );
     p.with_clip_rect(rect).galley(
         Pos2::new(rect.left() + 6.0, rect.center().y - g.size().y / 2.0),
         g,
-        TEXT,
+        pal().text,
     );
     let resp = info(
         resp,

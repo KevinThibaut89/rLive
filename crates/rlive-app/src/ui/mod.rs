@@ -5,21 +5,26 @@ mod browser;
 pub mod commands;
 mod devices;
 mod icons;
+mod info_view;
+pub mod keymap;
 #[cfg(target_os = "macos")]
 mod mac_menu;
 pub(crate) mod panels;
 mod piano_roll;
 mod session_view;
+mod settings_window;
 pub mod theme;
 mod timeline;
 pub mod widgets;
 
 use crate::audio::{self, AudioOutput};
-use crate::midi_input::{self, MidiInput, MidiRouting};
+use crate::midi_input::{MidiInput, MidiRouting};
+use crate::session::InfoTarget;
 use crate::session::{ChainRef, ClipRef, Session};
 use crate::settings::Settings;
-use commands::{ClipBoard, FocusArea, MenuCommand};
+use commands::{ClipBoard, MenuCommand};
 use egui::{Align2, Key, Pos2, Rect, RichText, Sense, Stroke, UiBuilder, Vec2};
+use keymap::{FocusArea, KeyContext, KeyState, Platform};
 use rlive_core::{MidiMessage, Quantize, TimeSignature, TrackId};
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_project::Project;
@@ -65,6 +70,7 @@ pub struct UiState {
     pub detail: Detail,
     pub main_view: MainView,
     pub focus: FocusArea,
+    pub keys: KeyState,
     pub clipboard: Option<ClipBoard>,
     pub browser_filter: String,
     pub browser_category: browser::Category,
@@ -77,10 +83,18 @@ pub struct UiState {
     pub arr: arrangement::ArrangementState,
     pub show_browser: bool,
     pub show_detail: bool,
+    pub show_info: bool,
     pub computer_keys: bool,
     pub octave: i32,
+    /// Velocity the Computer MIDI Keyboard plays at, 0 to 1.
+    pub key_velocity: f32,
     held: HashMap<Key, u8>,
     show_settings: bool,
+    settings_tab: settings_window::Tab,
+    /// The info text being typed, and for what.
+    pub info_edit: Option<(InfoTarget, String)>,
+    /// The info text editor has yet to take keyboard focus.
+    info_edit_focus: bool,
     show_export: bool,
     show_about: bool,
     export_scene: usize,
@@ -111,6 +125,15 @@ pub struct RliveApp {
     mac_menu: Option<mac_menu::MacMenu>,
 }
 
+/// Where each focus area is on screen this frame.
+#[derive(Default)]
+struct FocusRects {
+    control_bar: Option<Rect>,
+    browser: Option<Rect>,
+    detail: Option<Rect>,
+    main: Option<Rect>,
+}
+
 #[cfg(not(target_os = "macos"))]
 const MENU_H: f32 = 22.0;
 const CONTROL_BAR_H: f32 = 34.0;
@@ -120,6 +143,8 @@ impl RliveApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
         theme::apply(&cc.egui_ctx);
         let settings = Settings::load();
+        theme::begin_frame(&cc.egui_ctx, &settings.theme);
+        settings_window::apply_scroll_bars(&cc.egui_ctx, settings.scroll_bars);
         cc.egui_ctx.set_zoom_factor(settings.zoom());
         let (audio, mut handle) = audio::start(settings.audio_device.as_deref());
         let sender = handle.take_midi_sender();
@@ -150,6 +175,7 @@ impl RliveApp {
             detail: Detail::Devices,
             main_view: MainView::Session,
             focus: FocusArea::Session,
+            keys: KeyState::default(),
             clipboard: None,
             browser_filter: String::new(),
             browser_category: browser::Category::Instruments,
@@ -162,10 +188,15 @@ impl RliveApp {
             arr: arrangement::ArrangementState::default(),
             show_browser: settings.show_browser.unwrap_or(true),
             show_detail: settings.show_detail.unwrap_or(true),
+            show_info: settings.show_info,
             computer_keys: true,
             octave: 3,
+            key_velocity: 0.8,
             held: HashMap::new(),
             show_settings: false,
+            settings_tab: settings_window::Tab::default(),
+            info_edit: None,
+            info_edit_focus: false,
             show_export: false,
             show_about: false,
             export_scene: 0,
@@ -298,22 +329,54 @@ impl RliveApp {
         }
     }
 
-    /// Edit commands act on whichever area was clicked last.
-    fn track_edit_focus(&mut self, ctx: &egui::Context, detail: Option<Rect>) {
+    /// Focus follows the area that was clicked last.
+    fn track_focus(&mut self, ctx: &egui::Context, rects: &FocusRects) {
         if !ctx.input(|i| i.pointer.primary_pressed()) {
             return;
         }
         let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) else {
             return;
         };
-        self.ui.focus = if detail.is_some_and(|r| r.contains(pos)) && self.ui.detail == Detail::Clip
-        {
-            FocusArea::Notes
+        let inside = |r: Option<Rect>| r.is_some_and(|r| r.contains(pos));
+        self.ui.focus = if inside(rects.control_bar) {
+            FocusArea::ControlBar
+        } else if inside(rects.browser) {
+            FocusArea::Browser
+        } else if inside(rects.detail) {
+            match self.ui.detail {
+                Detail::Clip => FocusArea::Clip,
+                Detail::Devices => FocusArea::Device,
+            }
         } else if self.ui.main_view == MainView::Arrangement {
             FocusArea::Arrangement
         } else {
             FocusArea::Session
         };
+    }
+
+    /// Draws the "Outline View in Focus" border.
+    fn paint_focus_outline(&self, ctx: &egui::Context, rects: &FocusRects) {
+        if !self.settings.outline_focus {
+            return;
+        }
+        let rect = match self.ui.focus {
+            FocusArea::ControlBar => rects.control_bar,
+            FocusArea::Browser => rects.browser,
+            FocusArea::Clip | FocusArea::Device => rects.detail,
+            FocusArea::Session | FocusArea::Arrangement => rects.main,
+        };
+        if let Some(r) = rect {
+            ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::unique("focus_outline"),
+            ))
+            .rect_stroke(
+                r.shrink(0.5),
+                0.0,
+                Stroke::new(1.0, pal().accent),
+                egui::StrokeKind::Inside,
+            );
+        }
     }
 
     fn toggle_recording(&mut self) {
@@ -336,6 +399,12 @@ impl RliveApp {
         let z = z.clamp(0.7, 2.0);
         ctx.set_zoom_factor(z);
         self.settings.zoom = Some(z);
+        self.settings.save();
+    }
+
+    fn toggle_info_view(&mut self) {
+        self.ui.show_info = !self.ui.show_info;
+        self.settings.show_info = self.ui.show_info;
         self.settings.save();
     }
 
@@ -369,106 +438,73 @@ impl RliveApp {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        #[cfg(not(target_os = "macos"))]
-        self.menu_shortcuts(ctx);
-        if ctx.egui_wants_keyboard_input() {
-            return;
-        }
-        let (space, delete, record) = ctx.input(|i| {
-            (
-                i.key_pressed(Key::Space),
-                i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
-                i.key_pressed(Key::F9),
-            )
-        });
-        if record {
-            self.toggle_recording();
-        }
-        if space {
-            if self.session.is_playing() {
-                self.session.stop();
-            } else {
-                self.session.play();
-            }
-        }
-        if delete {
-            self.dispatch(ctx, MenuCommand::Delete);
-        }
-        if self.ui.computer_keys {
+        if self.ui.computer_keys && !ctx.egui_wants_keyboard_input() {
             self.computer_keyboard(ctx);
         }
     }
 
-    /// Ableton-style computer MIDI keyboard: A W S E D F T G Y H U J K = C..C, Z/X = octave.
+    /// What the keymap needs to resolve this frame's key presses.
+    fn key_context(&self, ctx: &egui::Context) -> KeyContext {
+        KeyContext {
+            platform: Platform::current(),
+            focus: self.ui.focus,
+            clip_is_midi: self
+                .ui
+                .selected_clip
+                .and_then(|r| self.session.clip_at(r))
+                .is_some_and(|c| c.is_midi()),
+            computer_keys: self.ui.computer_keys,
+            text_focused: ctx.text_edit_focused(),
+            keyboard_taken: ctx.egui_wants_keyboard_input(),
+            dialog_open: self.ui.show_about || self.ui.show_export || self.ui.show_settings,
+            group_selected: self
+                .selected_track_ids()
+                .iter()
+                .any(|t| self.session.project.track(*t).is_some_and(|t| t.is_group())),
+        }
+    }
+
+    /// Ableton-style computer MIDI keyboard: A W S E D F T G Y H U J K = C..C. Z, X, C and V go
+    /// through the keymap. Letters are matched by what they type, as for every other shortcut.
     fn computer_keyboard(&mut self, ctx: &egui::Context) {
-        const KEYS: [(Key, u8); 13] = [
-            (Key::A, 0),
-            (Key::W, 1),
-            (Key::S, 2),
-            (Key::E, 3),
-            (Key::D, 4),
-            (Key::F, 5),
-            (Key::T, 6),
-            (Key::G, 7),
-            (Key::Y, 8),
-            (Key::H, 9),
-            (Key::U, 10),
-            (Key::J, 11),
-            (Key::K, 12),
-        ];
         let Some(target) = self.midi_target() else {
             return;
         };
-        let (pressed, released, z, x, modifier) = ctx.input(|i| {
-            let pressed: Vec<Key> = KEYS
+        let keys = keymap::MIDI_NOTE_KEYS;
+        let (pressed, released, modified) = ctx.input(|i| {
+            let pressed: Vec<(usize, Key)> = keys
                 .iter()
-                .filter(|(k, _)| i.key_pressed(*k))
-                .map(|(k, _)| *k)
+                .enumerate()
+                .filter(|(_, k)| i.key_pressed(**k))
+                .map(|(o, k)| (o, *k))
                 .collect();
-            let released: Vec<Key> = KEYS
+            let released: Vec<Key> = keys
                 .iter()
-                .filter(|(k, _)| i.key_released(*k))
-                .map(|(k, _)| *k)
+                .filter(|k| i.key_released(**k))
+                .copied()
                 .collect();
-            (
-                pressed,
-                released,
-                i.key_pressed(Key::Z),
-                i.key_pressed(Key::X),
-                i.modifiers.command || i.modifiers.alt,
-            )
+            let m = i.modifiers;
+            (pressed, released, m.command || m.alt || m.shift)
         });
-        if modifier {
-            return;
-        }
-        if z {
-            self.ui.octave = (self.ui.octave - 1).max(-2);
-        }
-        if x {
-            self.ui.octave = (self.ui.octave + 1).min(8);
-        }
-        for k in pressed {
-            if self.ui.held.contains_key(&k) {
-                continue;
-            }
-            let offset = KEYS
-                .iter()
-                .find(|(kk, _)| *kk == k)
-                .map(|(_, o)| *o)
-                .unwrap_or(0);
-            let note = ((self.ui.octave + 2) * 12 + offset as i32).clamp(0, 127) as u8;
-            self.ui.held.insert(k, note);
-            for t in &target {
-                self.session.play_midi(
-                    *t,
-                    MidiMessage::NoteOn {
-                        channel: 0,
-                        key: note,
-                        velocity: 0.8,
-                        note_id: 0,
-                        tuning: 0.0,
-                    },
-                );
+        if !modified {
+            for (offset, k) in pressed {
+                if self.ui.held.contains_key(&k) {
+                    continue;
+                }
+                let note = ((self.ui.octave + 2) * 12 + offset as i32).clamp(0, 127) as u8;
+                self.ui.held.insert(k, note);
+                for t in &target {
+                    self.session.play_midi(
+                        *t,
+                        MidiMessage::NoteOn {
+                            channel: 0,
+                            key: note,
+                            velocity: self.ui.key_velocity,
+                            note_id: 0,
+                            tuning: 0.0,
+                        },
+                    );
+                }
             }
         }
         for k in released {
@@ -528,10 +564,10 @@ impl RliveApp {
     fn control_bar(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
         let p = ui.painter().clone();
-        p.rect_filled(rect, 0.0, BAR_BG);
+        p.rect_filled(rect, 0.0, pal().bar_bg);
         p.line_segment(
             [rect.left_bottom(), rect.right_bottom()],
-            Stroke::new(1.0, SEPARATOR),
+            Stroke::new(1.0, pal().separator),
         );
         let h = 22.0;
         let cy = rect.center().y;
@@ -548,7 +584,7 @@ impl RliveApp {
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
         lu.spacing_mut().item_spacing.x = 4.0;
-        let r = widgets::state_button(&mut lu, Vec2::new(34.0, h), false, ACCENT, "TAP");
+        let r = widgets::state_button(&mut lu, Vec2::new(34.0, h), false, pal().accent, "TAP");
         if info(r, "Tap Tempo — click in time to set the tempo").clicked() {
             let now = lu.input(|i| i.time);
             self.tap_tempo(now);
@@ -572,8 +608,8 @@ impl RliveApp {
             egui::DragValue::new(&mut sig.numerator).range(1..=32),
         );
         changed |= r.changed();
-        info(r, "Time signature numerator");
-        lu.label(RichText::new("/").color(TEXT_DIM));
+        info(r, "Time Signature Numerator — beats in a bar");
+        lu.label(RichText::new("/").color(pal().text_dim));
         let r = egui::ComboBox::from_id_salt("sig_den")
             .width(34.0)
             .selected_text(sig.denominator.to_string())
@@ -584,15 +620,22 @@ impl RliveApp {
                         .changed();
                 }
             });
-        info(r.response, "Time signature denominator");
+        info(
+            r.response,
+            "Time Signature Denominator — the note value of a beat",
+        );
         if changed {
             self.session.set_time_signature(TimeSignature { ..sig });
         }
         let metro = self.session.project.metronome;
-        let r = widgets::icon_button(&mut lu, Vec2::new(26.0, h), metro, ACCENT, |p, r, c| {
-            icons::metronome(p, r, c)
-        });
-        if info(r, "Metronome").clicked() {
+        let r = widgets::icon_button(
+            &mut lu,
+            Vec2::new(26.0, h),
+            metro,
+            pal().accent,
+            icons::metronome,
+        );
+        if info(r, "Metronome — click on every beat while playing (O)").clicked() {
             self.session.set_metronome(!metro);
         }
 
@@ -609,16 +652,25 @@ impl RliveApp {
             &mut cu,
             Vec2::new(30.0, h),
             playing,
-            PLAY_GREEN,
+            pal().play_green,
             icons::play,
         );
-        if info(r, "Play (Space)").clicked() {
+        if info(r, "Play — start playback (Space)").clicked() {
             self.session.play();
         }
-        let r = widgets::icon_button(&mut cu, Vec2::new(30.0, h), false, ACCENT, |p, r, c| {
-            icons::stop(p, r, c)
-        });
-        if info(r, "Stop (Space); stop twice to return to the start").clicked() {
+        let r = widgets::icon_button(
+            &mut cu,
+            Vec2::new(30.0, h),
+            false,
+            pal().accent,
+            icons::stop,
+        );
+        if info(
+            r,
+            "Stop — stop playback; stop twice to return to the start (Space)",
+        )
+        .clicked()
+        {
             self.session.stop();
         }
         let recording = self.session.is_recording();
@@ -626,10 +678,15 @@ impl RliveApp {
             &mut cu,
             Vec2::new(30.0, h),
             recording,
-            ARM_RED,
+            pal().arm_red,
             icons::record,
         );
-        if info(r, "Record MIDI onto armed tracks in the Arrangement (F9)").clicked() {
+        if info(
+            r,
+            "Record — record MIDI onto armed tracks in the Arrangement (F9)",
+        )
+        .clicked()
+        {
             self.toggle_recording();
         }
         let armed = self.session.automation_arm();
@@ -637,7 +694,7 @@ impl RliveApp {
             &mut cu,
             Vec2::new(26.0, h),
             armed,
-            ARM_RED,
+            pal().arm_red,
             icons::automation_arm,
         );
         if info(
@@ -653,7 +710,7 @@ impl RliveApp {
             &mut cu,
             Vec2::new(26.0, h),
             overridden,
-            ACCENT,
+            pal().accent,
             icons::re_enable,
         );
         if info(
@@ -674,24 +731,39 @@ impl RliveApp {
             .format_position(tick)
             .replace('.', ".  ");
         let (pr, r) = cu.allocate_exact_size(Vec2::new(96.0, h), Sense::hover());
-        cu.painter().rect_filled(pr, 1.0, FIELD_BG);
+        cu.painter().rect_filled(pr, 1.0, pal().field_bg);
         cu.painter().text(
             pr.center(),
             Align2::CENTER_CENTER,
             pos,
             egui::FontId::monospace(13.0),
-            if playing { PLAY_GREEN } else { TEXT },
+            if playing {
+                pal().play_green
+            } else {
+                pal().text
+            },
         );
-        info(r, "Song position (bar . beat . sixteenth)");
+        info(r, "Song Position — the playhead, as bar . beat . sixteenth");
         cu.add_space(6.0);
         let a = self.session.project.arrangement.clone();
-        let r = widgets::state_button(&mut cu, Vec2::new(40.0, h), a.loop_enabled, ACCENT, "Loop");
-        if info(r, "Loop the Arrangement between the loop brace's ends").clicked() {
+        let r = widgets::state_button(
+            &mut cu,
+            Vec2::new(40.0, h),
+            a.loop_enabled,
+            pal().accent,
+            "Loop",
+        );
+        if info(
+            r,
+            "Loop — repeat the Arrangement between the loop brace's ends (Cmd+L)",
+        )
+        .clicked()
+        {
             self.session
                 .set_loop(!a.loop_enabled, a.loop_start, a.loop_end);
         }
         let back = arrangement::overridden(&self.session);
-        let r = widgets::state_button(&mut cu, Vec2::new(44.0, h), back, ACCENT, "Back");
+        let r = widgets::state_button(&mut cu, Vec2::new(44.0, h), back, pal().accent, "Back");
         if info(
             r,
             "Back to Arrangement — Session clips stop, the timeline plays again",
@@ -718,10 +790,17 @@ impl RliveApp {
             Vec2::new(if narrow { 34.0 } else { 70.0 }, h),
             Sense::hover(),
         );
-        ru.painter().rect_filled(cr, 1.0, FIELD_BG);
+        ru.painter().rect_filled(cr, 1.0, pal().field_bg);
         let bar = Rect::from_min_size(cr.min, Vec2::new(cr.width() * load, cr.height()));
-        ru.painter()
-            .rect_filled(bar, 1.0, if load > 0.8 { ARM_RED } else { hex(0x3c5a3c) });
+        ru.painter().rect_filled(
+            bar,
+            1.0,
+            if load > 0.8 {
+                pal().arm_red
+            } else {
+                shade(0x3c5a3c)
+            },
+        );
         ru.painter().text(
             cr.center(),
             Align2::CENTER_CENTER,
@@ -731,28 +810,35 @@ impl RliveApp {
                 format!("CPU {:.0}%", load * 100.0)
             },
             theme::font(10.5),
-            TEXT,
+            pal().text,
         );
-        info(r, "Audio engine load");
+        info(
+            r,
+            "CPU Load — how much of the audio deadline the engine is using",
+        );
         // MIDI activity LED
         let midi_on = self.routing.activity.swap(false, Ordering::Relaxed);
         let (lr, r) = ru.allocate_exact_size(Vec2::new(34.0, h), Sense::hover());
         ru.painter().circle_filled(
             Pos2::new(lr.right() - 5.0, lr.center().y),
             3.5,
-            if midi_on { ACCENT } else { hex(0x4a4a4a) },
+            if midi_on {
+                pal().accent
+            } else {
+                shade(0x4a4a4a)
+            },
         );
         ru.painter().text(
             Pos2::new(lr.left(), lr.center().y),
             Align2::LEFT_CENTER,
             "MIDI",
             theme::font(10.0),
-            TEXT_DIM,
+            pal().text_dim,
         );
         info(
             r,
             format!(
-                "MIDI input: {}",
+                "MIDI Input — {}",
                 self.midi
                     .port_name
                     .clone()
@@ -761,13 +847,17 @@ impl RliveApp {
         );
         if !narrow {
             let keys = self.ui.computer_keys;
-            let r = widgets::icon_button(&mut ru, Vec2::new(28.0, h), keys, ACCENT, |p, r, c| {
-                icons::keyboard(p, r, c)
-            });
+            let r = widgets::icon_button(
+                &mut ru,
+                Vec2::new(28.0, h),
+                keys,
+                pal().accent,
+                icons::keyboard,
+            );
             if info(
                 r,
                 format!(
-                    "Computer MIDI keyboard (octave {}): A–K play notes, Z/X change octave",
+                    "Computer MIDI Keyboard — octave {}: A to K play notes, Z and X change octave, C and V change velocity (M)",
                     self.ui.octave
                 ),
             )
@@ -777,12 +867,18 @@ impl RliveApp {
             }
         }
         let arr = self.ui.main_view == MainView::Arrangement;
-        let r = widgets::state_button(&mut ru, Vec2::new(56.0, h), arr, hex(0x8a8a8a), "Arrange");
-        if info(r, "Arrangement View (Tab)").clicked() {
+        let r = widgets::state_button(&mut ru, Vec2::new(56.0, h), arr, shade(0x8a8a8a), "Arrange");
+        if info(r, "Arrangement View — the timeline (Tab)").clicked() {
             self.ui.main_view = MainView::Arrangement;
         }
-        let r = widgets::state_button(&mut ru, Vec2::new(54.0, h), !arr, hex(0x8a8a8a), "Session");
-        if info(r, "Session View (Tab)").clicked() {
+        let r = widgets::state_button(
+            &mut ru,
+            Vec2::new(54.0, h),
+            !arr,
+            shade(0x8a8a8a),
+            "Session",
+        );
+        if info(r, "Session View — clips launched in any order (Tab)").clicked() {
             self.ui.main_view = MainView::Session;
         }
         let mut q = self.session.project.quantize;
@@ -794,7 +890,10 @@ impl RliveApp {
                     ui.selectable_value(&mut q, opt, opt.label());
                 }
             });
-        info(r.response, "Global launch quantization");
+        info(
+            r.response,
+            "Global Quantization — when launched clips start (Cmd+6 to Cmd+0)",
+        );
         if q != self.session.project.quantize {
             self.session.set_quantize(q);
         }
@@ -804,10 +903,10 @@ impl RliveApp {
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
         let p = ui.painter().clone();
-        p.rect_filled(rect, 0.0, BAR_BG);
+        p.rect_filled(rect, 0.0, pal().bar_bg);
         p.line_segment(
             [rect.left_top(), rect.right_top()],
-            Stroke::new(1.0, SEPARATOR),
+            Stroke::new(1.0, pal().separator),
         );
         let mut u = ui.new_child(
             UiBuilder::new()
@@ -817,23 +916,34 @@ impl RliveApp {
         u.spacing_mut().item_spacing.x = 6.0;
         let b = self.ui.show_browser;
         let r = widgets::bare_icon(&mut u, Vec2::new(22.0, 18.0), |p, r, c| {
-            icons::panel_toggle(p, r, icons::PanelSide::Left, b, if b { ACCENT } else { c })
+            icons::panel_toggle(
+                p,
+                r,
+                icons::PanelSide::Left,
+                b,
+                if b { pal().accent } else { c },
+            )
         });
-        if info(r, "Show/hide the Browser (⌥⌘B)").clicked() {
+        if info(r, "Browser — show or hide the Browser (⌥⌘B)").clicked() {
             self.toggle_browser();
         }
-        let info_text = widgets::info_text(u.ctx()).unwrap_or_default();
+        // The Info View takes over while it's showing; otherwise hovering writes here.
+        let info_text = if self.ui.show_info {
+            String::new()
+        } else {
+            widgets::info_text(u.ctx()).unwrap_or_default()
+        };
         let right_w = 330.0;
         let avail = (u.available_width() - right_w).max(50.0);
         let (ir, _) = u.allocate_exact_size(Vec2::new(avail, 18.0), Sense::hover());
         let msg = if !info_text.is_empty() {
-            (info_text, TEXT)
+            (info_text, pal().text)
         } else if !self.ui.status.is_empty() {
-            (self.ui.status.clone(), TEXT_DIM)
+            (self.ui.status.clone(), pal().text_dim)
         } else {
             (
                 self.session.messages.last().cloned().unwrap_or_default(),
-                TEXT_DIM,
+                pal().text_dim,
             )
         };
         let galley = u.painter().layout_no_wrap(msg.0, theme::font(11.0), msg.1);
@@ -851,25 +961,40 @@ impl RliveApp {
                     r,
                     icons::PanelSide::Bottom,
                     d,
-                    if d { ACCENT } else { c },
+                    if d { pal().accent } else { c },
                 )
             });
-            if info(r, "Show/hide the Detail View (⌥⌘L)").clicked() {
+            if info(
+                r,
+                "Detail View — show or hide the Clip and Device Views (⌥⌘L)",
+            )
+            .clicked()
+            {
                 self.toggle_detail();
             }
             if self.ui.selected_clip.is_some() {
                 let clip_on = self.ui.detail == Detail::Clip;
-                let r =
-                    widgets::state_button(u, Vec2::new(40.0, 16.0), clip_on, hex(0x8a8a8a), "Clip");
-                if info(r, "Clip View (Shift+Tab toggles)").clicked() {
+                let r = widgets::state_button(
+                    u,
+                    Vec2::new(40.0, 16.0),
+                    clip_on,
+                    shade(0x8a8a8a),
+                    "Clip",
+                );
+                if info(r, "Clip View — edit the selected clip (Shift+Tab toggles)").clicked() {
                     self.ui.detail = Detail::Clip;
                     self.ui.show_detail = true;
                 }
             }
             let dev_on = self.ui.detail == Detail::Devices;
             let r =
-                widgets::state_button(u, Vec2::new(52.0, 16.0), dev_on, hex(0x8a8a8a), "Devices");
-            if info(r, "Device View (Shift+Tab toggles)").clicked() {
+                widgets::state_button(u, Vec2::new(52.0, 16.0), dev_on, shade(0x8a8a8a), "Devices");
+            if info(
+                r,
+                "Device View — the selected track's devices (Shift+Tab toggles)",
+            )
+            .clicked()
+            {
                 self.ui.detail = Detail::Devices;
                 self.ui.show_detail = true;
             }
@@ -884,172 +1009,20 @@ impl RliveApp {
             u.label(
                 RichText::new(format!("{name}{dirty}"))
                     .size(11.0)
-                    .color(TEXT_DIM),
+                    .color(pal().text_dim),
             );
             if !self.ui.scan_status.is_empty() {
                 u.label(
                     RichText::new(&self.ui.scan_status)
                         .size(11.0)
-                        .color(TEXT_DIM),
+                        .color(pal().text_dim),
                 );
             }
         });
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
-        let mut open = self.ui.show_settings;
-        egui::Window::new("Preferences")
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                widgets::section_label(ui, "AUDIO");
-                let devices = self
-                    .ui
-                    .audio_devices
-                    .get_or_insert_with(audio::output_device_names)
-                    .clone();
-                let current = self
-                    .settings
-                    .audio_device
-                    .clone()
-                    .unwrap_or_else(|| "System default".into());
-                let mut choice = self.settings.audio_device.clone();
-                ui.horizontal(|ui| {
-                    ui.label("Output");
-                    egui::ComboBox::from_id_salt("audio_dev")
-                        .width(240.0)
-                        .selected_text(current)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut choice, None, "System default");
-                            for d in devices {
-                                ui.selectable_value(&mut choice, Some(d.clone()), d);
-                            }
-                        });
-                    if ui.small_button("Refresh").clicked() {
-                        self.ui.audio_devices = None;
-                    }
-                });
-                if choice != self.settings.audio_device {
-                    self.settings.audio_device = choice;
-                    self.settings.save();
-                    self.restart_audio();
-                }
-                ui.label(
-                    RichText::new(format!(
-                        "Running: {} @ {} Hz",
-                        self.audio.device_name, self.audio.sample_rate
-                    ))
-                    .color(TEXT_DIM),
-                );
-                ui.add_space(6.0);
-                widgets::section_label(ui, "MIDI");
-                let ports = self
-                    .ui
-                    .midi_ports
-                    .get_or_insert_with(midi_input::port_names)
-                    .clone();
-                let mut port = self.settings.midi_input.clone();
-                let mut reconnect = false;
-                ui.horizontal(|ui| {
-                    ui.label("Input ");
-                    egui::ComboBox::from_id_salt("midi_port")
-                        .width(240.0)
-                        .selected_text(port.clone().unwrap_or_else(|| "First available".into()))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut port, None, "First available");
-                            for p in ports {
-                                ui.selectable_value(&mut port, Some(p.clone()), p);
-                            }
-                        });
-                    reconnect = ui.small_button("Reconnect").clicked();
-                });
-                if port != self.settings.midi_input || reconnect {
-                    self.ui.midi_ports = None;
-                    self.settings.midi_input = port;
-                    self.settings.save();
-                    self.midi = MidiInput::none();
-                    self.midi = MidiInput::connect(
-                        self.settings.midi_input.as_deref(),
-                        self.routing.clone(),
-                    )
-                    .unwrap_or_else(|e| {
-                        self.ui.status = format!("MIDI: {e}");
-                        MidiInput::none()
-                    });
-                }
-                ui.add_space(6.0);
-                widgets::section_label(ui, "LOOK");
-                ui.horizontal(|ui| {
-                    ui.label("Zoom");
-                    let mut z = ui.ctx().zoom_factor();
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut z, 0.7..=2.0)
-                                .step_by(0.1)
-                                .suffix("×"),
-                        )
-                        .changed()
-                    {
-                        self.set_zoom(&ui.ctx().clone(), z);
-                    }
-                });
-                ui.add_space(6.0);
-                widgets::section_label(ui, "PLUG-INS");
-                ui.label(
-                    RichText::new("System CLAP/VST3 folders and Audio Units are searched, plus:")
-                        .color(TEXT_DIM),
-                );
-                let mut remove = None;
-                for (i, d) in self.settings.plugin_dirs.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(d.display().to_string());
-                        if ui.small_button("Remove").clicked() {
-                            remove = Some(i);
-                        }
-                    });
-                }
-                if let Some(i) = remove {
-                    self.settings.plugin_dirs.remove(i);
-                    self.settings.save();
-                }
-                ui.horizontal(|ui| {
-                    if ui.button("Add Folder…").clicked() {
-                        if let Some(d) = rfd::FileDialog::new().pick_folder() {
-                            self.settings.plugin_dirs.push(d);
-                            self.settings.save();
-                        }
-                    }
-                    if ui
-                        .add_enabled(self.ui.scan_rx.is_none(), egui::Button::new("Rescan"))
-                        .clicked()
-                    {
-                        self.start_plugin_scan();
-                    }
-                });
-                ui.label(RichText::new(&self.ui.scan_status).color(TEXT_DIM));
-                let failed: Vec<_> = self
-                    .session
-                    .plugins
-                    .files
-                    .iter()
-                    .filter(|f| !f.ok)
-                    .collect();
-                if !failed.is_empty() {
-                    ui.collapsing(
-                        format!("{} plugin files failed to scan", failed.len()),
-                        |ui| {
-                            for f in failed {
-                                ui.label(format!(
-                                    "{}: {}",
-                                    f.path.display(),
-                                    f.error.clone().unwrap_or_default()
-                                ));
-                            }
-                        },
-                    );
-                }
-            });
-        self.ui.show_settings = open;
+        self.settings_window(ctx);
 
         let mut open = self.ui.show_export;
         egui::Window::new("Export Audio")
@@ -1116,7 +1089,7 @@ impl RliveApp {
             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
             ui.label("A session-oriented DAW written in Rust, inspired by Ableton Live and Bitwig Studio.");
             ui.label("Hosts CLAP, VST3 and Audio Unit plugins.");
-            ui.label(RichText::new("UI font: Inter (SIL Open Font License 1.1)").color(TEXT_DIM));
+            ui.label(RichText::new("UI font: Inter (SIL Open Font License 1.1)").color(pal().text_dim));
         });
         self.ui.show_about = open;
     }
@@ -1124,7 +1097,9 @@ impl RliveApp {
 
 impl eframe::App for RliveApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        theme::begin_frame(ctx, &self.settings.theme);
         widgets::info_begin_frame(ctx);
+        self.session.colors = self.settings.colors;
         self.session.idle();
         self.poll_scan();
         if std::mem::take(&mut self.ui.request_scan) && self.ui.scan_rx.is_none() {
@@ -1140,36 +1115,14 @@ impl eframe::App for RliveApp {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        let text_focused = ctx.text_edit_focused();
         #[cfg(target_os = "macos")]
         if let Some(menu) = &self.mac_menu {
-            menu.drain_into(text_focused, raw, &mut self.pending);
+            menu.drain_into(ctx.text_edit_focused(), raw, &mut self.pending);
         }
-        // Tab switches views unless a text field has focus; left to egui it
-        // would move keyboard focus and silence Space and the computer keyboard.
-        if text_focused {
-            return;
-        }
-        let pending = &mut self.pending;
-        raw.events.retain(|e| match e {
-            egui::Event::Key {
-                key: Key::Tab,
-                pressed,
-                repeat,
-                modifiers,
-                ..
-            } => {
-                if *pressed && !*repeat {
-                    pending.push(if modifiers.shift {
-                        MenuCommand::SwitchDetail
-                    } else {
-                        MenuCommand::ToggleMainView
-                    });
-                }
-                false
-            }
-            _ => true,
-        });
+        // Taking shortcuts here keeps Tab from moving egui's keyboard focus, which would silence
+        // Space and the computer keyboard.
+        let cx = self.key_context(ctx);
+        self.ui.keys.process(raw, &cx, &mut self.pending);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1188,33 +1141,52 @@ impl eframe::App for RliveApp {
             .exact_size(MENU_H)
             .frame(
                 egui::Frame::new()
-                    .fill(BAR_BG)
+                    .fill(pal().bar_bg)
                     .inner_margin(egui::Margin::symmetric(6, 1)),
             )
             .show(ui, |ui| self.menu_bar(ui));
-        egui::Panel::top("control_bar")
+        let mut rects = FocusRects::default();
+        let panel = egui::Panel::top("control_bar")
             .exact_size(CONTROL_BAR_H)
             .frame(egui::Frame::new())
             .show(ui, |ui| self.control_bar(ui));
+        rects.control_bar = Some(panel.response.rect);
         egui::Panel::bottom("status")
             .exact_size(STATUS_H)
             .frame(egui::Frame::new())
             .show(ui, |ui| self.status_bar(ui));
-        if self.ui.show_browser {
-            egui::Panel::left("browser")
+        if self.ui.show_browser || self.ui.show_info {
+            let panel = egui::Panel::left("browser")
                 .resizable(true)
                 .default_size(250.0)
                 .size_range(180.0..=520.0)
                 .frame(
                     egui::Frame::new()
-                        .fill(PANEL)
-                        .stroke(Stroke::new(1.0, SEPARATOR)),
+                        .fill(pal().panel)
+                        .stroke(Stroke::new(1.0, pal().separator)),
                 )
                 .show(ui, |ui| {
-                    browser::show(ui, &mut self.session, &mut self.ui, &mut self.settings)
+                    let full = ui.max_rect();
+                    ui.expand_to_include_rect(full);
+                    let info_h = if self.ui.show_info {
+                        info_view::HEIGHT
+                    } else {
+                        0.0
+                    };
+                    let split = full.bottom() - info_h;
+                    if self.ui.show_browser {
+                        let top = Rect::from_min_max(full.min, Pos2::new(full.right(), split));
+                        let mut bu = ui.new_child(UiBuilder::new().max_rect(top));
+                        browser::show(&mut bu, &mut self.session, &mut self.ui, &mut self.settings);
+                    }
+                    if self.ui.show_info {
+                        let bottom = Rect::from_min_max(Pos2::new(full.left(), split), full.max);
+                        let mut iu = ui.new_child(UiBuilder::new().max_rect(bottom));
+                        self.info_view(&mut iu);
+                    }
                 });
+            rects.browser = Some(panel.response.rect);
         }
-        let mut detail_rect = None;
         if self.ui.show_detail {
             let panel = egui::Panel::bottom("detail")
                 .resizable(true)
@@ -1222,8 +1194,8 @@ impl eframe::App for RliveApp {
                 .size_range(130.0..=700.0)
                 .frame(
                     egui::Frame::new()
-                        .fill(PANEL_DARK)
-                        .stroke(Stroke::new(1.0, SEPARATOR)),
+                        .fill(pal().panel_dark)
+                        .stroke(Stroke::new(1.0, pal().separator)),
                 )
                 .show(ui, |ui| match self.ui.detail {
                     Detail::Clip if self.ui.selected_clip.is_some() => {
@@ -1231,15 +1203,17 @@ impl eframe::App for RliveApp {
                     }
                     _ => devices::show(ui, &mut self.session, &mut self.ui),
                 });
-            detail_rect = Some(panel.response.rect);
+            rects.detail = Some(panel.response.rect);
         }
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(GRID_BG))
+        let panel = egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(pal().grid_bg))
             .show(ui, |ui| match self.ui.main_view {
                 MainView::Session => session_view::show(ui, &mut self.session, &mut self.ui),
                 MainView::Arrangement => arrangement::show(ui, &mut self.session, &mut self.ui),
             });
-        self.track_edit_focus(&ctx, detail_rect);
+        rects.main = Some(panel.response.rect);
+        self.track_focus(&ctx, &rects);
+        self.paint_focus_outline(&ctx, &rects);
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         self.session.pointer_frame(pointer_down);
         let busy = pointer_down || ctx.text_edit_focused() || self.session.is_recording();
@@ -1263,6 +1237,6 @@ impl eframe::App for RliveApp {
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        APP_BG.to_normalized_gamma_f32()
+        pal().app_bg.to_normalized_gamma_f32()
     }
 }

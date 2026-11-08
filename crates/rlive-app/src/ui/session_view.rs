@@ -11,10 +11,12 @@
 //! the Master/scene column stay put while the grid scrolls.
 
 use super::icons;
+use super::info_view::edit_info_item;
+use super::keymap::{self, Platform};
 use super::theme::{self, *};
-use super::widgets::{self, info, rgb, Led};
+use super::widgets::{self, info, info_note, rgb, Led};
 use super::{BrowserItem, Detail, UiState};
-use crate::session::{ChainRef, ClipRef, Session};
+use crate::session::{ChainRef, ClipRef, InfoTarget, Session};
 use egui::{
     Align2, Color32, Layout, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
 };
@@ -126,7 +128,7 @@ pub(super) fn child(ui: &mut egui::Ui, clip: Rect, rect: Rect, layout: Layout) -
 pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let full = ui.max_rect();
     let bg = ui.allocate_rect(full, Sense::click());
-    ui.painter().rect_filled(full, 0.0, GRID_BG);
+    ui.painter().rect_filled(full, 0.0, pal().grid_bg);
 
     // Only what isn't folded away inside a group gets a column.
     let visible = session.project.visible_tracks();
@@ -249,21 +251,21 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let p = ui.painter();
     p.line_segment(
         [g.header.left_bottom(), g.header.right_bottom()],
-        Stroke::new(1.0, SEPARATOR),
+        Stroke::new(1.0, pal().separator),
     );
     p.line_segment(
         [g.stop_row.left_top(), g.stop_row.right_top()],
-        Stroke::new(1.0, SEPARATOR),
+        Stroke::new(1.0, pal().separator),
     );
     if n_returns > 0 {
         p.line_segment(
             [g.returns.left_top(), g.returns.left_bottom()],
-            Stroke::new(2.0, SEPARATOR),
+            Stroke::new(2.0, pal().separator),
         );
     }
     p.line_segment(
         [g.master.left_top(), g.master.left_bottom()],
-        Stroke::new(2.0, SEPARATOR),
+        Stroke::new(2.0, pal().separator),
     );
 
     let returns: Vec<TrackId> = session.project.returns.iter().map(|t| t.id).collect();
@@ -301,7 +303,7 @@ fn return_column(
         Pos2::new(x, g.header.bottom()),
         Pos2::new(x + w, g.mixer.top()),
     );
-    ui.painter().rect_filled(body, 0.0, PANEL_DARK);
+    ui.painter().rect_filled(body, 0.0, pal().panel_dark);
     let rect = Rect::from_min_size(Pos2::new(x, g.header.top()), Vec2::new(w, HEADER_H - 1.0));
     let resp = ui.allocate_rect(rect, Sense::click());
     let fill = if selected {
@@ -311,7 +313,7 @@ fn return_column(
     };
     ui.painter().rect_filled(rect, 0.0, fill);
     if selected {
-        widgets::outline(ui.painter(), rect, hex(0xffffff));
+        widgets::outline(ui.painter(), rect, shade(0xffffff));
     }
     let renaming = matches!(&state.renaming, Some((tid, _)) if *tid == id);
     if renaming {
@@ -357,6 +359,10 @@ fn return_column(
         resp,
         format!("Return track '{name}' — click to select, double-click to rename"),
     );
+    info_note(
+        &resp,
+        session.info_text(InfoTarget::Track(id)).unwrap_or_default(),
+    );
     resp.context_menu(|ui| return_menu(ui, session, state, id, &name));
     if g.mixer.height() > 0.0 {
         let rect = Rect::from_min_size(Pos2::new(x, g.mixer.top()), Vec2::new(w, g.mixer.height()));
@@ -391,6 +397,7 @@ pub(super) fn return_menu(
         state.renaming = Some((id, name.to_string()));
         ui.close();
     }
+    edit_info_item(ui, session, state, InfoTarget::Track(id));
     ui.menu_button("Color", |ui| {
         if let Some(c) = color_picker(ui) {
             if let Some(t) = session.project.track_mut(id) {
@@ -408,7 +415,7 @@ pub(super) fn return_menu(
         ui.close();
     }
     if ui
-        .button(RichText::new("Delete Return Track").color(ARM_RED))
+        .button(RichText::new("Delete Return Track").color(pal().arm_red))
         .clicked()
     {
         session.delete_return(id);
@@ -458,7 +465,7 @@ fn track_column(
             Pos2::new(x + w, g.grid.bottom()),
         )
         .intersect(col_clip);
-        ui.painter().rect_filled(r, 0.0, hex(0x262626));
+        ui.painter().rect_filled(r, 0.0, shade(0x262626));
     }
 
     // ---- header
@@ -492,7 +499,7 @@ fn track_column(
             );
         }
         if selected {
-            widgets::outline(cu.painter(), rect, hex(0xffffff));
+            widgets::outline(cu.painter(), rect, shade(0xffffff));
         }
         let renaming = matches!(&state.renaming, Some((tid, _)) if *tid == id);
         if renaming {
@@ -558,7 +565,7 @@ fn track_column(
         if resp.dnd_hover_payload::<BrowserItem>().is_some()
             || resp.dnd_hover_payload::<TrackDrag>().is_some()
         {
-            widgets::outline(cu.painter(), rect, ACCENT);
+            widgets::outline(cu.painter(), rect, pal().accent);
         }
         if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
             drop_on_track(session, state, id, &item, None);
@@ -573,6 +580,10 @@ fn track_column(
             format!(
                 "Track '{name}' — click to select, double-click to rename, right-click for options"
             ),
+        );
+        info_note(
+            &resp,
+            session.info_text(InfoTarget::Track(id)).unwrap_or_default(),
         );
         resp.context_menu(|ui| track_menu(ui, session, state, id, &name));
     }
@@ -627,7 +638,7 @@ fn track_column(
                 );
                 p.rect_filled(launch, 1.0, theme::darken(fill, 0.25));
                 let tri = if is_playing || (is_queued && blink) {
-                    PLAY_GREEN
+                    pal().play_green
                 } else if over_launch {
                     hex(0xffffff)
                 } else {
@@ -654,7 +665,7 @@ fn track_column(
                     p.rect_filled(bar, 0.0, Color32::from_white_alpha(200));
                 }
                 if is_sel {
-                    widgets::outline(&p, rect, hex(0xffffff));
+                    widgets::outline(&p, rect, shade(0xffffff));
                 }
             }
             None => {
@@ -662,36 +673,40 @@ fn track_column(
                     rect,
                     0.0,
                     if resp.hovered() {
-                        SLOT_EMPTY_HOVER
+                        pal().slot_empty_hover
                     } else {
-                        SLOT_EMPTY
+                        pal().slot_empty
                     },
                 );
                 let col = if queued_slot == STOP_QUEUED && blink {
-                    ACCENT
+                    pal().accent
                 } else if over_launch {
-                    hex(0xe0e0e0)
+                    shade(0xe0e0e0)
                 } else {
-                    hex(0x6a6a6a)
+                    shade(0x6a6a6a)
                 };
                 if arm {
                     icons::record_ring(
                         &p,
                         launch,
-                        if over_launch { ARM_RED } else { hex(0x8a4a4a) },
+                        if over_launch {
+                            pal().arm_red
+                        } else {
+                            shade(0x8a4a4a)
+                        },
                     );
                 } else {
                     icons::stop(&p, launch.shrink(3.0), col);
                 }
                 if is_sel {
-                    widgets::outline(&p, rect, hex(0x9a9a9a));
+                    widgets::outline(&p, rect, shade(0x9a9a9a));
                 }
             }
         }
         if resp.dnd_hover_payload::<BrowserItem>().is_some()
             || resp.dnd_hover_payload::<ClipDrag>().is_some()
         {
-            widgets::outline(&p, rect, ACCENT);
+            widgets::outline(&p, rect, pal().accent);
         }
 
         if resp.clicked() {
@@ -715,6 +730,7 @@ fn track_column(
         }
         if resp.double_clicked() && !over_launch {
             if clip_info.is_none() && kind == TrackKind::Midi {
+                let color = session.new_clip_color(id);
                 let c = Clip::new_midi("MIDI Clip", color, 1, session.project.time_signature);
                 session.set_clip(id, slot, Some(c));
                 state.selected_clip = Some(ClipRef::slot(id, slot));
@@ -735,7 +751,8 @@ fn track_column(
         if let Some(src) = resp.dnd_release_payload::<ClipDrag>() {
             if (src.track, src.slot) != (id, slot) {
                 if let Some(c) = session.clip(src.track, src.slot).cloned() {
-                    let copy = cu.input(|i| i.modifiers.alt);
+                    let copy =
+                        cu.input(|i| keymap::copies_on_drag(i.modifiers, Platform::current()));
                     session.set_clip(id, slot, Some(c));
                     if !copy {
                         session.set_clip(src.track, src.slot, None);
@@ -754,6 +771,12 @@ fn track_column(
             None => "Empty slot — drop a sample here; ■ stops the track".to_string(),
         };
         let resp = info(resp, text);
+        info_note(
+            &resp,
+            session
+                .info_text(InfoTarget::Clip(ClipRef::slot(id, slot)))
+                .unwrap_or_default(),
+        );
         resp.context_menu(|ui| clip_menu(ui, session, state, id, slot, kind));
     }
 
@@ -774,19 +797,19 @@ fn track_column(
             rect,
             0.0,
             if resp.hovered() {
-                SLOT_EMPTY_HOVER
+                pal().slot_empty_hover
             } else {
-                PANEL_DARK
+                pal().panel_dark
             },
         );
         let active =
             playing_slot != NO_SLOT || (kind == TrackKind::Group && group_is_playing(session, id));
         let col = if queued_slot == STOP_QUEUED && blink {
-            ACCENT
+            pal().accent
         } else if active {
-            hex(0xd0d0d0)
+            shade(0xd0d0d0)
         } else {
-            hex(0x5a5a5a)
+            shade(0x5a5a5a)
         };
         icons::stop(
             cu.painter(),
@@ -794,10 +817,10 @@ fn track_column(
             col,
         );
         if kind == TrackKind::Group {
-            if info(resp, "Stop every clip in this group").clicked() {
+            if info(resp, "Group Stop — stop every clip in this group").clicked() {
                 session.stop_group(id);
             }
-        } else if info(resp, "Stop the clip playing on this track").clicked() {
+        } else if info(resp, "Clip Stop — stop the clip playing on this track").clicked() {
             session.stop_track(id);
         }
     }
@@ -864,31 +887,31 @@ fn group_slot(
             .group_contents(id)
             .iter()
             .find_map(|t| session.clip(*t, slot))
-            .map_or(RAISED, |c| rgb(c.color));
+            .map_or(pal().raised, |c| rgb(c.color));
         p.rect_filled(rect, 0.0, theme::darken(color, 0.55));
         icons::play(
             &p,
             launch,
             if over_launch {
-                hex(0xffffff)
+                shade(0xffffff)
             } else {
-                hex(0xbdbdbd)
+                shade(0xbdbdbd)
             },
         );
         icons::stop(
             &p,
             stop.shrink(3.0),
             if over_stop {
-                hex(0xffffff)
+                shade(0xffffff)
             } else {
-                hex(0x8a8a8a)
+                shade(0x8a8a8a)
             },
         );
     } else {
-        p.rect_filled(rect, 0.0, SLOT_EMPTY);
+        p.rect_filled(rect, 0.0, pal().slot_empty);
     }
     if is_sel {
-        widgets::outline(&p, rect, hex(0xffffff));
+        widgets::outline(&p, rect, shade(0xffffff));
     }
     if resp.clicked() && filled {
         if over_launch {
@@ -966,10 +989,18 @@ fn mixer_strip(
     let solo_in_place = session.project.solo_in_place;
     let meter = state.meters.get(&id).copied().unwrap_or_default();
     let p = ui.painter().clone();
-    p.rect_filled(rect, 0.0, if selected { hex(0x363636) } else { PANEL });
+    p.rect_filled(
+        rect,
+        0.0,
+        if selected {
+            shade(0x363636)
+        } else {
+            pal().panel
+        },
+    );
     p.line_segment(
         [rect.right_top(), rect.right_bottom()],
-        Stroke::new(1.0, SEPARATOR),
+        Stroke::new(1.0, pal().separator),
     );
     // Thin track colour line at the top of the strip.
     p.rect_filled(
@@ -996,7 +1027,7 @@ fn mixer_strip(
             );
             let mut bu = ui.new_child(UiBuilder::new().max_rect(toggle));
             let label = if pre_fader { "Pre" } else { "Post" };
-            let r = widgets::state_button(&mut bu, toggle.size(), pre_fader, ACCENT, label);
+            let r = widgets::state_button(&mut bu, toggle.size(), pre_fader, pal().accent, label);
             if info(
                 r,
                 "Pre/Post — whether sends feed this return before or after each track's mixer",
@@ -1035,7 +1066,13 @@ fn mixer_strip(
     let shown_vol = session
         .automated_cell_value(chain, mix_cell::VOLUME)
         .map_or(vol, |v| v as f32);
-    if let Some(db) = widgets::fader(&mut fu, fader_r.size(), shown_vol, meter.get(), ACCENT) {
+    if let Some(db) = widgets::fader(
+        &mut fu,
+        fader_r.size(),
+        shown_vol,
+        meter.get(),
+        pal().accent,
+    ) {
         new_mix.0 = db;
     }
     Led::of(session.cell_state(chain, mix_cell::VOLUME))
@@ -1044,7 +1081,7 @@ fn mixer_strip(
         Pos2::new(inner.center().x, fader_r.bottom() + 9.0),
         Vec2::new(inner.width().min(54.0), 14.0),
     );
-    p.rect_filled(db_r, 1.0, FIELD_BG);
+    p.rect_filled(db_r, 1.0, pal().field_bg);
     let db_text = if shown_vol <= -70.0 {
         "-inf".to_string()
     } else {
@@ -1055,7 +1092,7 @@ fn mixer_strip(
         Align2::CENTER_CENTER,
         db_text,
         theme::font(10.0),
-        TEXT,
+        pal().text,
     );
 
     // Activator / Solo / Arm
@@ -1077,24 +1114,30 @@ fn mixer_strip(
         &mut bu,
         Vec2::new(bw, buttons_h),
         !shown_mute,
-        ACTIVATOR,
+        pal().activator,
         label,
     );
     if info(r, "Track Activator — click to mute/unmute").clicked() {
         new_mix.2 = !shown_mute;
     }
-    let r = widgets::state_button(&mut bu, Vec2::new(bw, buttons_h), solo, SOLO_BLUE, "S");
+    let r = widgets::state_button(
+        &mut bu,
+        Vec2::new(bw, buttons_h),
+        solo,
+        pal().solo_blue,
+        "S",
+    );
     if holds_solo && !solo {
         // A soloed track somewhere inside: the button lights up half way.
         let half =
             Rect::from_min_size(r.rect.min, Vec2::new(r.rect.width() / 2.0, r.rect.height()));
-        p.rect_filled(half, 1.0, SOLO_BLUE);
+        p.rect_filled(half, 1.0, pal().solo_blue);
         p.text(
             r.rect.center(),
             Align2::CENTER_CENTER,
             "S",
             theme::font(10.5),
-            TEXT,
+            pal().text,
         );
     }
     let r = info(
@@ -1122,7 +1165,7 @@ fn mixer_strip(
             &mut bu,
             Vec2::new(bw, buttons_h),
             arm,
-            ARM_RED,
+            pal().arm_red,
             icons::record,
         );
         if info(
@@ -1202,7 +1245,11 @@ fn send_knobs(
             Align2::CENTER_CENTER,
             ((b'A' + n as u8) as char).to_string(),
             theme::font(9.0),
-            if *enabled { TEXT_DIM } else { TEXT_FAINT },
+            if *enabled {
+                pal().text_dim
+            } else {
+                pal().text_faint
+            },
         );
         if let Some(value) = changed {
             session.set_send(id, *ret, value);
@@ -1284,7 +1331,7 @@ fn master_column(
     p.rect_filled(
         Rect::from_min_max(m.min, Pos2::new(m.right(), g.stop_row.bottom())),
         0.0,
-        PANEL_DARK,
+        pal().panel_dark,
     );
     let selected = state.selected == Some(ChainRef::Master);
 
@@ -1298,9 +1345,9 @@ fn master_column(
         hr,
         0.0,
         if selected {
-            hex(0xbdbdbd)
+            shade(0xbdbdbd)
         } else {
-            hex(0x7a7a7a)
+            shade(0x7a7a7a)
         },
     );
     p.text(
@@ -1308,7 +1355,7 @@ fn master_column(
         Align2::LEFT_CENTER,
         "Master",
         theme::font_bold(11.0),
-        TEXT_DARK,
+        pal().text_dark,
     );
     if resp.clicked() {
         state.selected = Some(ChainRef::Master);
@@ -1352,9 +1399,9 @@ fn master_column(
             rect,
             0.0,
             if resp.hovered() {
-                hex(0x484848)
+                shade(0x484848)
             } else {
-                hex(0x3a3a3a)
+                shade(0x3a3a3a)
             },
         );
         let launch = Rect::from_min_size(rect.min, Vec2::new(g.slot_h.min(22.0), rect.height()));
@@ -1367,11 +1414,11 @@ fn master_column(
                     .is_some_and(|s| s.queued_slot.load(Ordering::Relaxed) == i as i32)
             });
         let col = if queued_here && blink {
-            PLAY_GREEN
+            pal().play_green
         } else if resp.hovered() {
-            hex(0xffffff)
+            shade(0xffffff)
         } else {
-            hex(0xb0b0b0)
+            shade(0xb0b0b0)
         };
         icons::play(&cp, launch, col);
         let name = session.project.scenes[i].name.clone();
@@ -1380,12 +1427,16 @@ fn master_column(
             Align2::LEFT_CENTER,
             name,
             theme::font(11.0),
-            TEXT,
+            pal().text,
         );
         if resp.clicked() {
             session.launch_scene(i);
         }
         let resp = info(resp, "Scene — click to launch every clip in this row");
+        info_note(
+            &resp,
+            session.info_text(InfoTarget::Scene(i)).unwrap_or_default(),
+        );
         resp.context_menu(|ui| {
             if let Some(scene) = session.project.scenes.get_mut(i) {
                 ui.horizontal(|ui| {
@@ -1393,12 +1444,13 @@ fn master_column(
                     ui.text_edit_singleline(&mut scene.name);
                 });
             }
+            edit_info_item(ui, session, state, InfoTarget::Scene(i));
             if ui.button("Insert Scene").clicked() {
                 session.add_scene();
                 ui.close();
             }
             if ui
-                .button(RichText::new("Delete Scene").color(ARM_RED))
+                .button(RichText::new("Delete Scene").color(pal().arm_red))
                 .clicked()
             {
                 delete = Some(i);
@@ -1419,14 +1471,14 @@ fn master_column(
         let mut cu = child(ui, grid, rect, Layout::left_to_right(egui::Align::Center));
         let resp = cu.allocate_rect(rect, Sense::click());
         if resp.hovered() {
-            cu.painter().rect_filled(rect, 0.0, hex(0x333333));
+            cu.painter().rect_filled(rect, 0.0, shade(0x333333));
         }
         icons::plus(
             cu.painter(),
             Rect::from_center_size(rect.center(), Vec2::splat(rect.height())),
-            hex(0x7a7a7a),
+            shade(0x7a7a7a),
         );
-        if info(resp, "Add a scene").clicked() {
+        if info(resp, "Add Scene — add a new row of slots").clicked() {
             session.add_scene();
         }
     }
@@ -1441,31 +1493,39 @@ fn master_column(
         sr,
         0.0,
         if resp.hovered() {
-            SLOT_EMPTY_HOVER
+            pal().slot_empty_hover
         } else {
-            hex(0x353535)
+            shade(0x353535)
         },
     );
     icons::stop(
         &p,
         Rect::from_min_size(sr.min, Vec2::splat(sr.height())),
-        hex(0xd0d0d0),
+        shade(0xd0d0d0),
     );
     p.text(
         Pos2::new(sr.left() + sr.height() + 2.0, sr.center().y),
         Align2::LEFT_CENTER,
         "Stop Clips",
         theme::font(10.5),
-        TEXT_DIM,
+        pal().text_dim,
     );
-    if info(resp, "Stop all clips").clicked() {
+    if info(resp, "Stop All Clips — stop every clip in the Session").clicked() {
         session.stop_all_clips();
     }
 
     // Master mixer strip
     if g.mixer.height() > 0.0 {
         let rect = Rect::from_min_max(Pos2::new(m.left() + 1.0, g.mixer.top()), m.max);
-        p.rect_filled(rect, 0.0, if selected { hex(0x363636) } else { PANEL });
+        p.rect_filled(
+            rect,
+            0.0,
+            if selected {
+                shade(0x363636)
+            } else {
+                pal().panel
+            },
+        );
         let inner = rect.shrink2(Vec2::new(8.0, 8.0));
         let fader_r = Rect::from_min_max(
             Pos2::new(inner.center().x - 22.0, inner.top() + 2.0),
@@ -1482,7 +1542,7 @@ fn master_column(
             fader_r.size(),
             vol,
             state.master_meter.get(),
-            ACCENT,
+            pal().accent,
         ) {
             session.set_master_volume(db);
         }
@@ -1490,7 +1550,7 @@ fn master_column(
             Pos2::new(inner.center().x, inner.bottom() - 8.0),
             Vec2::new(54.0, 14.0),
         );
-        p.rect_filled(db_r, 1.0, FIELD_BG);
+        p.rect_filled(db_r, 1.0, pal().field_bg);
         let t = if vol <= -70.0 {
             "-inf".to_string()
         } else {
@@ -1501,14 +1561,14 @@ fn master_column(
             Align2::CENTER_CENTER,
             t,
             theme::font(10.0),
-            TEXT,
+            pal().text,
         );
         p.text(
             Pos2::new(inner.left(), inner.top()),
             Align2::LEFT_TOP,
             "Master",
             theme::font(10.0),
-            TEXT_DIM,
+            pal().text_dim,
         );
     }
 }
@@ -1527,7 +1587,7 @@ fn mixer_splitter(ui: &mut egui::Ui, state: &mut UiState, g: &Geo) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
         ui.painter().line_segment(
             [r.left_center(), r.right_center()],
-            Stroke::new(2.0, ACCENT.gamma_multiply(0.6)),
+            Stroke::new(2.0, pal().accent.gamma_multiply(0.6)),
         );
     }
     if resp.dragged() {
@@ -1560,7 +1620,7 @@ fn scrollbars(
         ui.painter().rect_filled(
             thumb,
             3.0,
-            Color32::from_white_alpha(if resp.hovered() || resp.dragged() {
+            pal().overlay(if resp.hovered() || resp.dragged() {
                 90
             } else {
                 45
@@ -1583,7 +1643,7 @@ fn scrollbars(
         ui.painter().rect_filled(
             thumb,
             3.0,
-            Color32::from_white_alpha(if resp.hovered() || resp.dragged() {
+            pal().overlay(if resp.hovered() || resp.dragged() {
                 90
             } else {
                 45
@@ -1605,7 +1665,7 @@ pub(super) struct ClipDrag {
     pub slot: usize,
 }
 
-fn color_picker(ui: &mut egui::Ui) -> Option<[u8; 3]> {
+pub(super) fn color_picker(ui: &mut egui::Ui) -> Option<[u8; 3]> {
     let mut picked = None;
     egui::Grid::new("palette")
         .spacing([2.0, 2.0])
@@ -1643,6 +1703,7 @@ pub(super) fn track_menu(
         state.renaming = Some((id, name.to_string()));
         ui.close();
     }
+    edit_info_item(ui, session, state, InfoTarget::Track(id));
     ui.menu_button("Color", |ui| {
         if let Some(c) = color_picker(ui) {
             if let Some(t) = session.project.track_mut(id) {
@@ -1701,7 +1762,7 @@ pub(super) fn track_menu(
     }
     ui.separator();
     if ui
-        .button(RichText::new("Delete Track").color(ARM_RED))
+        .button(RichText::new("Delete Track").color(pal().arm_red))
         .clicked()
     {
         session.delete_track(id);
@@ -1726,11 +1787,7 @@ fn clip_menu(
     let has = session.clip(id, slot).is_some();
     if !has {
         if kind == TrackKind::Midi && ui.button("Insert MIDI Clip").clicked() {
-            let color = session
-                .project
-                .track(id)
-                .map(|t| t.color)
-                .unwrap_or(PALETTE[0]);
+            let color = session.new_clip_color(id);
             let c = Clip::new_midi("MIDI Clip", color, 1, session.project.time_signature);
             session.set_clip(id, slot, Some(c));
             state.selected_clip = Some(ClipRef::slot(id, slot));
@@ -1743,7 +1800,7 @@ fn clip_menu(
                 .add_filter("WAV", &["wav"])
                 .pick_file()
             {
-                match session.audio_clip_from_file(&path) {
+                match session.audio_clip_from_file(&path, id) {
                     Ok(c) => session.set_clip(id, slot, Some(c)),
                     Err(e) => state.status = e,
                 }
@@ -1751,6 +1808,12 @@ fn clip_menu(
         }
         return;
     }
+    edit_info_item(
+        ui,
+        session,
+        state,
+        InfoTarget::Clip(ClipRef::slot(id, slot)),
+    );
     if ui.button("Launch").clicked() {
         session.launch_clip(id, slot);
         ui.close();
@@ -1795,7 +1858,10 @@ fn clip_menu(
         });
     }
     ui.separator();
-    if ui.button(RichText::new("Delete").color(ARM_RED)).clicked() {
+    if ui
+        .button(RichText::new("Delete").color(pal().arm_red))
+        .clicked()
+    {
         session.set_clip(id, slot, None);
         if state.selected_clip == Some(ClipRef::slot(id, slot)) {
             state.selected_clip = None;
@@ -1825,7 +1891,7 @@ pub(super) fn drop_on_track(
                         .into();
                 return;
             }
-            match session.audio_clip_from_file(path) {
+            match session.audio_clip_from_file(path, id) {
                 Ok(c) => {
                     let slot = slot
                         .or_else(|| {
@@ -1857,7 +1923,7 @@ pub(super) fn new_track_zone(
         ui.painter().rect_stroke(
             rect.shrink(2.0),
             2.0,
-            Stroke::new(1.0, ACCENT),
+            Stroke::new(1.0, pal().accent),
             StrokeKind::Inside,
         );
         ui.painter().text(
@@ -1865,7 +1931,7 @@ pub(super) fn new_track_zone(
             Align2::CENTER_CENTER,
             "Drop to create a track",
             theme::font(11.0),
-            ACCENT,
+            pal().accent,
         );
     }
     let resp = zone;
@@ -1876,15 +1942,15 @@ pub(super) fn new_track_zone(
     let plus_resp = ui.allocate_rect(plus, Sense::click());
     if !hovering {
         if plus_resp.hovered() {
-            ui.painter().rect_filled(plus, 1.0, RAISED);
+            ui.painter().rect_filled(plus, 1.0, pal().raised);
         }
         icons::plus(
             ui.painter(),
             plus,
             if plus_resp.hovered() {
-                hex(0xe0e0e0)
+                shade(0xe0e0e0)
             } else {
-                hex(0x6a6a6a)
+                shade(0x6a6a6a)
             },
         );
     }
@@ -1912,9 +1978,9 @@ pub(super) fn new_track_zone(
     }
     info(
         resp,
-        "Drop a device, plugin or sample here to create a track",
+        "Add Track — drop a device, plugin or sample here to create a track",
     );
-    if info(plus_resp, "Add a MIDI track (Cmd+T)").clicked() {
+    if info(plus_resp, "Add Track — add a MIDI track (Cmd+Shift+T)").clicked() {
         let id = session.add_track(TrackKind::Midi, None);
         state.selected = Some(ChainRef::Track(id));
     }
