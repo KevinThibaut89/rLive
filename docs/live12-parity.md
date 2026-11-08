@@ -577,8 +577,8 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** A5, A15
 
-- `[ ]` In/Out section with type and channel chooser pairs for input and output; show/hide; applies across multi-selected tracks. M
-- `[ ]` Monitor modes In, Auto, Off. Delete or Return to Default resets to Off on audio tracks and Auto on MIDI tracks. In state tints the Activator blue. S
+- `[~]` In/Out section with type and channel chooser pairs for input and output; show/hide; applies across multi-selected tracks. M
+- `[~]` Monitor modes In, Auto, Off. Delete or Return to Default resets to Off on audio tracks and Auto on MIDI tracks. In state tints the Activator blue. S
 - `[ ]` Keep Monitoring Latency in Recorded Audio, on by default for In and Auto; right-click toggle. M. Depends on PDC.
 - `[ ]` External audio I/O: per-channel meters with overload, Configure shortcut, mono/stereo pair configuration, channel renaming stored per audio device. M
 - `[ ]` Mono input records mono files; device chains are always stereo; mono to stereo duplicates; stereo to mono output sums with -6 dB. S
@@ -592,16 +592,16 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` MIDI out to external synths by port and channel. S
 - `[ ]` Control Bar MIDI LEDs, three in/out pairs: sync, remote, track. Sync pair shows only when a sync source is enabled. S
 - `[ ]` Resampling input type records Main output; the recording track's own output is excluded. Files go to Samples/Recorded, or the Temporary Folder until saved. M
-- `[ ]` Track-to-track routing from either end (output to track, or input from track). L
-- `[ ]` Tap points Pre FX, Post FX, Post Mixer, each with defined solo behaviour. L
-- `[ ]` Tap points for every Rack chain and Drum Rack return chain. M. Depends on Racks.
-- `[ ]` Sends Only output type. S
-- `[ ]` MIDI output to another track, targeting Track In or a specific device directly. M
-- `[ ]` No Input type hides Arm. S
+- `[x]` Track-to-track routing from either end (output to track, or input from track). L
+- `[x]` Tap points Pre FX, Post FX, Post Mixer, each with defined solo behaviour. L
+- `[x]` Tap points for every Rack chain and Drum Rack return chain. M. Depends on Racks.
+- `[x]` Sends Only output type. S
+- `[x]` MIDI output to another track, targeting Track In or a specific device directly. M
+- `[x]` No Input type hides Arm. S
 - `[ ]` Multi-output instruments appear as sources. Tapping an Impulse slot removes it from Impulse's mix; plug-ins do not do this. M
 - `[ ]` Multi-timbral plug-ins: MIDI by channel, aux outputs by track or via External Instrument. M
-- `[ ]` Plug-in sidechain inputs as routing targets; built-in devices have their own sidechain choosers. M
-- `[ ]` MIDI tapped from another track is taken after MIDI effects and before the instrument. S
+- `[~]` Plug-in sidechain inputs as routing targets; built-in devices have their own sidechain choosers. M
+- `[x]` MIDI tapped from another track is taken after MIDI effects and before the instrument. S
 
 
 ## 18. Mixing (394-411)
@@ -627,7 +627,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Crossfader: A/B assign on all tracks including returns; 7 curves; left, centre and right mappable, with toggle and snap-back key behaviour; automatable. M
 - `[x]` Solo in Place option; returns stay audible only with it on. S
 - `[x]` Soloing a return mutes other mains but keeps send audio. S
-- `[ ]` Cue mode: separate Main and Cue outputs, Cue Volume, headphone switches, browser preview goes to Cue. M. Needs 4 outputs.
+- `[~]` Cue mode: separate Main and Cue outputs, Cue Volume, headphone switches, browser preview goes to Cue. M. Needs 4 outputs.
 - `[~]` Track Delay in ms or samples; unavailable when PDC is off. M
 - `[ ]` Performance Impact meters: 6 segments per track, relative to Set. M. Needs per-track DSP timing.
 
@@ -1333,7 +1333,7 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **A14:** Focus Groove Pool; Hide/show Groove Pool
 - `[ ]` **A17:** Hide/show plug-in windows; Keep several plug-in windows open
 - `[ ]` **A19:** Next similar sample; Previous similar sample; Return to reference; Save as similarity reference; Show similar-sample swap controls; Similarity search
-- `[ ]` **A5:** Audio engine on/off; Hide/show In/Out
+- `[ ]` **A5:** Audio engine on/off
 - `[ ]` **A9:** Reverse audio selection; Stretch warped clip
 - `[ ]` **C10:** MPE tab
 - `[ ]` **C11:** Apply MIDI Tool settings

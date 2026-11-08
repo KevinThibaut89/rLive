@@ -8,7 +8,7 @@ use rlive_project::{ArrangementClip, Clip, NoteData, TrackKind};
 
 super::domain! {
     /// The Edit menu.
-    Edit { Undo, Redo, Cut, Copy, Paste, Duplicate, Delete, SelectAll, Rename }
+    Edit { Undo, Redo, Cut, Copy, Paste, Duplicate, Delete, SelectAll, Rename, ReturnToDefault }
 }
 
 pub const MENU: &[Entry] = &[
@@ -21,6 +21,7 @@ pub const MENU: &[Entry] = &[
     Item("Duplicate", M::Edit(Edit::Duplicate)),
     Item("Delete", M::Edit(Edit::Delete)),
     Item("Rename", M::Edit(Edit::Rename)),
+    Item("Return to Default", M::Edit(Edit::ReturnToDefault)),
     Separator,
     Item("Select All", M::Edit(Edit::SelectAll)),
 ];
@@ -140,6 +141,10 @@ impl RliveApp {
             focus != EditFocus::Text && matches!(self.ui.selected, Some(ChainRef::Track(_))),
         );
         s.enable(
+            on(Edit::ReturnToDefault),
+            self.ui.layout.show_in_out && !self.selected_track_ids().is_empty(),
+        );
+        s.enable(
             on(Edit::SelectAll),
             matches!(
                 focus,
@@ -160,6 +165,10 @@ impl RliveApp {
     pub(super) fn edit_dispatch(&mut self, ctx: &egui::Context, c: Edit) {
         match c {
             Edit::Undo | Edit::Redo => self.undo_redo(ctx, c),
+            Edit::ReturnToDefault => {
+                let ids = self.selected_track_ids();
+                self.session.reset_monitor(&ids);
+            }
             Edit::Rename => {
                 if let Some(ChainRef::Track(id)) = self.ui.selected {
                     if let Some(t) = self.session.project.track(id) {

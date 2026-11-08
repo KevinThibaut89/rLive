@@ -9,7 +9,7 @@ use super::{sample_editor, session_view, widgets, RliveApp};
 use crate::audio;
 use crate::midi_input::{self, MidiInput};
 use crate::session::{ShortSampleMode, WarpDefaults};
-use crate::settings::{ClipColor, ScrollBars};
+use crate::settings::{ChannelBank, ClipColor, ScrollBars};
 use egui::{Color32, RichText, Sense, Stroke, StrokeKind, Vec2};
 use rlive_project::WarpMode;
 
@@ -360,7 +360,6 @@ impl RliveApp {
                 refresh = ui.small_button("Refresh").clicked();
             });
             ui.end_row();
-            soon(ui, "Channel Configuration", "Stereo", "A5");
             soon(ui, "Sample Rate", "Device default", "A5");
             soon(ui, "Buffer Size", "Device default", "A5");
             soon(ui, "Output Latency", "—", "A4");
@@ -381,6 +380,20 @@ impl RliveApp {
             ))
             .color(pal().text_dim),
         );
+        ui.add_space(8.0);
+        widgets::section_label(ui, "CHANNEL CONFIGURATION");
+        let device = self.audio.device_name.clone();
+        let (inputs, outputs) = (self.audio.input_channels, self.audio.output_channels);
+        let mut changed = false;
+        {
+            let config = self.settings.audio_channels.entry(device).or_default();
+            changed |= channel_bank(ui, "Input Config", "in", &mut config.inputs, inputs);
+            changed |= channel_bank(ui, "Output Config", "out", &mut config.outputs, outputs);
+        }
+        if changed {
+            self.settings.save();
+            self.refresh_hardware();
+        }
     }
 
     fn tempo_midi_tab(&mut self, ui: &mut egui::Ui) {
@@ -608,6 +621,48 @@ impl RliveApp {
             soon_check(ui, "Auto-Hide Plug-In Windows", true, "A17");
         });
     }
+}
+
+/// One side of the Channel Configuration dialog: which channels are used, whether each odd/even
+/// pair is stereo or two monos, and their names. Returns whether anything changed.
+fn channel_bank(
+    ui: &mut egui::Ui,
+    title: &str,
+    salt: &str,
+    bank: &mut ChannelBank,
+    count: usize,
+) -> bool {
+    let mut changed = false;
+    ui.label(RichText::new(title).color(pal().text_dim));
+    if count == 0 {
+        ui.label(RichText::new("None").color(pal().text_faint));
+        return false;
+    }
+    grid(ui, salt, |ui| {
+        for first in (0..count).step_by(2) {
+            let pair = first / 2;
+            let mut mono = bank.is_mono(pair);
+            for n in first..(first + 2).min(count) {
+                let channel = bank.channel_mut(n);
+                changed |= ui
+                    .checkbox(&mut channel.enabled, (n + 1).to_string())
+                    .changed();
+                changed |= ui
+                    .add(
+                        egui::TextEdit::singleline(&mut channel.name)
+                            .desired_width(110.0)
+                            .hint_text("Name"),
+                    )
+                    .changed();
+                if n == first && first + 1 < count {
+                    changed |= ui.checkbox(&mut mono, "Mono").changed();
+                }
+                ui.end_row();
+            }
+            bank.set_mono(pair, mono);
+        }
+    });
+    changed
 }
 
 fn link_tab(ui: &mut egui::Ui) {

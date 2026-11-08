@@ -3,8 +3,9 @@
 use crate::session::WarpDefaults;
 use crate::ui::theme::ThemeSettings;
 use rlive_audio_io::{CacheConfig, LoaderConfig};
-use rlive_project::{Project, PALETTE};
+use rlive_project::{ExternalRoute, Project, PALETTE};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// How many colours "Reduced Automatic Colors" draws from.
@@ -108,10 +109,121 @@ impl SampleSettings {
     }
 }
 
+/// One hardware channel in the Channel Configuration dialog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelConfig {
+    pub enabled: bool,
+    /// The user's name for it. Empty keeps its number.
+    pub name: String,
+}
+
+impl Default for ChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            name: String::new(),
+        }
+    }
+}
+
+/// Which channels of an interface are used, how they pair up and what they are called.
+/// Changed names are always associated with their audio device (manual p. 375).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelBank {
+    /// One per hardware channel, however many have been seen.
+    pub channels: Vec<ChannelConfig>,
+    /// One per odd/even pair: whether the pair is one stereo channel or two mono ones. A pair
+    /// not listed is stereo.
+    pub mono_pairs: Vec<bool>,
+}
+
+impl ChannelBank {
+    pub fn channel(&self, n: usize) -> ChannelConfig {
+        self.channels.get(n).cloned().unwrap_or_default()
+    }
+
+    pub fn channel_mut(&mut self, n: usize) -> &mut ChannelConfig {
+        if self.channels.len() <= n {
+            self.channels.resize(n + 1, ChannelConfig::default());
+        }
+        &mut self.channels[n]
+    }
+
+    pub fn is_mono(&self, pair: usize) -> bool {
+        self.mono_pairs.get(pair).copied().unwrap_or(false)
+    }
+
+    pub fn set_mono(&mut self, pair: usize, mono: bool) {
+        if self.mono_pairs.len() <= pair {
+            self.mono_pairs.resize(pair + 1, false);
+        }
+        self.mono_pairs[pair] = mono;
+    }
+
+    fn label(&self, n: usize) -> String {
+        let name = self.channel(n).name;
+        if name.is_empty() {
+            (n + 1).to_string()
+        } else {
+            name
+        }
+    }
+
+    /// What the choosers offer, given how many channels the hardware has.
+    pub fn routes(&self, count: usize) -> Vec<(String, ExternalRoute)> {
+        let mut out = Vec::new();
+        for first in (0..count).step_by(2) {
+            let left = self.channel(first).enabled;
+            let has_right = first + 1 < count;
+            let right = has_right && self.channel(first + 1).enabled;
+            if has_right && !self.is_mono(first / 2) {
+                if left && right {
+                    out.push((
+                        format!("{}/{}", self.label(first), self.label(first + 1)),
+                        ExternalRoute::Audio {
+                            channel: first as u16,
+                            stereo: true,
+                        },
+                    ));
+                }
+                continue;
+            }
+            let mono = |n: usize| {
+                (
+                    self.label(n),
+                    ExternalRoute::Audio {
+                        channel: n as u16,
+                        stereo: false,
+                    },
+                )
+            };
+            if left {
+                out.push(mono(first));
+            }
+            if right {
+                out.push(mono(first + 1));
+            }
+        }
+        out
+    }
+}
+
+/// The Channel Configuration of one audio device.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DeviceChannels {
+    pub inputs: ChannelBank,
+    pub outputs: ChannelBank,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub audio_device: Option<String>,
+    /// Channel Configuration, by audio device name.
+    pub audio_channels: BTreeMap<String, DeviceChannels>,
     pub midi_input: Option<String>,
     pub sample_dir: Option<PathBuf>,
     pub plugin_dirs: Vec<PathBuf>,
@@ -133,6 +245,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             audio_device: None,
+            audio_channels: BTreeMap::new(),
             midi_input: None,
             sample_dir: None,
             plugin_dirs: Vec::new(),
@@ -192,6 +305,35 @@ mod tests {
     use crate::ui::theme::{Appearance, ThemeName, Tone};
     use rlive_project::WarpMode;
 
+    #[test]
+    fn channels_are_stereo_pairs_until_split_and_named_per_device() {
+        let mut bank = ChannelBank::default();
+        let routes = |bank: &ChannelBank, n| {
+            bank.routes(n)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(routes(&bank, 4), ["1/2", "3/4"]);
+        bank.set_mono(1, true);
+        bank.channel_mut(2).name = "Phones".into();
+        assert_eq!(routes(&bank, 4), ["1/2", "Phones", "4"]);
+        bank.channel_mut(3).enabled = false;
+        assert_eq!(routes(&bank, 4), ["1/2", "Phones"]);
+        assert_eq!(
+            bank.routes(4)[1].1,
+            ExternalRoute::Audio {
+                channel: 2,
+                stereo: false
+            }
+        );
+        // An odd channel out is mono, and a disabled half of a pair takes the pair with it.
+        assert_eq!(routes(&ChannelBank::default(), 3), ["1/2", "3"]);
+        let mut half = ChannelBank::default();
+        half.channel_mut(1).enabled = false;
+        assert!(routes(&half, 2).is_empty());
+    }
+
     fn temp_file(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("rlive-settings-{}-{name}", std::process::id()))
     }
@@ -200,6 +342,19 @@ mod tests {
     fn round_trips_every_setting_through_a_file() {
         let settings = Settings {
             audio_device: Some("Interface".into()),
+            audio_channels: BTreeMap::from([(
+                "Interface".to_string(),
+                DeviceChannels {
+                    inputs: ChannelBank::default(),
+                    outputs: ChannelBank {
+                        channels: vec![ChannelConfig {
+                            enabled: false,
+                            name: "Monitors".into(),
+                        }],
+                        mono_pairs: vec![true],
+                    },
+                },
+            )]),
             midi_input: Some("Keys".into()),
             sample_dir: Some(PathBuf::from("/samples")),
             plugin_dirs: vec![PathBuf::from("/plugins")],

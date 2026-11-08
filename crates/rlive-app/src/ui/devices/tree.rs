@@ -225,6 +225,9 @@ fn extra_rows_h(rt: Option<&DeviceRuntime>, truncated: bool) -> f32 {
         h += 34.0;
     }
     h += rt.map_or(0, |r| r.sample_slots) as f32 * 24.0;
+    if rt.is_some_and(|r| r.sidechain_input && r.plugin.is_none()) {
+        h += 22.0;
+    }
     if truncated {
         h += 20.0;
     }

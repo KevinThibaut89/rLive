@@ -120,6 +120,8 @@ mod tests {
             unmoved: HashMap::new(),
             layout: Vec::new(),
             view,
+            sidechain_input: false,
+            aux_names: Vec::new(),
         }
     }
 

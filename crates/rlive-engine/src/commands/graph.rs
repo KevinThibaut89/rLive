@@ -151,6 +151,13 @@ pub enum GraphOp {
     },
     /// Give the metronome a line to wait for the tracks in.
     SetClickLine(Box<StereoLine>),
+    /// Give a track a line to hold its clips back in, for a later input.
+    SetOwnLine {
+        track: TrackId,
+        line: Box<StereoLine>,
+    },
+    /// Replace the tap buses, in order, keeping what the old ones held.
+    SetBuses(Box<Vec<crate::taps::TapBus>>),
     /// Replace the whole session (project load / sample-rate change).
     ReplaceAll {
         tracks: Box<Vec<Box<TrackNode>>>,
@@ -193,6 +200,8 @@ fn fit_delay(delay: u32, line: Option<&StereoLine>) -> u32 {
 struct Applied {
     /// Tracks came, went or changed order, so plan indices no longer mean what they did.
     tracks: bool,
+    /// Devices came or went, so what the running plan wired up to them needs doing again.
+    devices: bool,
 }
 
 impl Engine {
@@ -214,7 +223,7 @@ impl Engine {
         } else if applied.tracks || txn.plan.is_some() {
             txn.replaced = self.plans.compiled.take();
             self.plans.flat.make_flat(self.tracks.len());
-        } else {
+        } else if !applied.devices {
             return;
         }
         self.configure_tracks();
@@ -225,16 +234,51 @@ impl Engine {
         let plan = self.plans.active();
         for t in self.tracks.iter_mut() {
             t.plan_changed();
+            t.clear_routing();
         }
         for step in &plan.steps {
             for input in &step.inputs {
-                if let Some(t) = self.tracks.get_mut(input.from as usize) {
-                    t.want_input(input);
+                match input.bus {
+                    Some(read) => {
+                        if let Some(bus) = self.buses.get_mut(read.bus as usize) {
+                            bus.set_reader(read.reader, input.delay);
+                        }
+                    }
+                    None => {
+                        if let Some(t) = self.tracks.get_mut(input.from as usize) {
+                            t.want_input(input);
+                        }
+                    }
                 }
             }
         }
-        for t in self.tracks.iter_mut() {
+        for hw in &plan.hardware {
+            if let Some(t) = self.tracks.get_mut(hw.input.from as usize) {
+                t.want_input(&hw.input);
+            }
+        }
+        for out in &plan.tap_outs {
+            if let Some(t) = self.tracks.get_mut(out.track as usize) {
+                t.wire_tap(&out.tap, out.bus);
+            }
+        }
+        for sc in &plan.sidechains {
+            if let Some(bus) = self.buses.get_mut(sc.read.bus as usize) {
+                bus.set_reader(sc.read.reader, sc.delay);
+            }
+            if let Some(t) = self.tracks.get_mut(sc.to as usize) {
+                t.wire_sidechain(sc.device, sc.feed);
+            }
+        }
+        for route in &plan.midi {
+            if let Some(t) = self.tracks.get_mut(route.from as usize) {
+                t.midi_tap = true;
+            }
+        }
+        for (i, t) in self.tracks.iter_mut().enumerate() {
             t.settle_edges();
+            t.set_io(plan.io_of(i as u32));
+            t.publish_aux_routing();
         }
         self.click.delay.set_target(plan.click_delay);
         self.solo_dirty = true;
@@ -248,12 +292,38 @@ impl Engine {
                 .line
                 .as_ref()
                 .is_some_and(|l| l.max_delay() >= plan.click_delay);
+        let bus_fits = |read: crate::graph::BusRead, delay: u32| {
+            self.buses
+                .get(read.bus as usize)
+                .is_some_and(|bus| delay == 0 || bus.max_delay() >= delay)
+        };
+        let own_fits = plan.io.iter().enumerate().all(|(i, io)| {
+            io.own_delay == 0
+                || self
+                    .tracks
+                    .get(i)
+                    .is_some_and(|t| t.can_hold_own(io.own_delay))
+        });
+        let wired = (plan.buses as usize) <= self.buses.len()
+            && plan
+                .sidechains
+                .iter()
+                .all(|s| bus_fits(s.read, s.delay) && (s.feed as usize) < self.buses.len());
         click_fits
+            && own_fits
+            && wired
+            && plan.hardware.iter().all(|h| {
+                self.tracks
+                    .get(h.input.from as usize)
+                    .is_some_and(|t| t.can_delay(&h.input))
+            })
             && plan.steps.iter().all(|step| {
-                step.inputs.iter().all(|input| {
-                    self.tracks
+                step.inputs.iter().all(|input| match input.bus {
+                    Some(read) => bus_fits(read, input.delay),
+                    None => self
+                        .tracks
                         .get(input.from as usize)
-                        .is_some_and(|t| t.can_delay(input))
+                        .is_some_and(|t| t.can_delay(input)),
                 })
             })
     }
@@ -306,6 +376,7 @@ impl Engine {
                     Some(chain) if fits && chain.len() < chain.capacity() => {
                         let idx = index.min(chain.len());
                         chain.insert(idx, device);
+                        applied.devices = true;
                     }
                     _ => retire(&mut self.garbage, Garbage::Boxed(device)),
                 }
@@ -316,6 +387,7 @@ impl Engine {
                     Some(chain.remove(i))
                 });
                 if let Some(mut slot) = removed {
+                    applied.devices = true;
                     slot.stop_processing();
                     retire(&mut self.garbage, Garbage::Boxed(slot));
                 }
@@ -352,6 +424,7 @@ impl Engine {
                         let index = index.min(rack.chains.len());
                         rack.chains.insert(index, chain);
                         rack.invalidate_gates();
+                        applied.devices = true;
                     }
                     _ => retire(&mut self.garbage, Garbage::Boxed(chain)),
                 }
@@ -537,6 +610,20 @@ impl Engine {
             C::SetClickLine(line) => {
                 let spare = offer_line(&mut self.click.line, Some(line));
                 self.retire_line(spare);
+            }
+            C::SetOwnLine { track, line } => {
+                let spare = match self.track_mut(track) {
+                    Some(t) => t.offer_own_line(Some(line)),
+                    None => Some(line),
+                };
+                self.retire_line(spare);
+            }
+            C::SetBuses(mut buses) => {
+                for (new, old) in buses.iter_mut().zip(self.buses.iter()) {
+                    new.adopt(old);
+                }
+                std::mem::swap(&mut self.buses, &mut *buses);
+                retire(&mut self.garbage, Garbage::Boxed(buses));
             }
             C::SetResource {
                 target,

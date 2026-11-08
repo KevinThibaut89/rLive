@@ -111,6 +111,12 @@ pub mod mixer {
     pub const SOLO: ParamId = ParamId(3);
     /// Send `n` is `ParamId(FIRST_SEND.0 + n)`.
     pub const FIRST_SEND: ParamId = ParamId(0x100);
+    /// A track's side of the crossfader: 0 none, 1 A, 2 B ("X-Fade Assign").
+    pub const CROSSFADE_ASSIGN: ParamId = ParamId(4);
+    /// The Main track's crossfader position, -1 (A) to 1 (B).
+    pub const CROSSFADER: ParamId = ParamId(5);
+    /// The Main track's Cue Volume, in dB.
+    pub const CUE_VOLUME: ParamId = ParamId(6);
 
     /// Lowest volume the fader reaches, which is silence.
     pub const VOLUME_MIN_DB: f64 = -96.0;
@@ -125,6 +131,26 @@ pub mod mixer {
             ParamInfo::continuous(PAN.0, "Pan", -1.0, 1.0, 0.0, ""),
             ParamInfo::toggle(MUTE.0, "Mute", false),
             ParamInfo::toggle(SOLO.0, "Solo", false),
+        ]
+    }
+
+    /// Which side of the crossfader a track is on.
+    pub fn crossfade_assign_info() -> ParamInfo {
+        ParamInfo::stepped(CROSSFADE_ASSIGN.0, "X-Fade Assign", &["None", "A", "B"], 0)
+    }
+
+    /// The crossfader, then the Cue Volume, as the Main track has them.
+    pub fn main_infos() -> [ParamInfo; 2] {
+        [
+            ParamInfo::continuous(CROSSFADER.0, "Crossfade", -1.0, 1.0, 0.0, ""),
+            ParamInfo::continuous(
+                CUE_VOLUME.0,
+                "Cue Volume",
+                VOLUME_MIN_DB,
+                VOLUME_MAX_DB,
+                0.0,
+                "dB",
+            ),
         ]
     }
 }

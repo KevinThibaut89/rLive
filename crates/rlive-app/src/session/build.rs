@@ -23,7 +23,7 @@ use rlive_project::{
     DeviceKind, DrumPad as ProjectPad, Project, RackKind, Track, TrackKind, Warp,
     WarpMode as ProjectWarpMode, Zone as ProjectZone, Zones as ProjectZones,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
@@ -56,6 +56,10 @@ pub struct DeviceRuntime {
     pub layout: Vec<Section>,
     /// Where it publishes data for its panel, if what its layout shows reads any.
     pub view: Option<Arc<ViewChannel>>,
+    /// It takes a sidechain input.
+    pub sidechain_input: bool,
+    /// Names of its extra audio outputs.
+    pub aux_names: Vec<String>,
 }
 
 impl DeviceRuntime {
@@ -178,6 +182,30 @@ pub struct Builder<'a> {
     pub max_block: usize,
     pub plugins: &'a PluginCache,
     pub samples: &'a mut SampleCache,
+    pub wiring: &'a PluginWiring,
+}
+
+/// Which plug-ins have something routed to or tapped from their extra buses.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginWiring {
+    pub sidechain: HashSet<DeviceId>,
+    pub aux: HashSet<DeviceId>,
+}
+
+impl PluginWiring {
+    pub fn of(plan: &rlive_engine::RenderPlan) -> Self {
+        Self {
+            sidechain: plan.sidechains.iter().map(|s| s.device).collect(),
+            aux: plan
+                .tap_outs
+                .iter()
+                .filter_map(|t| match t.tap {
+                    rlive_engine::Tap::Aux(d, _) => Some(d),
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
 }
 
 pub fn descriptor_for(
@@ -261,6 +289,8 @@ impl Builder<'_> {
                         p.set_param(param.id, v);
                     }
                     let latency = Arc::new(AtomicU32::new(p.latency()));
+                    let sidechain_input = desc.ports.sidechain;
+                    let aux_names = desc.ports.aux_out.iter().map(|n| n.to_string()).collect();
                     ports = desc.ports;
                     // Only for what its layout shows: a device nobody can see measures nothing.
                     let view_len = crate::ui::panels::view_len(&desc.layout);
@@ -277,6 +307,8 @@ impl Builder<'_> {
                             unmoved: HashMap::new(),
                             layout: desc.layout,
                             view: view.clone(),
+                            sidechain_input,
+                            aux_names,
                         },
                     )
                 }
@@ -285,7 +317,16 @@ impl Builder<'_> {
             DeviceKind::Rack { .. } => unreachable!("handled above"),
             DeviceKind::Plugin { state, .. } => {
                 let desc = descriptor_for(&dev.kind, &dev.name, self.plugins).expect("plugin kind");
-                match rlive_plugin_host::instantiate(&desc, self.sample_rate, self.max_block) {
+                let buses = rlive_plugin_host::PluginBuses {
+                    sidechain: self.wiring.sidechain.contains(&dev.id),
+                    aux: self.wiring.aux.contains(&dev.id),
+                };
+                match rlive_plugin_host::instantiate_with(
+                    &desc,
+                    self.sample_rate,
+                    self.max_block,
+                    buses,
+                ) {
                     Ok(mut inst) => {
                         if let Some(state) = state {
                             if !inst.handle.load_state(state) {
@@ -298,6 +339,8 @@ impl Builder<'_> {
                             DeviceRole::AudioEffect
                         };
                         let latency = Arc::new(AtomicU32::new(inst.handle.latency()));
+                        let sidechain_input = inst.handle.sidechain_input();
+                        let aux_names = inst.handle.aux_outputs();
                         (
                             inst.processor,
                             DeviceRuntime {
@@ -310,6 +353,8 @@ impl Builder<'_> {
                                 unmoved: HashMap::new(),
                                 layout: Vec::new(),
                                 view: None,
+                                sidechain_input,
+                                aux_names,
                             },
                         )
                     }
@@ -317,7 +362,8 @@ impl Builder<'_> {
                 }
             }
         };
-        let mut slot = DeviceSlot::new(dev.id, processor);
+        let aux = runtime.aux_names.len();
+        let mut slot = DeviceSlot::new(dev.id, processor).with_aux_outputs(aux, self.max_block);
         slot.bypass = dev.bypass;
         slot.midi_effect = ports.midi_out;
         slot.latency = runtime.latency.clone();
@@ -389,6 +435,8 @@ impl Builder<'_> {
                 unmoved: HashMap::new(),
                 layout: Vec::new(),
                 view: None,
+                sidechain_input: false,
+                aux_names: Vec::new(),
             },
         );
         Box::new(slot)
@@ -546,7 +594,11 @@ impl Builder<'_> {
         let mut node = TrackNode::master(self.max_block);
         node.id = project.master.id;
         node.mix.volume_db = project.master.volume_db;
+        node.mix.crossfader = project.crossfader.position;
+        node.mix.cue_db = project.cue.volume_db;
         let mut layout = BusLayout::for_master(node.mix.volume_db).with_max_block(self.max_block);
+        layout.note_value(mix_cell::CROSSFADER, project.crossfader.position as f64);
+        layout.note_value(mix_cell::CUE_VOLUME, project.cue.volume_db as f64);
         for d in &project.master.devices {
             let slot = self.device(d, 0, runtimes);
             note_errors(d, runtimes, errors);
@@ -698,6 +750,8 @@ fn placeholder(error: String) -> (Box<dyn Processor>, DeviceRuntime) {
             unmoved: HashMap::new(),
             layout: Vec::new(),
             view: None,
+            sidechain_input: false,
+            aux_names: Vec::new(),
         },
     )
 }
@@ -708,6 +762,13 @@ pub fn mix_of(t: &Track) -> MixSettings {
         pan: t.pan,
         mute: t.mute,
         solo: t.solo,
+        crossfade: match t.crossfade {
+            rlive_project::Crossfade::None => 0,
+            rlive_project::Crossfade::A => 1,
+            rlive_project::Crossfade::B => 2,
+        },
+        crossfader: 0.0,
+        cue_db: 0.0,
     }
 }
 
@@ -871,6 +932,7 @@ mod tests {
             max_block: 256,
             plugins: &plugins,
             samples: &mut samples,
+            wiring: &PluginWiring::default(),
         };
         let mut clip = Clip {
             length: 4 * PPQ,

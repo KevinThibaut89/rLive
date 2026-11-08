@@ -1,18 +1,26 @@
 //! Audio output: runs the engine inside the cpal (CoreAudio on macOS) callback.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use rlive_engine::{create_engine, Engine, EngineHandle};
+use rlive_engine::{create_engine, AudioIo, Engine, EngineHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Largest block the engine processes at once (cpal buffers are split into these).
 pub const MAX_BLOCK: usize = 1024;
+/// Most hardware output channels driven at once. More than any interface rLive expects to meet.
+const MAX_OUTPUT_CHANNELS: usize = 64;
+/// Frames handed to the engine in one call.
+const SCRATCH_FRAMES: usize = 16_384;
 
 pub struct AudioOutput {
     _stream: Option<cpal::Stream>,
     fallback: Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>,
     pub device_name: String,
     pub sample_rate: f64,
+    /// How many hardware channels this stream writes.
+    pub output_channels: usize,
+    /// How many channels the system's input device has. Nothing is captured from them yet.
+    pub input_channels: usize,
     pub error: Option<String>,
 }
 
@@ -33,6 +41,8 @@ impl AudioOutput {
             fallback: None,
             device_name: "Stopped".into(),
             sample_rate: 48_000.0,
+            output_channels: 2,
+            input_channels: 0,
             error: None,
         }
     }
@@ -64,6 +74,8 @@ pub fn start(device_name: Option<&str>) -> (AudioOutput, EngineHandle) {
                     fallback: Some((stop, thread)),
                     device_name: "No audio device".into(),
                     sample_rate: 48_000.0,
+                    output_channels: 2,
+                    input_channels: 0,
                     error: Some(e),
                 },
                 handle,
@@ -95,8 +107,8 @@ fn try_start(device_name: Option<&str>) -> Result<(AudioOutput, EngineHandle), S
             supported.sample_format()
         );
     }
-    let config = supported.config();
-    let channels = config.channels as usize;
+    let config = widest_config(&device, &supported);
+    let channels = (config.channels as usize).min(MAX_OUTPUT_CHANNELS);
     let sample_rate = config.sample_rate as f64;
     let (engine, handle) = create_engine(sample_rate, MAX_BLOCK);
     let stream = build_stream(&device, &config, channels, engine)?;
@@ -107,10 +119,80 @@ fn try_start(device_name: Option<&str>) -> Result<(AudioOutput, EngineHandle), S
             fallback: None,
             device_name: name,
             sample_rate,
+            output_channels: channels,
+            input_channels: input_channel_count(&host),
             error: None,
         },
         handle,
     ))
+}
+
+/// The device's default rate, with as many channels as it offers there.
+fn widest_config(
+    device: &cpal::Device,
+    default: &cpal::SupportedStreamConfig,
+) -> cpal::StreamConfig {
+    let rate = default.sample_rate();
+    let widest = device.supported_output_configs().ok().and_then(|configs| {
+        configs
+            .filter(|c| c.sample_format() == cpal::SampleFormat::F32)
+            .filter(|c| c.min_sample_rate() <= rate && rate <= c.max_sample_rate())
+            .max_by_key(|c| c.channels())
+    });
+    match widest {
+        Some(range) if range.channels() > default.channels() => {
+            range.with_sample_rate(rate).config()
+        }
+        _ => default.config(),
+    }
+}
+
+/// The channels the system's input device offers, for the choosers. No stream is opened.
+fn input_channel_count(host: &cpal::Host) -> usize {
+    host.default_input_device()
+        .and_then(|d| d.default_input_config().ok())
+        .map_or(0, |c| c.channels() as usize)
+}
+
+/// Renders one callback's worth of interleaved audio. `scratch` holds a block per channel,
+/// allocated up front; nothing here allocates. A mono device gets the Main output summed down.
+fn render_interleaved(
+    engine: &mut Engine,
+    scratch: &mut [Vec<f32>],
+    data: &mut [f32],
+    channels: usize,
+) {
+    let wired = channels.max(2).min(scratch.len());
+    let frames_total = data.len() / channels.max(1);
+    let mut done = 0;
+    while done < frames_total {
+        let n = (frames_total - done).min(SCRATCH_FRAMES);
+        {
+            let mut buffers = scratch.iter_mut();
+            let mut slices: [&mut [f32]; MAX_OUTPUT_CHANNELS] =
+                std::array::from_fn(|_| match buffers.next() {
+                    Some(b) => &mut b[..n],
+                    None => &mut [],
+                });
+            engine.process(AudioIo {
+                inputs: &[],
+                outputs: &mut slices[..wired],
+            });
+        }
+        let out = &mut data[done * channels..(done + n) * channels];
+        for (i, frame) in out.chunks_mut(channels).enumerate() {
+            match frame.len() {
+                0 => {}
+                1 => frame[0] = (scratch[0][i] + scratch[1][i]) * 0.5,
+                _ => {
+                    for (c, s) in frame.iter_mut().enumerate() {
+                        *s = scratch.get(c).map_or(0.0, |b| b[i]);
+                    }
+                }
+            }
+        }
+        done += n;
+    }
 }
 
 fn build_stream(
@@ -120,33 +202,12 @@ fn build_stream(
     mut engine: Engine,
 ) -> Result<cpal::Stream, String> {
     // Scratch buffers allocated up front; the callback never allocates.
-    let mut left = vec![0.0f32; 16_384];
-    let mut right = vec![0.0f32; 16_384];
+    let mut scratch = vec![vec![0.0f32; SCRATCH_FRAMES]; channels.max(2)];
     device
         .build_output_stream(
             *config,
             move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                let frames_total = data.len() / channels.max(1);
-                let mut done = 0;
-                while done < frames_total {
-                    let n = (frames_total - done).min(left.len());
-                    engine.process_stereo(&mut left[..n], &mut right[..n]);
-                    let out = &mut data[done * channels..(done + n) * channels];
-                    for (i, frame) in out.chunks_mut(channels).enumerate() {
-                        match frame.len() {
-                            0 => {}
-                            1 => frame[0] = (left[i] + right[i]) * 0.5,
-                            _ => {
-                                frame[0] = left[i];
-                                frame[1] = right[i];
-                                for s in frame.iter_mut().skip(2) {
-                                    *s = 0.0;
-                                }
-                            }
-                        }
-                    }
-                    done += n;
-                }
+                render_interleaved(&mut engine, &mut scratch, data, channels);
             },
             |err| log::error!("audio stream error: {err}"),
             None,
@@ -176,4 +237,31 @@ fn spawn_fallback(mut engine: Engine, stop: Arc<AtomicBool>) -> std::thread::Joi
             }
         })
         .expect("spawn audio thread")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn engine() -> (Engine, EngineHandle) {
+        create_engine(48_000.0, 256)
+    }
+
+    #[test]
+    fn interleaved_channels_past_the_stereo_pair_are_silent_until_routed() {
+        let (mut e, _h) = engine();
+        let mut scratch = vec![vec![1.0f32; SCRATCH_FRAMES]; 6];
+        let mut data = vec![0.5f32; 6 * 100];
+        rlive_testkit::assert_no_alloc(|| render_interleaved(&mut e, &mut scratch, &mut data, 6));
+        assert!(data.iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn a_mono_device_gets_the_sum_of_the_main_pair() {
+        let (mut e, _h) = engine();
+        let mut scratch = vec![vec![0.0f32; SCRATCH_FRAMES]; 2];
+        let mut data = vec![0.5f32; 100];
+        render_interleaved(&mut e, &mut scratch, &mut data, 1);
+        assert!(data.iter().all(|s| *s == 0.0));
+    }
 }

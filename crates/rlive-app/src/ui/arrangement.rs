@@ -8,7 +8,7 @@ use super::theme::{self, *};
 use super::timeline::{self, TimeAxis};
 use super::widgets::{self, info, info_note, rgb};
 use super::{BrowserItem, Detail, UiState};
-use crate::session::{ArrMove, ChainRef, ClipRef, InfoTarget, Session, TrimEdge};
+use crate::session::{can_arm, ArrMove, ChainRef, ClipRef, InfoTarget, Session, TrimEdge};
 use egui::{Align2, Color32, CursorIcon, Layout, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use rlive_audio_io::SampleStatus;
 use rlive_core::{ArrClipId, TrackId, PPQ};
@@ -106,7 +106,13 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
 
     let sig = session.project.time_signature;
     let bar = sig.ticks_per_bar();
-    let lanes_right = full.right() - HEADER_W;
+    let header_w = HEADER_W
+        + if state.layout.show_in_out {
+            super::in_out::ARR_IN_OUT_W
+        } else {
+            0.0
+        };
+    let lanes_right = full.right() - header_w;
     let ruler = Rect::from_min_max(full.min, Pos2::new(lanes_right, full.top() + RULER_H));
     // Return tracks and the Master stay at the bottom, under the scrolling lanes.
     let bottom_rows = session.project.returns.len() + 1;
@@ -1339,6 +1345,13 @@ fn return_row(
         theme::font_bold(10.5),
         pal().text,
     );
+    if state.layout.show_in_out {
+        let area = Rect::from_min_max(
+            Pos2::new(row.right() - HEADER_W - 66.0, row.top()),
+            Pos2::new(row.right() - 72.0, row.bottom()),
+        );
+        super::in_out::header_section(ui, session, state, id, area);
+    }
     let row_h = RETURN_ROW_H - 6.0;
     let letter = (b'A' + index as u8) as char;
     let mute_r = Rect::from_min_size(
@@ -1437,10 +1450,22 @@ fn track_header(
     let swatch = Rect::from_min_size(rect.min, Vec2::new(6.0, rect.height()));
     p.rect_filled(swatch, 0.0, rgb(color));
     let indent = depth as f32 * 8.0;
+    let in_out_w = if state.layout.show_in_out {
+        super::in_out::ARR_IN_OUT_W
+    } else {
+        0.0
+    };
     let inner = Rect::from_min_max(
         rect.min + Vec2::new(10.0 + indent, 4.0),
-        rect.max - Vec2::new(10.0, 4.0),
+        rect.max - Vec2::new(10.0 + in_out_w, 4.0),
     );
+    if in_out_w > 0.0 {
+        let area = Rect::from_min_size(
+            Pos2::new(rect.right() - in_out_w - 4.0, rect.top()),
+            Vec2::new(in_out_w, rect.height()),
+        );
+        super::in_out::header_section(ui, session, state, id, area);
+    }
     let fold_w = if kind == TrackKind::Group {
         icons::fold(
             &p,
@@ -1510,7 +1535,18 @@ fn track_header(
             }
             session.sync_mix(id);
         }
-        let r = widgets::state_button(&mut bu, Vec2::new(bw, btn_h), solo, pal().solo_blue, "S");
+        let solo_label = if session.project.cue.cue_mode {
+            "Cue"
+        } else {
+            "S"
+        };
+        let r = widgets::state_button(
+            &mut bu,
+            Vec2::new(bw, btn_h),
+            solo,
+            pal().solo_blue,
+            solo_label,
+        );
         if holds_solo && !solo {
             let half =
                 Rect::from_min_size(r.rect.min, Vec2::new(r.rect.width() / 2.0, r.rect.height()));
@@ -1523,10 +1559,11 @@ fn track_header(
                 pal().text,
             );
         }
-        if info(r, "Solo — Cmd-click to solo several tracks").clicked() {
+        let r = info(r, "Solo — Cmd-click to solo several tracks");
+        if r.clicked() {
             session_view::toggle_solo(session, id, solo, bu.input(|i| i.modifiers.command));
         }
-        if kind != TrackKind::Group {
+        if kind != TrackKind::Group && can_arm(&session.project, id) {
             let r = widgets::icon_button(
                 &mut bu,
                 Vec2::new(bw, btn_h),
@@ -1534,12 +1571,7 @@ fn track_header(
                 pal().arm_red,
                 icons::record,
             );
-            if info(
-                r,
-                "Arm — record MIDI onto this track (Cmd-click to arm several)",
-            )
-            .clicked()
-            {
+            if info(r, "Arm — record onto this track (Cmd-click to arm several)").clicked() {
                 let exclusive = !bu.input(|i| i.modifiers.command);
                 session.set_arm(id, !arm, exclusive);
             }

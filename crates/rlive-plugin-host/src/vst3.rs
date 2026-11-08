@@ -762,6 +762,26 @@ impl Vst3Instance {
     }
 }
 
+/// The names of a plugin's extra buses, after its main one.
+fn bus_names(component: &ComPtr<IComponent>, dir: BusDirection) -> Vec<String> {
+    unsafe {
+        let count = component.getBusCount(MediaTypes_::kAudio as MediaType, dir);
+        (1..count)
+            .map(|i| {
+                let mut info: BusInfo = std::mem::zeroed();
+                if component.getBusInfo(MediaTypes_::kAudio as MediaType, dir, i, &mut info)
+                    == kResultOk
+                {
+                    let n = info.name.iter().take_while(|c| **c != 0).count();
+                    String::from_utf16_lossy(&info.name[..n])
+                } else {
+                    format!("Output {}", i + 1)
+                }
+            })
+            .collect()
+    }
+}
+
 fn bus_channels(component: &ComPtr<IComponent>, dir: BusDirection) -> Vec<usize> {
     unsafe {
         let count = component.getBusCount(MediaTypes_::kAudio as MediaType, dir);
@@ -784,6 +804,7 @@ pub fn instantiate(
     desc: &PluginDescriptor,
     sample_rate: f64,
     max_block: usize,
+    buses: crate::PluginBuses,
 ) -> Result<PluginInstance> {
     let lib = load_library(&desc.path)?;
     let cid = hex_to_tuid(&desc.id)
@@ -915,6 +936,24 @@ pub fn instantiate(
                 1,
             );
         }
+        if buses.sidechain && n_in > 1 {
+            component.activateBus(
+                MediaTypes_::kAudio as MediaType,
+                BusDirections_::kInput as BusDirection,
+                1,
+                1,
+            );
+        }
+        if buses.aux {
+            for bus in 1..n_out {
+                component.activateBus(
+                    MediaTypes_::kAudio as MediaType,
+                    BusDirections_::kOutput as BusDirection,
+                    bus,
+                    1,
+                );
+            }
+        }
         if component.getBusCount(
             MediaTypes_::kEvent as MediaType,
             BusDirections_::kInput as BusDirection,
@@ -943,6 +982,8 @@ pub fn instantiate(
 
         let inputs = bus_channels(&component, BusDirections_::kInput as BusDirection);
         let outputs = bus_channels(&component, BusDirections_::kOutput as BusDirection);
+        let aux_names = bus_names(&component, BusDirections_::kOutput as BusDirection);
+        let has_sidechain = n_in > 1;
         let inst = Arc::new(Vst3Instance {
             component,
             processor,
@@ -959,6 +1000,8 @@ pub fn instantiate(
         let proc_ = Vst3Processor::new(inst.clone(), &inputs, &outputs, max_block, sample_rate);
         let mut handle = Vst3Handle {
             inst,
+            has_sidechain,
+            aux_names,
             desc: desc.clone(),
             params: Vec::new(),
             handler: handler_state,
@@ -984,6 +1027,8 @@ struct Editor {
 
 pub struct Vst3Handle {
     inst: Arc<Vst3Instance>,
+    has_sidechain: bool,
+    aux_names: Vec<String>,
     desc: PluginDescriptor,
     params: Vec<ParamInfo>,
     handler: Arc<HandlerState>,
@@ -1039,6 +1084,14 @@ impl Vst3Handle {
 impl PluginHandle for Vst3Handle {
     fn descriptor(&self) -> &PluginDescriptor {
         &self.desc
+    }
+
+    fn sidechain_input(&self) -> bool {
+        self.has_sidechain
+    }
+
+    fn aux_outputs(&self) -> Vec<String> {
+        self.aux_names.clone()
     }
 
     fn params(&self) -> Vec<ParamInfo> {

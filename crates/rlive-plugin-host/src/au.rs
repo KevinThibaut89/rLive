@@ -494,6 +494,7 @@ pub fn instantiate(
 
     let mut handle = AuHandle {
         inst: inst.clone(),
+        has_sidechain: sidechain.is_some(),
         desc: desc.clone(),
         params: Vec::new(),
         editor: None,
@@ -522,6 +523,7 @@ pub fn instantiate(
 
 pub struct AuHandle {
     inst: Arc<AuInstance>,
+    has_sidechain: bool,
     desc: PluginDescriptor,
     params: Vec<ParamInfo>,
     editor: Option<crate::mac::EditorWindow>,
@@ -707,6 +709,10 @@ impl AuHandle {
 impl PluginHandle for AuHandle {
     fn descriptor(&self) -> &PluginDescriptor {
         &self.desc
+    }
+
+    fn sidechain_input(&self) -> bool {
+        self.has_sidechain
     }
 
     fn params(&self) -> Vec<ParamInfo> {

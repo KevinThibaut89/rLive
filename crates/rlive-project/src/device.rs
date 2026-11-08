@@ -260,6 +260,17 @@ pub struct Device {
     /// The user's info text.
     #[serde(default, skip_serializing_if = "is_default")]
     pub info: String,
+    /// Where the device's own sidechain chooser takes its input from.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub sidechain: Option<SidechainSource>,
+}
+
+/// The source a device's sidechain input is set to, as its built-in chooser shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidechainSource {
+    pub track: TrackId,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub tap: crate::Tap,
 }
 
 impl Device {
@@ -291,6 +302,7 @@ impl Device {
             params: BTreeMap::new(),
             expanded: true,
             info: String::new(),
+            sidechain: None,
         }
     }
 

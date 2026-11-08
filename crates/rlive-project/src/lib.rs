@@ -27,7 +27,7 @@ pub use clip::{
 };
 pub use device::{
     grow_macros, Chain, ChainMix, ChainSend, Device, DeviceKind, DrumPad, Macro, MacroMapping,
-    RackKind, Variation, Zone, Zones,
+    RackKind, SidechainSource, Variation, Zone, Zones,
 };
 pub use envelope::{Breakpoint, ClipEnvelope, EnvLoop, EnvMode, Envelope};
 pub use file_ref::FileRef;
@@ -38,6 +38,6 @@ pub use project::{Crossfader, Project, ProjectError, FILE_EXTENSION, FORMAT_VERS
 pub use routing::SEND_OFF_DB;
 pub use scene::Scene;
 pub use track::{
-    Crossfade, ExternalRoute, Monitor, PanMode, Route, Routing, Tap, Track, TrackDelay, TrackKind,
-    TrackSend, TrackUi,
+    ChainTap, Crossfade, ExternalRoute, Monitor, PanMode, Route, Routing, Tap, Track, TrackDelay,
+    TrackKind, TrackSend, TrackUi,
 };

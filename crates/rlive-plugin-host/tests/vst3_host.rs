@@ -1,9 +1,10 @@
 //! End-to-end VST3 hosting test against the `rlive-test-vst3` fixture plugin.
 
 use rlive_core::{
-    AudioBuffer, EventQueue, ParamOutQueue, PluginFormat, ProcessContext, TransportInfo, ViewWriter,
+    AudioBuffer, AudioInput, EventQueue, ParamOutQueue, PluginFormat, ProcessContext,
+    TransportInfo, ViewWriter,
 };
-use rlive_plugin_host::{instantiate, scanner};
+use rlive_plugin_host::{instantiate, instantiate_with, scanner, PluginBuses};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -65,6 +66,64 @@ fn process(p: &mut dyn rlive_core::Processor, input: f32) -> Vec<f32> {
         view: &view,
     });
     l
+}
+
+fn process_keyed(p: &mut dyn rlive_core::Processor, key: f32) -> f32 {
+    let frames = 64;
+    let (mut l, mut r) = (vec![0.0f32; frames], vec![0.0f32; frames]);
+    let key_buf = vec![key; frames];
+    let mut events_out = EventQueue::with_capacity(0);
+    let mut q = ParamOutQueue::with_capacity(0);
+    let transport = TransportInfo::default();
+    let view = ViewWriter::none();
+    p.process(&mut ProcessContext {
+        audio: AudioBuffer {
+            left: &mut l,
+            right: &mut r,
+        },
+        sidechain: Some(AudioInput {
+            left: &key_buf,
+            right: &key_buf,
+        }),
+        aux_out: &mut [],
+        events: &[],
+        events_out: &mut events_out,
+        params: &[],
+        transport: &transport,
+        param_out: &mut q,
+        mod_out: &mut [],
+        view: &view,
+    });
+    l[10]
+}
+
+#[test]
+fn a_vst3_sidechain_bus_only_comes_on_when_something_is_routed_to_it() {
+    let bundle = fixture();
+    let exe = Path::new(env!("CARGO_BIN_EXE_rlive-plugin-scanner"));
+    let found =
+        scanner::scan_out_of_process(exe, PluginFormat::Vst3, &bundle, Duration::from_secs(30))
+            .unwrap();
+    let desc = &found[0];
+
+    let mut plain = instantiate(desc, 48_000.0, 256).unwrap();
+    assert!(plain.handle.sidechain_input(), "the plugin offers one");
+    assert_eq!(process_keyed(&mut *plain.processor, 0.5), 0.0, "bus off");
+    plain.processor.stop_processing();
+    drop(plain);
+
+    let buses = PluginBuses {
+        sidechain: true,
+        aux: false,
+    };
+    let mut keyed = instantiate_with(desc, 48_000.0, 256, buses).unwrap();
+    assert!(
+        (process_keyed(&mut *keyed.processor, 0.5) - 0.5).abs() < 1e-6,
+        "bus on: the key reaches the plugin"
+    );
+    keyed.processor.stop_processing();
+    drop(keyed);
+    std::fs::remove_dir_all(bundle.parent().unwrap()).ok();
 }
 
 #[test]

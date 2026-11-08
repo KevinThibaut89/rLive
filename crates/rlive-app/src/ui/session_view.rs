@@ -11,12 +11,13 @@
 //! the Master/scene column stay put while the grid scrolls.
 
 use super::icons;
+use super::in_out;
 use super::info_view::edit_info_item;
 use super::keymap::{self, Platform};
 use super::theme::{self, *};
 use super::widgets::{self, info, info_note, rgb, Led};
 use super::{BrowserItem, Detail, UiState};
-use crate::session::{ChainRef, ClipRef, InfoTarget, Session};
+use crate::session::{can_arm, ChainRef, ClipRef, InfoTarget, Session};
 use egui::{
     Align2, Color32, Layout, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
 };
@@ -61,6 +62,10 @@ pub struct SessionLayout {
     pub scroll: Vec2,
     pub mixer_h: f32,
     pub show_mixer: bool,
+    /// The mixer's In/Out section.
+    pub show_in_out: bool,
+    /// The Crossfade Assign buttons and the crossfader.
+    pub show_crossfader: bool,
 }
 
 impl Default for SessionLayout {
@@ -69,6 +74,8 @@ impl Default for SessionLayout {
             scroll: Vec2::ZERO,
             mixer_h: 190.0,
             show_mixer: true,
+            show_in_out: false,
+            show_crossfader: false,
         }
     }
 }
@@ -156,6 +163,13 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     } else {
         0.0
     };
+    // The In/Out section is added to the mixer's height, so the strips keep their room.
+    let in_out_h = if state.layout.show_mixer && state.layout.show_in_out {
+        in_out::IN_OUT_H
+    } else {
+        0.0
+    };
+    let mixer_h = mixer_h + in_out_h;
     let mixer = Rect::from_min_max(
         Pos2::new(full.left(), full.bottom() - mixer_h),
         Pos2::new(tracks_right, full.bottom()),
@@ -199,7 +213,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         grid,
         stop_row,
         mixer,
-        compact_mixer: mixer_h < 140.0,
+        compact_mixer: mixer_h - in_out_h < 140.0,
     };
 
     // ---- scrolling
@@ -990,6 +1004,9 @@ fn mixer_strip(
         .map(|r| (r.id, t.send_level(r.id), t.send_enabled(r.id)))
         .collect();
     let solo_in_place = session.project.solo_in_place;
+    let cue_mode = session.project.cue.cue_mode;
+    let monitoring_in = matches!(t.kind, TrackKind::Audio | TrackKind::Midi)
+        && t.routing.monitor == rlive_project::Monitor::In;
     let delay = t.delay;
     let meter = state.meters.get(&id).copied().unwrap_or_default();
     let p = ui.painter().clone();
@@ -1022,6 +1039,10 @@ fn mixer_strip(
     let inner = rect.shrink2(Vec2::new(5.0, 6.0));
     let buttons_h = 17.0;
     let mut y = inner.top() + 2.0;
+
+    if !compact && state.layout.show_in_out {
+        y = in_out::strip_section(ui, session, state, id, inner, y);
+    }
 
     if !compact {
         if is_return {
@@ -1061,7 +1082,12 @@ fn mixer_strip(
     }
 
     // Fader + meter take the remaining height above the buttons and dB box.
-    let fader_bottom = inner.bottom() - buttons_h - 18.0;
+    let assign_h = if state.layout.show_crossfader {
+        in_out::ASSIGN_H
+    } else {
+        0.0
+    };
+    let fader_bottom = inner.bottom() - buttons_h - 18.0 - assign_h;
     let fader_w = (inner.width() * 0.5).clamp(26.0, 44.0);
     let fader_r = Rect::from_min_max(
         Pos2::new(inner.center().x - fader_w / 2.0, y),
@@ -1100,11 +1126,23 @@ fn mixer_strip(
         pal().text,
     );
 
-    // Activator / Solo / Arm
+    // Activator / Solo / Arm. Monitoring In tints the Activator blue (manual p. 374).
+    let activator_color = if monitoring_in {
+        pal().solo_blue
+    } else {
+        pal().activator
+    };
     let shown_mute = session
         .automated_cell_value(chain, mix_cell::MUTE)
         .map_or(mute, |v| v >= 0.5);
     let bw = ((inner.width() - 4.0) / 3.0).floor();
+    if assign_h > 0.0 {
+        let row = Rect::from_min_size(
+            Pos2::new(inner.left(), inner.bottom() - buttons_h - assign_h),
+            Vec2::new(inner.width(), assign_h - 2.0),
+        );
+        in_out::assign_row(ui, session, state, id, row);
+    }
     let row = Rect::from_min_size(
         Pos2::new(inner.left(), inner.bottom() - buttons_h),
         Vec2::new(inner.width(), buttons_h),
@@ -1119,7 +1157,7 @@ fn mixer_strip(
         &mut bu,
         Vec2::new(bw, buttons_h),
         !shown_mute,
-        pal().activator,
+        activator_color,
         label,
     );
     if info(r, "Track Activator — click to mute/unmute").clicked() {
@@ -1130,7 +1168,7 @@ fn mixer_strip(
         Vec2::new(bw, buttons_h),
         solo,
         pal().solo_blue,
-        "S",
+        if cue_mode { "Cue" } else { "S" },
     );
     if holds_solo && !solo {
         // A soloed track somewhere inside: the button lights up half way.
@@ -1165,7 +1203,7 @@ fn mixer_strip(
             ui.close();
         }
     });
-    if armable && !is_return {
+    if armable && !is_return && can_arm(&session.project, id) {
         let r = widgets::icon_button(
             &mut bu,
             Vec2::new(bw, buttons_h),
@@ -1602,9 +1640,19 @@ fn master_column(
             },
         );
         let inner = rect.shrink2(Vec2::new(8.0, 8.0));
+        let mut top = inner.top() + 2.0;
+        if state.layout.show_in_out {
+            top = in_out::main_section(ui, session, state, inner, top + 12.0);
+        }
+        let mut bottom = inner.bottom() - 20.0;
+        if state.layout.show_crossfader {
+            let row = Rect::from_min_max(Pos2::new(inner.left(), inner.bottom() - 14.0), inner.max);
+            in_out::crossfader(ui, session, row);
+            bottom -= 20.0;
+        }
         let fader_r = Rect::from_min_max(
-            Pos2::new(inner.center().x - 22.0, inner.top() + 2.0),
-            Pos2::new(inner.center().x + 22.0, inner.bottom() - 20.0),
+            Pos2::new(inner.center().x - 22.0, top),
+            Pos2::new(inner.center().x + 22.0, bottom.max(top + 20.0)),
         );
         let mut fu = ui.new_child(UiBuilder::new().max_rect(fader_r));
         let vol = session
@@ -1622,7 +1670,7 @@ fn master_column(
             session.set_master_volume(db);
         }
         let db_r = Rect::from_center_size(
-            Pos2::new(inner.center().x, inner.bottom() - 8.0),
+            Pos2::new(inner.center().x, bottom + 12.0),
             Vec2::new(54.0, 14.0),
         );
         p.rect_filled(db_r, 1.0, pal().field_bg);

@@ -259,6 +259,12 @@ pub trait Processor: Send {
     /// Called on the audio thread right before the processor leaves the engine.
     fn stop_processing(&mut self) {}
 
+    /// Which of the device's aux outputs are being tapped by another track, one bit per output.
+    /// Called on the audio thread whenever routing changes. An instrument that takes a tapped
+    /// output out of its own mix, as Impulse does (manual p. 390), reads this; most plug-ins
+    /// mix every part into their main output regardless.
+    fn set_aux_routed(&mut self, _mask: u32) {}
+
     /// Silence tails / release voices (e.g. after transport stop).
     fn reset(&mut self) {}
 

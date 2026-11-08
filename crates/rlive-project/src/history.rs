@@ -185,6 +185,7 @@ fn device_shell(d: &Device) -> Device {
         params: d.params.clone(),
         expanded: true,
         info: d.info.clone(),
+        sidechain: d.sidechain,
     }
 }
 
@@ -359,6 +360,7 @@ pub fn capture(project: &Project, prev: Option<&Snapshot>) -> (Snapshot, usize) 
         arrangement: Arrangement::default(),
         returns: Vec::new(),
         crossfader: project.crossfader,
+        cue: project.cue.clone(),
         groove_pool: project.groove_pool.clone(),
         tuning: project.tuning.clone(),
         midi_mappings: project.midi_mappings.clone(),

@@ -11,6 +11,7 @@ mod devices;
 mod export;
 mod graph;
 mod info;
+mod io;
 mod racks;
 mod recording;
 mod routing;
@@ -30,6 +31,8 @@ mod compensation_tests;
 #[cfg(test)]
 mod golden;
 #[cfg(test)]
+mod io_tests;
+#[cfg(test)]
 mod rack_tests;
 #[cfg(test)]
 mod routing_tests;
@@ -39,11 +42,12 @@ mod sample_tests;
 mod tests;
 
 pub use arrangement::{ArrMove, TrimEdge};
-pub use build::{descriptor_for, mix_of, Builder, DeviceRuntime};
+pub use build::{descriptor_for, mix_of, Builder, DeviceRuntime, PluginWiring};
 pub use clips::ClipRef;
 pub use devices::ChainRef;
 pub use graph::compile_plan;
 pub use info::InfoTarget;
+pub use io::{can_arm, AudioHardware, CrossfaderField, CrossfaderKeys, RouteChoice};
 pub use racks::{ExtractNotes, MacroDisplay, ZoneKind};
 pub use rlive_audio_io::SampleCache;
 pub use warping::{ShortSampleMode, WarpDefaults, WarpView, LONG_SAMPLE_SECONDS};
@@ -86,6 +90,14 @@ pub struct Session {
     automation: automation::AutomationRecorder,
     /// The compensation the running plan was compiled for.
     timing: timing::Timing,
+    /// The buses the engine has been given.
+    bus_shape: timing::BusShape,
+    /// Which plug-ins have their extra buses in use.
+    wiring: build::PluginWiring,
+    /// Keys held on the crossfader's left, centre and right positions.
+    crossfader_keys: io::CrossfaderKeys,
+    /// A file waiting to be previewed once it has loaded.
+    pending_preview: Option<PathBuf>,
     /// Device sample changes waiting for their file to load.
     pending_samples: Vec<samples::PendingSample>,
     /// Where the Rand button's numbers come from.
@@ -113,6 +125,10 @@ impl Session {
             recording: None,
             automation: automation::AutomationRecorder::default(),
             timing: timing::Timing::default(),
+            bus_shape: Vec::new(),
+            wiring: build::PluginWiring::default(),
+            crossfader_keys: io::CrossfaderKeys::default(),
+            pending_preview: None,
             pending_samples: Vec::new(),
             random: racks::random_seed(),
         };
@@ -159,6 +175,7 @@ impl Session {
                 max_block: self.engine.max_block,
                 plugins: &self.plugins,
                 samples: &mut self.samples,
+                wiring: &self.wiring,
             },
             &self.project,
         )
@@ -171,6 +188,7 @@ impl Session {
         self.capture_plugin_states();
         self.runtimes.clear();
         self.project.normalize();
+        self.wiring = build::PluginWiring::of(&compile_plan(&self.project));
         let mut runtimes = HashMap::new();
         let mut errors = Vec::new();
         let mut layouts = HashMap::new();
@@ -217,6 +235,7 @@ impl Session {
     pub fn replace_engine(&mut self, engine: EngineHandle) {
         self.capture_plugin_states();
         self.engine = engine;
+        self.bus_shape.clear();
         self.rebuild();
     }
 
@@ -292,6 +311,7 @@ impl Session {
     pub fn idle(&mut self) {
         self.engine.collect_garbage();
         self.poll_samples();
+        self.poll_preview();
         while let Some(ev) = self.engine.poll_event() {
             match ev {
                 EngineEvent::ParamChanged {

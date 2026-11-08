@@ -28,6 +28,8 @@ pub(crate) enum Action {
     EditInfo(DeviceId),
     /// Something dropped from the browser into a chain.
     Add(BrowserItem),
+    /// A new source in the device's own sidechain chooser.
+    SetSidechain(DeviceId, Option<rlive_project::SidechainSource>),
 }
 
 /// The actions of one frame, in the order they happened.
@@ -97,6 +99,11 @@ fn apply(
             }
         }
         Action::Reload(id) => session.reload_device(chain, id),
+        Action::SetSidechain(id, source) => {
+            if !session.set_sidechain(chain, id, source) {
+                *status = "That source would make a feedback loop".to_string();
+            }
+        }
         Action::EditInfo(id) => view.edit_info = Some((chain, id)),
         Action::ShowAll(id) => {
             let all = &mut view.show_all;

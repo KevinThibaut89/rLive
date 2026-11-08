@@ -99,6 +99,14 @@ pub trait PluginHandle {
     fn latency(&self) -> u32 {
         0
     }
+    /// Whether the plugin has an input for a sidechain signal.
+    fn sidechain_input(&self) -> bool {
+        false
+    }
+    /// The names of its extra audio outputs, beyond the main pair.
+    fn aux_outputs(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// A freshly created plugin instance.
@@ -195,15 +203,32 @@ pub fn scan_audio_units() -> Result<Vec<PluginDescriptor>> {
     }
 }
 
+/// Which extra buses of a plugin to switch on when it is created. Only VST3 needs telling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PluginBuses {
+    pub sidechain: bool,
+    pub aux: bool,
+}
+
 /// Create a plugin instance. Must be called on the main/UI thread.
 pub fn instantiate(
     desc: &PluginDescriptor,
     sample_rate: f64,
     max_block: usize,
 ) -> Result<PluginInstance> {
+    instantiate_with(desc, sample_rate, max_block, PluginBuses::default())
+}
+
+/// [`instantiate`], with its extra buses switched on as asked.
+pub fn instantiate_with(
+    desc: &PluginDescriptor,
+    sample_rate: f64,
+    max_block: usize,
+    buses: PluginBuses,
+) -> Result<PluginInstance> {
     match desc.format {
         PluginFormat::Clap => clap::instantiate(desc, sample_rate, max_block),
-        PluginFormat::Vst3 => vst3::instantiate(desc, sample_rate, max_block),
+        PluginFormat::Vst3 => vst3::instantiate(desc, sample_rate, max_block, buses),
         PluginFormat::AudioUnit => {
             #[cfg(target_os = "macos")]
             {

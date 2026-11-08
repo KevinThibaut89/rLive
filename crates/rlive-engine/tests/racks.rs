@@ -1229,6 +1229,7 @@ fn a_return_chain_can_feed_a_return_track_instead_of_the_rack() {
                     gain: None,
                     delay: 0,
                     feedback: false,
+                    bus: None,
                 }],
             },
             Step {

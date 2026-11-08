@@ -19,18 +19,21 @@ pub mod lane;
 pub mod params;
 pub mod rack;
 pub mod shared;
+pub mod taps;
 pub mod track;
 
 pub use automation::AutomationLane;
 pub use automation::MacroRoute;
 use clip::BlockTime;
 pub use clip::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
-pub use commands::{ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, RecordCmd, TransportCmd};
+pub use commands::{
+    ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, PreviewCmd, RecordCmd, TransportCmd,
+};
 use delay::FadingDelay;
 pub use delay::{StereoLine, TapLines, FADE_FRAMES, MAX_COMPENSATION_FRAMES};
 pub use graph::{
-    AudioIo, BusIn, ChainAddr, ChainPath, ChainStep, RenderPlan, SidechainIn, Step, Tap, TrackRef,
-    MAX_RACK_DEPTH,
+    AudioIo, BusIn, BusRead, ChainAddr, ChainPath, ChainStep, HardwareOut, InputGate, MidiRoute,
+    OutputPair, RenderPlan, SidechainIn, Step, Tap, TapOut, TrackIo, TrackRef, MAX_RACK_DEPTH,
 };
 pub use lane::{ArrangementLane, LaneClip};
 pub use params::{
@@ -39,6 +42,7 @@ pub use params::{
 };
 pub use rack::{ChainMix, ChainNode, DrumPad, RackKind, RackNode, Zone, Zones, MAX_CHAINS};
 use rlive_core::{
+    db_to_gain,
     time::{BarMap, TempoRun, TimeMaps},
     DeviceId, MidiMessage, Quantize, TrackId, TransportInfo,
 };
@@ -79,6 +83,8 @@ pub enum EngineCommand {
     Record(RecordCmd),
     /// Structural edits, applied together between two blocks.
     Graph(Box<GraphTxn>),
+    /// A file heard from the browser.
+    Preview(PreviewCmd),
 }
 
 impl EngineCommand {
@@ -297,6 +303,15 @@ pub struct Engine {
     smooth_coeff: f32,
     /// Solo has to be worked out again, as the plan or a Solo switch changed.
     solo_dirty: bool,
+    /// Tapped signals, as the running plan numbers them.
+    buses: Vec<taps::TapBus>,
+    /// The crossfader's gain for each side at each control step of the block.
+    crossfade_steps: Vec<(f32, f32)>,
+    /// The Cue output, built up as tracks render.
+    cue: [Vec<f32>; 2],
+    /// Room to read a delayed tap or sum a hardware output into.
+    scratch: [Vec<f32>; 2],
+    preview: commands::Preview,
 
     commands: rtrb::Consumer<EngineCommand>,
     garbage: rtrb::Producer<Garbage>,
@@ -349,6 +364,11 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         // ~5 ms one-pole smoothing.
         smooth_coeff: 1.0 - (-1.0 / (0.005 * sample_rate as f32)).exp(),
         solo_dirty: true,
+        buses: Vec::new(),
+        crossfade_steps: vec![(1.0, 1.0); max_block / CONTROL_STEP + 2],
+        cue: [vec![0.0; max_block], vec![0.0; max_block]],
+        scratch: [vec![0.0; max_block], vec![0.0; max_block]],
+        preview: Default::default(),
         commands: cmd_rx,
         garbage: gb_tx,
         events: ev_tx,
@@ -513,6 +533,7 @@ impl Engine {
             EngineCommand::Param(c) => self.handle_param(c),
             EngineCommand::Record(c) => self.handle_record(c),
             EngineCommand::Graph(c) => self.handle_graph(c),
+            EngineCommand::Preview(c) => self.handle_preview(c),
         }
     }
 
@@ -682,24 +703,18 @@ impl Engine {
         // no allocation either way.
         let plans = std::mem::take(&mut self.plans);
         let plan = plans.active();
+        self.cue[0][..frames].fill(0.0);
+        self.cue[1][..frames].fill(0.0);
         for (level, steps) in plan.levels.iter().enumerate() {
             let steps = &plan.steps[steps.start as usize..steps.end as usize];
             for step in steps {
-                self.gather_inputs(step, time, &transport, &maps.bars);
+                self.gather_inputs(plan, step, time, &transport, &maps.bars);
             }
             self.run_control_steps(plan, steps, level == 0, &ctx);
-            self.finish_steps(steps, time, &ctx);
+            self.finish_steps(plan, steps, time, &ctx);
         }
+        self.write_outputs(plan, outputs, start, frames);
         self.plans = plans;
-
-        for (channel, out) in outputs.iter_mut().enumerate() {
-            let out = &mut out[start..start + frames];
-            match channel {
-                0 => out.copy_from_slice(&self.master.left[..frames]),
-                1 => out.copy_from_slice(&self.master.right[..frames]),
-                _ => out.fill(0.0),
-            }
-        }
 
         if self.playing {
             self.tick = time.t1();
@@ -712,11 +727,62 @@ impl Engine {
         self.shared.tempo.store(self.maps.tempo.bpm_at(self.tick));
     }
 
+    /// Put the rendered block on the hardware. A channel nothing plays through is silent.
+    fn write_outputs(
+        &mut self,
+        plan: &RenderPlan,
+        outputs: &mut [&mut [f32]],
+        start: usize,
+        frames: usize,
+    ) {
+        for out in outputs.iter_mut() {
+            out[start..start + frames].fill(0.0);
+        }
+        // Main goes first, written rather than added, so a plain Set is bit exact.
+        let (l, r) = self.master.output(frames);
+        put_output(outputs, start, frames, plan.main_out, l, r, true);
+        let [sl, sr] = &mut self.scratch;
+        for hw in &plan.hardware {
+            if let Some(t) = self.tracks.get_mut(hw.input.from as usize) {
+                sl[..frames].fill(0.0);
+                sr[..frames].fill(0.0);
+                t.main_into(&mut sl[..frames], &mut sr[..frames], frames);
+                put_output(outputs, start, frames, hw.out, sl, sr, false);
+            }
+        }
+        // A preview is heard ahead of the mixer: through the Cue output if there is one, or
+        // straight on the Main output.
+        let mut done = None;
+        if let Some(cue_out) = plan.cue {
+            let [cl, cr] = &mut self.cue;
+            done = self
+                .preview
+                .render(&mut cl[..frames], &mut cr[..frames], self.sample_rate);
+            let gain = db_to_gain(self.master.mix.cue_db);
+            for i in 0..frames {
+                cl[i] *= gain;
+                cr[i] *= gain;
+            }
+            put_output(outputs, start, frames, cue_out, cl, cr, false);
+        } else if self.preview.is_active() {
+            sl[..frames].fill(0.0);
+            sr[..frames].fill(0.0);
+            done = self
+                .preview
+                .render(&mut sl[..frames], &mut sr[..frames], self.sample_rate);
+            put_output(outputs, start, frames, plan.main_out, sl, sr, false);
+        }
+        if let Some(sample) = done {
+            retire(&mut self.garbage, Garbage::Shared(sample));
+        }
+    }
+
     /// Sum what a step takes as input into its track, before its devices run. Track `tracks.len()`
     /// is the Master, and the metronome joins it there. A group or return track's buffer holds
     /// nothing else; a clip track's holds its clips, and takes no inputs yet.
     fn gather_inputs(
         &mut self,
+        plan: &RenderPlan,
         step: &Step,
         time: BlockTime,
         transport: &TransportInfo,
@@ -740,11 +806,33 @@ impl Engine {
         if to > self.tracks.len() {
             return;
         }
+        self.tracks[to].prepare_own(frames, coeff);
+        let open = self.tracks[to].monitoring();
+        self.deliver_midi(plan, to, open);
+        for sc in plan.sidechains_into(step.track) {
+            fetch_sidechain(&mut self.buses, sc, frames);
+        }
         let (before, rest) = self.tracks.split_at_mut(to);
         let Some((dest, after)) = rest.split_first_mut() else {
             return;
         };
         for input in &step.inputs {
+            if let Some(read) = input.bus {
+                if read.monitored && !open {
+                    continue;
+                }
+                if let Some(bus) = self.buses.get_mut(read.bus as usize) {
+                    let [sl, sr] = &mut self.scratch;
+                    bus.mix_into(
+                        read.reader,
+                        &mut dest.left,
+                        &mut dest.right,
+                        (sl, sr),
+                        frames,
+                    );
+                }
+                continue;
+            }
             let from = input.from as usize;
             if from == to {
                 dest.feedback_into_self(input, frames, coeff);
@@ -768,6 +856,48 @@ impl Engine {
         }
     }
 
+    /// Give a track the MIDI routed to it from earlier tracks. MIDI for its input stage only
+    /// arrives while it is monitoring; MIDI addressed to a device skips that stage.
+    fn deliver_midi(&mut self, plan: &RenderPlan, to: usize, monitoring: bool) {
+        let routes = plan.midi_into(to as u32);
+        if routes.is_empty() {
+            return;
+        }
+        for route in routes {
+            let from = route.from as usize;
+            if from == to || from >= self.tracks.len() {
+                continue;
+            }
+            let (src, dest) = two_tracks(&mut self.tracks, from, to);
+            for e in src.midi_out.iter() {
+                let mut e = *e;
+                if let Some(channel) = route.channel {
+                    e.message.set_channel(channel);
+                }
+                match route.device {
+                    Some(device) => {
+                        if dest.direct.len() < dest.direct.capacity() {
+                            dest.direct.push((device, e));
+                        }
+                    }
+                    None => {
+                        // A note let in before monitoring closed still has to end.
+                        let release = matches!(
+                            e.message,
+                            MidiMessage::NoteOff { .. } | MidiMessage::AllNotesOff
+                        );
+                        if (monitoring || release) && dest.events.len() < dest.events.capacity() {
+                            dest.events.push(e);
+                        }
+                    }
+                }
+            }
+        }
+        self.tracks[to]
+            .events
+            .sort_unstable_by_key(|e| e.sort_key());
+    }
+
     /// Resolve the parameters of some steps at each control step of the block.
     fn run_control_steps(
         &mut self,
@@ -784,7 +914,20 @@ impl Engine {
                 self.command_tick = ctx.tick_at(offset);
                 self.drain_param_commands();
             }
+            if take_commands {
+                let position = self.master.crossfader_position(ctx.tick_at(offset));
+                let gains = plan.crossfade_curve.gains(position);
+                if let Some(slot) = self.crossfade_steps.get_mut(index as usize) {
+                    *slot = gains;
+                }
+            }
+            let crossfade = self
+                .crossfade_steps
+                .get(index as usize)
+                .copied()
+                .unwrap_or((1.0, 1.0));
             let events = &mut self.events;
+            let buses = &mut self.buses;
             for step in steps {
                 let is_master = step.track == master;
                 let t = if is_master {
@@ -793,7 +936,7 @@ impl Engine {
                     self.tracks.get_mut(step.track as usize).map(|t| &mut **t)
                 };
                 if let Some(t) = t {
-                    t.control_step(index, offset, ctx, &mut |t, d, p, v| {
+                    t.control_step(index, offset, ctx, buses, &mut |t, d, p, v| {
                         let owner = if is_master {
                             TrackRef::Master
                         } else {
@@ -801,6 +944,11 @@ impl Engine {
                         };
                         push_param_changed(events, owner, d, p, v)
                     });
+                }
+            }
+            for step in steps {
+                if let Some(t) = self.tracks.get_mut(step.track as usize) {
+                    t.set_crossfade(crossfade);
                 }
             }
             if take_commands {
@@ -859,6 +1007,27 @@ impl Engine {
                 depth += 1;
             }
         }
+        if plan.cue.is_some() {
+            // Cue mode: the switches feed the Cue output instead of silencing anything.
+            for t in self.tracks.iter_mut() {
+                t.cue_on = t.soloed;
+                t.holds_solo = false;
+                t.set_solo_gates(true, true);
+            }
+            return;
+        }
+        for t in self.tracks.iter_mut() {
+            t.cue_on = false;
+        }
+        for t in self.tracks.iter_mut() {
+            t.feeders_kept = false;
+        }
+        for &(tapper, tapped) in &plan.solo_taps {
+            let soloed = self.tracks.get(tapper as usize).is_some_and(|t| t.soloed);
+            if let Some(t) = self.tracks.get_mut(tapped as usize).filter(|_| soloed) {
+                t.feeders_kept = true;
+            }
+        }
         let any_solo = any_track || any_return;
         for i in 0..self.tracks.len() {
             let t = &self.tracks[i];
@@ -870,7 +1039,10 @@ impl Engine {
             } else {
                 let (mut at, mut depth, mut soloed) = (parent(i), 0, false);
                 while let Some(g) = at.filter(|_| depth < MAX_GROUP_DEPTH && !soloed) {
-                    soloed = self.tracks.get(g).is_some_and(|t| t.soloed);
+                    soloed = self
+                        .tracks
+                        .get(g)
+                        .is_some_and(|t| t.soloed || t.feeders_kept);
                     at = parent(g);
                     depth += 1;
                 }
@@ -881,10 +1053,11 @@ impl Engine {
     }
 
     /// Run what is left of some steps' chains and take them through the mixer stage.
-    fn finish_steps(&mut self, steps: &[Step], time: BlockTime, ctx: &BlockCtx) {
+    fn finish_steps(&mut self, plan: &RenderPlan, steps: &[Step], time: BlockTime, ctx: &BlockCtx) {
         let events = &mut self.events;
         let master = self.tracks.len() as u32;
         let coeff = self.smooth_coeff;
+        let [cue_l, cue_r] = &mut self.cue;
         for step in steps {
             let is_master = step.track == master;
             let t = if is_master {
@@ -895,7 +1068,7 @@ impl Engine {
             let Some(t) = t else {
                 continue;
             };
-            t.finish_block(time, ctx, &mut |t, d, p, v| {
+            t.finish_block(time, ctx, &mut self.buses, &mut |t, d, p, v| {
                 let owner = if is_master {
                     TrackRef::Master
                 } else {
@@ -904,13 +1077,84 @@ impl Engine {
                 push_param_changed(events, owner, d, p, v)
             });
             t.prepare_sends(time.frames, coeff);
+            t.cue_into((&mut cue_l[..], &mut cue_r[..]), time.frames, coeff);
             t.apply_mix(time.frames, coeff);
+            t.write_post_mix(&mut self.buses, time.frames);
             t.feed_lines(time.frames);
+            for out in plan.taps_of(step.track) {
+                self.buses[out.bus as usize].finish(time.frames);
+            }
             if is_master {
                 let (l, r) = t.output(time.frames);
                 self.shared.master_meter.update(l, r);
             }
         }
+    }
+}
+
+/// Two different tracks at once.
+fn two_tracks(
+    tracks: &mut [Box<TrackNode>],
+    a: usize,
+    b: usize,
+) -> (&mut TrackNode, &mut TrackNode) {
+    if a < b {
+        let (head, tail) = tracks.split_at_mut(b);
+        (&mut head[a], &mut tail[0])
+    } else {
+        let (head, tail) = tracks.split_at_mut(a);
+        (&mut tail[0], &mut head[b])
+    }
+}
+
+/// Read a sidechain's source, through its delay, into the bus its device reads.
+fn fetch_sidechain(buses: &mut [taps::TapBus], sc: &SidechainIn, frames: usize) {
+    let (src, feed) = (sc.read.bus as usize, sc.feed as usize);
+    if src == feed || src.max(feed) >= buses.len() {
+        return;
+    }
+    if src < feed {
+        let (head, tail) = buses.split_at_mut(feed);
+        tail[0].fetch_from(&mut head[src], sc.read.reader, frames);
+    } else {
+        let (head, tail) = buses.split_at_mut(src);
+        head[feed].fetch_from(&mut tail[0], sc.read.reader, frames);
+    }
+}
+
+/// Put a stereo signal on a hardware output. A stereo signal into a mono output is summed and
+/// attenuated by 6 dB (manual p. 375). `write` replaces what is there rather than adding to it.
+fn put_output(
+    outputs: &mut [&mut [f32]],
+    start: usize,
+    frames: usize,
+    pair: OutputPair,
+    left: &[f32],
+    right: &[f32],
+    write: bool,
+) {
+    let channel = pair.channel as usize;
+    let mut store = |at: usize, from: &[f32], gain: Option<&[f32]>| {
+        let Some(out) = outputs.get_mut(at) else {
+            return;
+        };
+        let out = &mut out[start..start + frames];
+        match (write, gain) {
+            (true, None) => out.copy_from_slice(&from[..frames]),
+            (false, None) => out.iter_mut().zip(from).for_each(|(o, s)| *o += s),
+            (_, Some(other)) => {
+                for ((o, a), b) in out.iter_mut().zip(from).zip(other) {
+                    let s = (a + b) * 0.5;
+                    *o = if write { s } else { *o + s };
+                }
+            }
+        }
+    };
+    if pair.stereo {
+        store(channel, left, None);
+        store(channel + 1, right, None);
+    } else {
+        store(channel, left, Some(right));
     }
 }
 

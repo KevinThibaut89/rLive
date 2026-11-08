@@ -151,8 +151,14 @@ pub mod mix_cell {
     pub const PAN: CellIx = CellIx(1);
     pub const MUTE: CellIx = CellIx(2);
     pub const SOLO: CellIx = CellIx(3);
-    /// The first cell of a device, on a track.
+    /// The first send's cell, on a track.
     const FIRST_SEND: u32 = 4;
+    /// Which side of the crossfader a track is on. Comes after the sends.
+    pub const CROSSFADE_ASSIGN: CellIx = CellIx(FIRST_SEND + MAX_SENDS as u32);
+    /// The Main track's crossfader.
+    pub const CROSSFADER: CellIx = CellIx(1);
+    /// The Main track's Cue Volume.
+    pub const CUE_VOLUME: CellIx = CellIx(2);
 
     /// The cell of the send to the `n`th return track. `n` is `0..MAX_SENDS`.
     pub const fn send(n: usize) -> CellIx {
@@ -826,13 +832,19 @@ impl BusLayout {
             (solo, mix.solo as u8 as f64),
         ];
         controls.extend((0..MAX_SENDS).map(|n| (send_info(n), SEND_MIN_DB)));
+        controls.push((mixer::crossfade_assign_info(), mix.crossfade as f64));
         Self::with_mixer(&controls)
     }
 
     /// The Master's layout: its volume and no devices yet.
     pub fn for_master(volume_db: f32) -> Self {
         let [volume, ..] = mixer::infos();
-        Self::with_mixer(&[(volume, volume_db as f64)])
+        let [crossfader, cue_volume] = mixer::main_infos();
+        Self::with_mixer(&[
+            (volume, volume_db as f64),
+            (crossfader, 0.0),
+            (cue_volume, 0.0),
+        ])
     }
 
     fn take_range(&mut self, len: u32) -> u32 {

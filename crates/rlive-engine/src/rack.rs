@@ -12,6 +12,7 @@
 //! chain answers its Receive note, playing its Play note (p. 501).
 
 use crate::delay::{FadingDelay, StereoLine};
+use crate::taps::TapSlots;
 use crate::track::{run_chain, ChainRun, DeviceSlot, GainStage, Stretch, MAX_DEVICES, MAX_EVENTS};
 use rlive_core::param::{chain as controls, rack as rack_params};
 use rlive_core::{
@@ -203,6 +204,8 @@ pub struct ChainNode {
     sounding: bool,
     /// Frames in the coming stretch at which this chain is choked.
     chokes: Vec<u32>,
+    /// Which tap buses this chain writes.
+    pub(crate) taps: TapSlots,
 }
 
 impl ChainNode {
@@ -242,6 +245,7 @@ impl ChainNode {
             release_at: None,
             sounding: false,
             chokes: Vec::with_capacity(MAX_CHOKES),
+            taps: TapSlots::default(),
         }
     }
 
@@ -426,6 +430,9 @@ impl ChainNode {
                     rack_outs: at.rack_outs.as_deref_mut(),
                     from: at.from + from as u32,
                     to: at.from + to as u32,
+                    buses: &mut *at.buses,
+                    direct: at.direct,
+                    merge: &mut *at.merge,
                 };
                 run_chain(
                     &mut self.devices,
@@ -471,6 +478,17 @@ impl ChainNode {
         self.release_at = None;
         self.sounding = false;
         self.chokes.clear();
+    }
+
+    /// Publish one of this chain's points, as it stands now.
+    fn publish(&self, bus: Option<u32>, at: &mut Stretch<'_>, frames: usize) {
+        if let Some(bus) = bus {
+            at.buses[bus as usize].write(
+                at.from as usize,
+                &self.left[..frames],
+                &self.right[..frames],
+            );
+        }
     }
 
     /// Note a choke at `offset`, in order. Anything past what fits is not audible as such.
@@ -824,6 +842,7 @@ impl RackNode {
                     at.coeff,
                 );
             }
+            chain.publish(chain.taps.pre, at, frames);
             let held = chain.run_devices(frames, at);
             if forward_midi {
                 let output = held.map_or(chain.events.as_slice(), |q| chain.midi[q].as_slice());
@@ -839,6 +858,7 @@ impl RackNode {
                 }
             }
             chain.hold_back(frames);
+            chain.publish(chain.taps.post_fx, at, frames);
             chain.fader.apply_unless_unity(
                 &mut chain.left[..frames],
                 &mut chain.right[..frames],
@@ -860,6 +880,7 @@ impl RackNode {
                 frames,
                 at.coeff,
             );
+            chain.publish(chain.taps.post_mix, at, frames);
         }
 
         left.fill(0.0);
@@ -877,8 +898,10 @@ impl RackNode {
 
         for ret in self.returns.iter_mut() {
             let ret = &mut **ret;
+            ret.publish(ret.taps.pre, at, frames);
             ret.run_devices(frames, at);
             ret.hold_back(frames);
+            ret.publish(ret.taps.post_fx, at, frames);
             ret.fader.apply_unless_unity(
                 &mut ret.left[..frames],
                 &mut ret.right[..frames],
@@ -891,6 +914,7 @@ impl RackNode {
                 frames,
                 at.coeff,
             );
+            ret.publish(ret.taps.post_mix, at, frames);
             let (l, r) = (&ret.left[..frames], &ret.right[..frames]);
             let outs = at.rack_outs.as_deref_mut();
             match (ret.mix.output, outs) {

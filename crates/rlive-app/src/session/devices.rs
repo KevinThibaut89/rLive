@@ -763,6 +763,9 @@ pub(super) fn mixer_cell_of(chain: ChainRef, control: ParamId) -> Option<CellIx>
         (ChainRef::Track(_), mixer::PAN) => Some(mix_cell::PAN),
         (ChainRef::Track(_), mixer::MUTE) => Some(mix_cell::MUTE),
         (ChainRef::Track(_), mixer::SOLO) => Some(mix_cell::SOLO),
+        (ChainRef::Track(_), mixer::CROSSFADE_ASSIGN) => Some(mix_cell::CROSSFADE_ASSIGN),
+        (ChainRef::Master, mixer::CROSSFADER) => Some(mix_cell::CROSSFADER),
+        (ChainRef::Master, mixer::CUE_VOLUME) => Some(mix_cell::CUE_VOLUME),
         (ChainRef::Track(_), ParamId(id)) if id >= mixer::FIRST_SEND.0 => {
             let n = (id - mixer::FIRST_SEND.0) as usize;
             (n < rlive_engine::MAX_SENDS).then(|| mix_cell::send(n))

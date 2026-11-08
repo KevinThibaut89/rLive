@@ -106,6 +106,20 @@ pub enum MidiMessage {
 }
 
 impl MidiMessage {
+    /// Put this message on another channel. `AllNotesOff` has none to change.
+    pub fn set_channel(&mut self, new: u8) {
+        match self {
+            Self::NoteOn { channel, .. }
+            | Self::NoteOff { channel, .. }
+            | Self::NoteExpr { channel, .. }
+            | Self::ControlChange { channel, .. }
+            | Self::PitchBend { channel, .. }
+            | Self::ChannelPressure { channel, .. }
+            | Self::ProgramChange { channel, .. } => *channel = new,
+            Self::AllNotesOff => {}
+        }
+    }
+
     /// Parse a raw MIDI 1.0 message (as delivered by `midir`).
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let status = *bytes.first()?;

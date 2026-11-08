@@ -2,8 +2,8 @@ use crate::defaults::is_default;
 use crate::id_walk::walk_ids;
 use crate::migrate;
 use crate::{
-    Arrangement, Clip, ClipContent, Device, DeviceKind, FileRef, GroovePool, KeyMapping,
-    MidiMapping, NoteData, Scene, Track, TrackKind, Tuning,
+    Arrangement, Clip, ClipContent, Device, DeviceKind, ExternalRoute, FileRef, GroovePool,
+    KeyMapping, MidiMapping, NoteData, Scene, Track, TrackKind, Tuning,
 };
 use rlive_core::{ids::reserve_id, Quantize, TimeSignature, TrackId, PPQ};
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,17 @@ impl Default for Crossfader {
     }
 }
 
+/// The Solo/Cue switch and the Cue Out (manual pp. 406-407).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CueSettings {
+    /// Solo switches are replaced by Cue switches.
+    pub cue_mode: bool,
+    /// The hardware output for cueing: one channel, or the first of a stereo pair.
+    pub out: Option<ExternalRoute>,
+    pub volume_db: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     pub version: u32,
@@ -71,6 +82,8 @@ pub struct Project {
     pub returns: Vec<Track>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub crossfader: Crossfader,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub cue: CueSettings,
     #[serde(default, skip_serializing_if = "is_default")]
     pub groove_pool: GroovePool,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -163,6 +176,7 @@ impl Project {
             arrangement: Arrangement::default(),
             returns: Vec::new(),
             crossfader: Crossfader::default(),
+            cue: CueSettings::default(),
             groove_pool: GroovePool::default(),
             tuning: None,
             midi_mappings: Vec::new(),

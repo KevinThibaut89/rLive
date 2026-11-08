@@ -461,6 +461,32 @@ fn controls(
     for slot in 0..rt.sample_slots {
         sample_row(&mut bu, cx, chain, dev, slot, body.width());
     }
+    if rt.sidechain_input && !is_plugin {
+        let mut picked = None;
+        let current = super::in_out::sidechain_label(cx.session, dev.id);
+        let response = egui::ComboBox::from_id_salt(("sidechain", dev.id))
+            .width((body.width() - 8.0).min(150.0))
+            .selected_text(RichText::new(current).size(10.0))
+            .show_ui(&mut bu, |ui| {
+                ui.set_min_width(170.0);
+                if ui.selectable_label(false, "No Input").clicked() {
+                    picked = Some(None);
+                }
+                for (label, source) in cx.session.sidechain_sources(dev.id) {
+                    if ui.selectable_label(false, label).clicked() {
+                        picked = Some(Some(source));
+                    }
+                }
+            })
+            .response;
+        info(
+            response,
+            "Sidechain Input — the track that keys this device",
+        );
+        if let Some(source) = picked {
+            cx.queue.push(chain, Action::SetSidechain(dev.id, source));
+        }
+    }
 
     let grid_top = bu.cursor().top();
     let mut x = body.left();

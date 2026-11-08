@@ -5,6 +5,7 @@ mod browser;
 pub mod commands;
 mod devices;
 mod icons;
+mod in_out;
 mod info_view;
 pub mod keymap;
 #[cfg(target_os = "macos")]
@@ -21,8 +22,8 @@ pub mod widgets;
 use crate::audio::{self, AudioOutput};
 use crate::midi_input::{MidiInput, MidiRouting};
 use crate::session::InfoTarget;
-use crate::session::{ChainRef, ClipRef, Session};
-use crate::settings::Settings;
+use crate::session::{AudioHardware, ChainRef, ClipRef, Session};
+use crate::settings::{ChannelBank, DeviceChannels, Settings};
 use commands::{ClipBoard, MenuCommand};
 use egui::{Align2, Key, Pos2, Rect, RichText, Sense, Stroke, UiBuilder, Vec2};
 use keymap::{FocusArea, KeyContext, KeyState, Platform};
@@ -111,6 +112,10 @@ pub struct UiState {
     audio_devices: Option<Vec<String>>,
     midi_ports: Option<Vec<String>>,
     tap_times: Vec<f64>,
+    /// The hardware channels the In/Out choosers offer, from the Channel Configuration.
+    pub hardware: AudioHardware,
+    /// Whether clicking a sample in the browser plays it.
+    pub preview_samples: bool,
 }
 
 pub struct RliveApp {
@@ -218,6 +223,8 @@ impl RliveApp {
             audio_devices: None,
             midi_ports: None,
             tap_times: Vec::new(),
+            hardware: AudioHardware::default(),
+            preview_samples: false,
         };
         if let Some(dir) = &settings.sample_dir {
             ui.sample_files = browser::list_samples(dir);
@@ -563,6 +570,18 @@ impl RliveApp {
         let m = self.session.engine.shared.master_meter.take();
         self.ui.master_meter.update(m, dt);
         active || self.ui.master_meter.active()
+    }
+
+    /// What the In/Out choosers can address: the device's channels, as configured.
+    fn refresh_hardware(&mut self) {
+        let config = self.settings.audio_channels.get(&self.audio.device_name);
+        let bank = |pick: fn(&DeviceChannels) -> &ChannelBank, count: usize| {
+            config.map(pick).cloned().unwrap_or_default().routes(count)
+        };
+        self.ui.hardware = AudioHardware {
+            outputs: bank(|c| &c.outputs, self.audio.output_channels),
+            inputs: bank(|c| &c.inputs, self.audio.input_channels),
+        };
     }
 
     /// Live-style control bar: tempo & signature left, transport centre, status right.
@@ -1134,6 +1153,7 @@ impl eframe::App for RliveApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.ui.devices.begin_frame();
+        self.refresh_hardware();
         let meters_moving = self.update_meters();
         // Repaint continuously only while something animates; otherwise egui repaints on input.
         if self.session.is_playing() || meters_moving || self.ui.scan_rx.is_some() {

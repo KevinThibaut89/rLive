@@ -1,7 +1,7 @@
 use crate::defaults::is_default;
 use crate::{ArrangementClip, Clip, Device, Envelope, TakeLane};
 use rlive_core::param::EnvTarget;
-use rlive_core::{DeviceId, TrackId};
+use rlive_core::{ChainId, DeviceId, TrackId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,12 +44,16 @@ pub enum Route {
     Resampling,
     /// Output only: the track reaches the mix through its sends alone.
     SendsOnly,
-    /// Another track, or one of its devices wherever it is nested.
+    /// Another track, or one of its devices wherever it is nested. As an output, `device` is
+    /// what the Output Channel chooser addresses: `None` is Track In, and otherwise a device's
+    /// sidechain input for audio, or the device itself for MIDI.
     Track {
         track: TrackId,
         #[serde(default, skip_serializing_if = "is_default")]
         device: Option<DeviceId>,
     },
+    /// MIDI output only: another track, on one channel of a multi-timbral instrument there.
+    TrackChannel { track: TrackId, channel: u8 },
 }
 
 /// Hardware audio channels or a MIDI port.
@@ -64,6 +68,18 @@ pub enum ExternalRoute {
     },
 }
 
+/// A point along one chain of a rack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ChainTap {
+    /// Where the signal enters the rack, before the chain's devices.
+    PreFx,
+    /// The end of the chain, before its mixer.
+    PostFx,
+    /// The output of the chain's mixer, just before the rack sums its chains.
+    #[default]
+    PostMixer,
+}
+
 /// Where in another track's signal path a track listens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Tap {
@@ -71,6 +87,24 @@ pub enum Tap {
     PostFx,
     #[default]
     PostMixer,
+    /// A point in a chain or return chain of a rack in the tapped track.
+    Chain {
+        chain: ChainId,
+        point: ChainTap,
+    },
+    /// An extra output of an instrument in the tapped track.
+    Aux {
+        device: DeviceId,
+        output: u8,
+    },
+}
+
+impl Tap {
+    /// Soloing a track that taps this point still lets the tapped signal through. Only the
+    /// post-mixer tap is silenced with the track it comes from (manual p. 382).
+    pub fn hears_through_solo(&self) -> bool {
+        !matches!(self, Tap::PostMixer)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -79,6 +113,17 @@ pub enum Monitor {
     #[default]
     Auto,
     Off,
+}
+
+impl Monitor {
+    /// What Return to Default gives a track of this kind (manual p. 374).
+    pub fn default_for(kind: TrackKind) -> Self {
+        if kind == TrackKind::Audio {
+            Monitor::Off
+        } else {
+            Monitor::Auto
+        }
+    }
 }
 
 /// A track's connections, as the In/Out section of the mixer shows them.

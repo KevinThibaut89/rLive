@@ -156,6 +156,7 @@ impl Session {
         // Group, send and return changes all end up here: the sends' positions settle last.
         self.push_all_sends();
         self.send_track_edits(Vec::new());
+        self.refresh_wiring();
     }
 
     /// What undo doesn't cover about a device, as remembered when it left the project.
@@ -218,6 +219,20 @@ impl Session {
         if !unchanged {
             self.set_cell(ChainRef::Master, mix_cell::VOLUME, db, false);
         }
+        let crossfader = self.project.crossfader.position as f64;
+        let cue_db = self.project.cue.volume_db as f64;
+        for (cell, value) in [
+            (mix_cell::CROSSFADER, crossfader),
+            (mix_cell::CUE_VOLUME, cue_db),
+        ] {
+            let unchanged = self
+                .layouts
+                .get(&ChainRef::Master)
+                .is_some_and(|l| l.base(cell) == Some(value));
+            if !unchanged {
+                self.set_cell(ChainRef::Master, cell, value, false);
+            }
+        }
         self.restore_chain(ChainRef::Master, &s.devices);
         if automation_changed {
             self.send_routes(TrackRef::Master);
@@ -272,6 +287,7 @@ impl Session {
             arrangement: _,
             returns: _,
             crossfader,
+            cue,
             groove_pool,
             tuning,
             midi_mappings,
@@ -299,6 +315,7 @@ impl Session {
         p.quantize = *quantize;
         p.metronome = *metronome;
         p.crossfader = *crossfader;
+        p.cue = cue.clone();
         p.groove_pool = groove_pool.clone();
         p.tuning = tuning.clone();
         p.midi_mappings = midi_mappings.clone();
@@ -632,11 +649,13 @@ impl Session {
             params,
             expanded: _,
             info,
+            sidechain,
         } = d;
         *name = s.shell.name.clone();
         *bypass = s.shell.bypass;
         params.clone_from(&s.shell.params);
         *info = s.shell.info.clone();
+        *sidechain = s.shell.sidechain;
         match (kind, &s.shell.kind) {
             (
                 DeviceKind::Builtin {

@@ -10,7 +10,7 @@
 use std::cell::Cell;
 use std::ffi::{c_char, c_void, CString};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::{ptr, slice};
 
 use vst3::{uid, Class, ComRef, ComWrapper, Steinberg::Vst::*, Steinberg::*};
@@ -58,6 +58,8 @@ const PLUGIN_NAME: &'static str = "Gain (vst3-rs example plugin)";
 
 struct GainProcessor {
     gain: AtomicU64,
+    /// The host has switched the sidechain bus on.
+    sidechain: AtomicBool,
 }
 
 impl Class for GainProcessor {
@@ -70,6 +72,7 @@ impl GainProcessor {
     fn new() -> GainProcessor {
         GainProcessor {
             gain: AtomicU64::new(1.0f64.to_bits()),
+            sidechain: AtomicBool::new(false),
         }
     }
 }
@@ -97,7 +100,8 @@ impl IComponentTrait for GainProcessor {
     unsafe fn getBusCount(&self, mediaType: MediaType, dir: BusDirection) -> i32 {
         match mediaType as BusDirections {
             MediaTypes_::kAudio => match dir as BusDirections {
-                BusDirections_::kInput => 1,
+                // A second input bus takes the sidechain.
+                BusDirections_::kInput => 2,
                 BusDirections_::kOutput => 1,
                 _ => 0,
             },
@@ -125,6 +129,18 @@ impl IComponentTrait for GainProcessor {
                         copy_wstring("Input", &mut bus.name);
                         bus.busType = BusTypes_::kMain as BusType;
                         bus.flags = BusInfo_::BusFlags_::kDefaultActive as u32;
+
+                        kResultOk
+                    }
+                    1 => {
+                        let bus = &mut *bus;
+
+                        bus.mediaType = MediaTypes_::kAudio as MediaType;
+                        bus.direction = BusDirections_::kInput as BusDirection;
+                        bus.channelCount = 2;
+                        copy_wstring("Sidechain", &mut bus.name);
+                        bus.busType = BusTypes_::kAux as BusType;
+                        bus.flags = 0;
 
                         kResultOk
                     }
@@ -162,11 +178,17 @@ impl IComponentTrait for GainProcessor {
 
     unsafe fn activateBus(
         &self,
-        _media_type: MediaType,
-        _dir: BusDirection,
-        _index: i32,
-        _state: TBool,
+        media_type: MediaType,
+        dir: BusDirection,
+        index: i32,
+        state: TBool,
     ) -> tresult {
+        if media_type as MediaTypes == MediaTypes_::kAudio
+            && dir as BusDirections == BusDirections_::kInput
+            && index == 1
+        {
+            self.sidechain.store(state != 0, Ordering::Relaxed);
+        }
         kResultOk
     }
 
@@ -285,7 +307,7 @@ impl IAudioProcessorTrait for GainProcessor {
 
         let num_samples = process_data.numSamples as usize;
 
-        if process_data.numInputs != 1 || process_data.numOutputs != 1 {
+        if process_data.numInputs < 1 || process_data.numOutputs != 1 {
             return kResultOk;
         }
 
@@ -315,6 +337,20 @@ impl IAudioProcessorTrait for GainProcessor {
         for i in 0..num_samples {
             output_l[i] = gain * input_l[i];
             output_r[i] = gain * input_r[i];
+        }
+
+        // Keyed from a second bus when the host has switched it on: the key is added to the output.
+        if input_buses.len() > 1 && self.sidechain.load(Ordering::Relaxed) {
+            let key = slice::from_raw_parts(
+                input_buses[1].__field0.channelBuffers32,
+                input_buses[1].numChannels as usize,
+            );
+            let key_l = slice::from_raw_parts(key[0], num_samples);
+            let key_r = slice::from_raw_parts(key[1], num_samples);
+            for i in 0..num_samples {
+                output_l[i] += key_l[i];
+                output_r[i] += key_r[i];
+            }
         }
 
         kResultOk

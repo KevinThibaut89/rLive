@@ -12,6 +12,8 @@ super::domain! {
         ToggleBrowser,
         ToggleDetail,
         ToggleMixer,
+        ToggleInOut,
+        ToggleCrossfader,
         ToggleInfoView,
         ToggleClipView,
         ToggleDeviceView,
@@ -41,6 +43,8 @@ pub const MENU: &[Entry] = &[
     Item("Browser", M::View(View::ToggleBrowser)),
     Item("Detail View", M::View(View::ToggleDetail)),
     Item("Mixer", M::View(View::ToggleMixer)),
+    Item("In/Out", M::View(View::ToggleInOut)),
+    Item("Crossfader", M::View(View::ToggleCrossfader)),
     Item("Info View", M::View(View::ToggleInfoView)),
     Separator,
     Item("Zoom In", M::View(View::ZoomIn)),
@@ -53,6 +57,11 @@ impl RliveApp {
         s.check(M::View(View::ToggleBrowser), self.ui.show_browser);
         s.check(M::View(View::ToggleDetail), self.ui.show_detail);
         s.check(M::View(View::ToggleMixer), self.ui.layout.show_mixer);
+        s.check(M::View(View::ToggleInOut), self.ui.layout.show_in_out);
+        s.check(
+            M::View(View::ToggleCrossfader),
+            self.ui.layout.show_crossfader,
+        );
         s.check(M::View(View::ToggleInfoView), self.ui.show_info);
     }
 
@@ -114,6 +123,10 @@ impl RliveApp {
             View::ToggleBrowser => self.toggle_browser(),
             View::ToggleDetail => self.toggle_detail(),
             View::ToggleMixer => self.ui.layout.show_mixer = !self.ui.layout.show_mixer,
+            View::ToggleInOut => self.ui.layout.show_in_out = !self.ui.layout.show_in_out,
+            View::ToggleCrossfader => {
+                self.ui.layout.show_crossfader = !self.ui.layout.show_crossfader
+            }
             View::ToggleInfoView => self.toggle_info_view(),
             View::ToggleClipView => self.toggle_detail_side(Detail::Clip),
             View::ToggleDeviceView => self.toggle_detail_side(Detail::Devices),

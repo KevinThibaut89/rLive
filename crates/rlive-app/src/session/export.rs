@@ -1,12 +1,14 @@
 //! Offline rendering to WAV files.
 
 use super::graph::compile_with;
-use super::timing::{compensation_ops, RuntimeLatency, Timing};
+use super::timing::{bus_shape, buses_op, compensation_ops, RuntimeLatency, Timing};
 use super::{Builder, Session};
 use rlive_audio_io::SampleStatus;
 use rlive_core::Quantize;
 use rlive_engine::shared::TrackShared;
-use rlive_engine::{EngineCommand, GraphOp, GraphTxn, LaunchCmd, TransportCmd, MAX_TRACKS};
+use rlive_engine::{
+    EngineCommand, GraphOp, GraphTxn, LaunchCmd, OutputPair, TransportCmd, MAX_TRACKS,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -73,6 +75,7 @@ impl Session {
             max_block,
             plugins: &self.plugins,
             samples: &mut self.samples,
+            wiring: &self.wiring,
         };
         let p = &self.project;
         let mut tracks = Vec::with_capacity(MAX_TRACKS);
@@ -92,7 +95,10 @@ impl Session {
         let p = &self.project;
         let maps = super::build::time_maps(p);
         let timing = Timing::measure(p, sample_rate, &RuntimeLatency(&runtimes));
-        let plan = compile_with(p, &timing);
+        let mut plan = compile_with(p, &timing);
+        // Whatever the hardware is, an export is the Main output on two channels.
+        plan.main_out = OutputPair::default();
+        plan.cue = None;
         // The render starts this much late, and is one this much longer, for the audio that
         // leaves the Master in its first frames.
         let lead_in = plan.output_latency as usize;
@@ -100,6 +106,7 @@ impl Session {
             tracks: Box::new(tracks),
             master,
         }];
+        ops.push(buses_op(&bus_shape(&plan), max_block));
         ops.extend(compensation_ops(&plan, &timing, p, max_block));
         let mut cmds = vec![
             EngineCommand::Graph(GraphTxn::new(ops, Some(plan))),

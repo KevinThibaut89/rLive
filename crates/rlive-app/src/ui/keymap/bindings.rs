@@ -139,7 +139,7 @@ pub static BINDINGS: &[Binding] = &[
     a("42.1", All, "Hide/show Browser", k(CMD_ALT, Key::B), L(M::View(View::ToggleBrowser))),
     a("42.1", All, "Hide/show Browser", k(CMD_ALT, Key::Num5), L(M::View(View::ToggleBrowser))),
     a("42.1", All, "Hide/show Overview", k(CMD_ALT, Key::O), p!("C2")),
-    a("42.1", All, "Hide/show In/Out", k(CMD_ALT, Key::I), p!("A5")),
+    a("42.1", All, "Hide/show In/Out", k(CMD_ALT, Key::I), L(M::View(View::ToggleInOut))),
     a("42.1", All, "Hide/show Sends", k(CMD_ALT, Key::S), p!("C17")),
     a("42.1", All, "Hide/show Mixer", k(CMD_ALT, Key::M), L(M::View(View::ToggleMixer))),
     a("42.1", All, "Hide/show Clip View", k(CMD_ALT, Key::Num3), L(M::View(View::ToggleClipView))),

@@ -549,6 +549,8 @@ pub fn instantiate(
     );
     let mut handle = ClapHandle {
         inst,
+        has_sidechain: inputs.len() > 1,
+        aux_count: outputs.len().saturating_sub(1),
         desc: desc.clone(),
         params: Vec::new(),
         editor: None,
@@ -570,6 +572,8 @@ enum Editor {
 
 pub struct ClapHandle {
     inst: Arc<ClapInstance>,
+    has_sidechain: bool,
+    aux_count: usize,
     desc: PluginDescriptor,
     params: Vec<ParamInfo>,
     editor: Option<Editor>,
@@ -681,6 +685,16 @@ impl ClapHandle {
 impl PluginHandle for ClapHandle {
     fn descriptor(&self) -> &PluginDescriptor {
         &self.desc
+    }
+
+    fn sidechain_input(&self) -> bool {
+        self.has_sidechain
+    }
+
+    fn aux_outputs(&self) -> Vec<String> {
+        (0..self.aux_count)
+            .map(|n| format!("Output {}", n + 2))
+            .collect()
     }
 
     fn params(&self) -> Vec<ParamInfo> {

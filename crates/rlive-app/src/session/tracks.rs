@@ -6,7 +6,7 @@ use rlive_core::{MidiMessage, TrackId};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{mix_cell, EngineCommand, GraphOp, RecordCmd, TrackNode};
 use rlive_project::history::ParkedTrack;
-use rlive_project::{Device, Track, TrackKind};
+use rlive_project::{Device, Route, Track, TrackKind};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -232,6 +232,7 @@ impl Session {
             (mix_cell::PAN, mix.pan as f64),
             (mix_cell::MUTE, mix.mute as u8 as f64),
             (mix_cell::SOLO, mix.solo as u8 as f64),
+            (mix_cell::CROSSFADE_ASSIGN, mix.crossfade as f64),
         ] {
             let unchanged = self
                 .layouts
@@ -254,12 +255,14 @@ impl Session {
     pub fn set_arm(&mut self, id: TrackId, arm: bool, exclusive: bool) {
         for t in self.project.tracks.iter_mut() {
             if t.id == id {
-                t.arm = arm;
+                t.arm = arm && t.routing.input != Route::None;
             } else if exclusive && arm {
                 t.arm = false;
             }
         }
         self.update_midi_targets();
+        // Auto monitoring follows the Arm button.
+        self.send_track_edits(Vec::new());
     }
 
     /// Armed tracks receive MIDI; if none are armed, the selected track does (set by the UI).

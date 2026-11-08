@@ -5,7 +5,7 @@
 //! the engine inside a [`GraphTxn`](crate::GraphTxn), together with the edits it was compiled for.
 
 use crate::params::CellIx;
-use rlive_core::{ChainId, DeviceId, TrackId};
+use rlive_core::{ChainId, CrossfadeCurve, DeviceId, TrackId};
 use std::ops::Range;
 
 /// How deep racks can nest. Bounds the audio thread's recursion and a [`ChainPath`]'s size.
@@ -115,12 +115,31 @@ pub struct RenderPlan {
     pub steps: Vec<Step>,
     /// Ranges of `steps` that depend on each other only through earlier levels.
     pub levels: Vec<Range<u32>>,
-    /// Shared buffers the plan needs beyond the tracks' own. None yet.
+    /// Shared buffers the plan needs beyond the tracks' own: one per entry of `tap_outs`, plus a
+    /// feed for each sidechain.
     pub buses: u32,
-    /// Audio routed to devices' sidechain inputs. None yet.
+    /// The signals tracks publish for others to read, sorted by track.
+    pub tap_outs: Vec<TapOut>,
+    /// Audio routed to devices' sidechain inputs.
     pub sidechains: Vec<SidechainIn>,
-    /// For each track, the group it is directly in. Solo needs this: a soloed track's groups stay
-    /// open, and a soloed group keeps everything in it audible. Empty is no groups at all.
+    /// MIDI routed between tracks, sorted by the receiving track.
+    pub midi: Vec<MidiRoute>,
+    /// What each track's own input stage does. Empty is the default for every track.
+    pub io: Vec<TrackIo>,
+    /// Tracks heard through hardware outputs of their own.
+    pub hardware: Vec<HardwareOut>,
+    /// The hardware the Main output goes to.
+    pub main_out: OutputPair,
+    /// The output that Cue switches go to, when Solo/Cue is set to Cue.
+    pub cue: Option<OutputPair>,
+    /// The crossfader's curve.
+    pub crossfade_curve: CrossfadeCurve,
+    /// `(tapper, tapped)`: soloing the tapper keeps what feeds the tapped track, since a tap ahead
+    /// of the tapped track's mixer has to go on hearing it (manual p. 382).
+    pub solo_taps: Vec<(u32, u32)>,
+    /// For each track, what solo should treat as containing it: the track its output feeds, or
+    /// else its group. A soloed track keeps what contains it open, and a soloed container keeps
+    /// what feeds it audible (manual p. 381). Empty is no groups at all.
     pub groups: Vec<Option<u32>>,
     /// Which tracks are return tracks: they sit at the end of the tracks, before the Master.
     pub returns: Range<u32>,
@@ -156,6 +175,18 @@ pub struct BusIn {
     /// Takes what `from` produced a fixed time ago rather than this block, which is the only way
     /// a track can hear itself or a track rendering after it (a feedback send).
     pub feedback: bool,
+    /// Reads a tap bus. Such an input is a track tapping another as its input, so it only comes
+    /// through while the track is monitoring.
+    pub bus: Option<BusRead>,
+}
+
+/// A place on a [`TapBus`](crate::taps::TapBus): which bus, and which of its readers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BusRead {
+    pub bus: u32,
+    pub reader: u16,
+    /// A track's own input, which only comes through while it is monitoring.
+    pub monitored: bool,
 }
 
 impl BusIn {
@@ -167,6 +198,19 @@ impl BusIn {
             gain: None,
             delay: 0,
             feedback: false,
+            bus: None,
+        }
+    }
+
+    /// Another track's signal as this track's input, read from a tap bus.
+    pub fn tapped(from: u32, tap: Tap, read: BusRead) -> Self {
+        Self {
+            from,
+            tap,
+            gain: None,
+            delay: 0,
+            feedback: false,
+            bus: Some(read),
         }
     }
 
@@ -182,6 +226,7 @@ impl BusIn {
             gain: Some(level),
             delay: 0,
             feedback: false,
+            bus: None,
         }
     }
 }
@@ -192,20 +237,90 @@ pub enum Tap {
     PreFx,
     PostFx,
     PostMixer,
-    /// A tap inside a chain of a rack, by the chain's id.
+    /// A tap inside a chain or return chain of a rack, by the chain's id.
     Chain(ChainId, Box<Tap>),
     /// A device's extra output bus. For a rack, the return chains routed to the Set's return
     /// tracks come out of slot `n` of the track's rack outputs.
     Aux(DeviceId, u8),
 }
 
+/// A signal one track publishes on a tap bus.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TapOut {
+    pub track: u32,
+    pub tap: Tap,
+    pub bus: u32,
+}
+
 /// A signal routed to a device's sidechain input.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SidechainIn {
     pub device: DeviceId,
+    /// The track holding the device. Rendered after `from`.
+    pub to: u32,
     pub from: u32,
     pub tap: Tap,
+    /// Frames to hold the signal back, so it reaches the device in step with what it keys.
     pub delay: u32,
+    /// The tap bus it reads.
+    pub read: BusRead,
+    /// The bus the device reads, holding the signal after its delay.
+    pub feed: u32,
+}
+
+/// MIDI from one track to another, taken after MIDI effects and before any instrument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MidiRoute {
+    pub from: u32,
+    pub to: u32,
+    /// `None` is Track In, which goes through monitoring. Otherwise a device in the receiving
+    /// track, addressed directly.
+    pub device: Option<DeviceId>,
+    /// Sends every event on this channel, for a multi-timbral instrument.
+    pub channel: Option<u8>,
+}
+
+/// When a track's input is heard through it (manual p. 374).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InputGate {
+    /// `Off`, or `Auto` on an unarmed track.
+    #[default]
+    Never,
+    /// `Auto` on an armed track: while no clip is playing.
+    WhenIdle,
+    /// `In`: always, with the output of clips suppressed.
+    Always,
+}
+
+/// What a track does at the top of its chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TrackIo {
+    pub gate: InputGate,
+    /// Frames to hold the clips back by, so they stay with its later inputs.
+    pub own_delay: u32,
+}
+
+/// A hardware output: one channel, or the first of a pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputPair {
+    pub channel: u16,
+    pub stereo: bool,
+}
+
+impl Default for OutputPair {
+    fn default() -> Self {
+        Self {
+            channel: 0,
+            stereo: true,
+        }
+    }
+}
+
+/// A track whose output goes to its own hardware output instead of the Main output.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HardwareOut {
+    pub input: BusIn,
+    pub out: OutputPair,
 }
 
 impl RenderPlan {
@@ -215,7 +330,15 @@ impl RenderPlan {
             steps: Vec::with_capacity(tracks + 1),
             levels: Vec::with_capacity(2),
             buses: 0,
+            tap_outs: Vec::new(),
             sidechains: Vec::new(),
+            midi: Vec::new(),
+            io: Vec::new(),
+            hardware: Vec::new(),
+            main_out: OutputPair::default(),
+            cue: None,
+            crossfade_curve: CrossfadeCurve::default(),
+            solo_taps: Vec::new(),
             groups: Vec::new(),
             returns: 0..0,
             solo_in_place: true,
@@ -263,13 +386,20 @@ impl RenderPlan {
         let tiled = self.levels.iter().try_fold(0, |end, level| {
             (level.start == end && level.end >= level.start).then_some(level.end)
         });
-        let renderable = self.buses == 0 && self.sidechains.is_empty();
+        let bus_ok = |b: u32| b < self.buses;
+        let wired = self.tap_outs.len() + self.sidechains.len() == self.buses as usize
+            && self.tap_outs.iter().all(|t| bus_ok(t.bus))
+            && self
+                .sidechains
+                .iter()
+                .all(|s| bus_ok(s.read.bus) && bus_ok(s.feed));
         if tiled != Some(self.steps.len() as u32)
-            || !renderable
+            || !wired
             || tracks > crate::MAX_TRACKS
             || self.steps.len() != tracks + 1
             || self.returns.start > self.returns.end
             || self.returns.end > tracks as u32
+            || !(self.io.is_empty() || self.io.len() == tracks)
         {
             return false;
         }
@@ -296,27 +426,69 @@ impl RenderPlan {
                 }
             }
         }
-        self.levels.iter().enumerate().all(|(level, range)| {
+        let inputs_fit = self.levels.iter().enumerate().all(|(level, range)| {
             self.steps[range.start as usize..range.end as usize]
                 .iter()
                 .all(|s| {
                     s.inputs.iter().all(|i| {
                         let from = i.from as usize;
+                        let readable = match i.bus {
+                            Some(read) => bus_ok(read.bus),
+                            // Read straight off the source, a rack output can't be held back.
+                            None => {
+                                matches!(i.tap, Tap::PostMixer | Tap::PostFx | Tap::Aux(..))
+                                    && !(matches!(i.tap, Tap::Aux(..)) && i.delay != 0)
+                            }
+                        };
                         from < tracks
-                            && matches!(i.tap, Tap::PostMixer | Tap::PostFx | Tap::Aux(..))
-                            && !(matches!(i.tap, Tap::Aux(..)) && i.delay != 0)
+                            && readable
                             // A feedback tap is already as late as it can be.
                             && (i.delay == 0 || !i.feedback)
                             // Rendered already, unless it is explicitly a feedback tap.
                             && (i.feedback || (level_of[from] as usize) < level)
                     })
                 })
-        })
+        });
+        let before = |from: u32, to: u32| {
+            (from as usize) < tracks
+                && (to as usize) < tracks
+                && level_of[from as usize] < level_of[to as usize]
+        };
+        inputs_fit
+            && self.midi.iter().all(|m| before(m.from, m.to))
+            && self.sidechains.iter().all(|s| before(s.from, s.to))
+            && self.tap_outs.iter().all(|t| (t.track as usize) < tracks)
+            && self
+                .hardware
+                .iter()
+                .all(|h| (h.input.from as usize) < tracks)
+    }
+
+    /// The tap buses a track publishes, in `tap_outs`.
+    pub(crate) fn taps_of(&self, track: u32) -> &[TapOut] {
+        let start = self.tap_outs.partition_point(|t| t.track < track);
+        let end = start + self.tap_outs[start..].partition_point(|t| t.track == track);
+        &self.tap_outs[start..end]
+    }
+
+    /// The MIDI a track receives, in `midi`.
+    pub(crate) fn midi_into(&self, track: u32) -> &[MidiRoute] {
+        let start = self.midi.partition_point(|m| m.to < track);
+        let end = start + self.midi[start..].partition_point(|m| m.to == track);
+        &self.midi[start..end]
+    }
+
+    pub(crate) fn sidechains_into(&self, track: u32) -> impl Iterator<Item = &SidechainIn> {
+        self.sidechains.iter().filter(move |s| s.to == track)
+    }
+
+    pub(crate) fn io_of(&self, track: u32) -> TrackIo {
+        self.io.get(track as usize).copied().unwrap_or_default()
     }
 }
 
-/// The engine's audio channels for one call. Channel 0 is the left output, 1 the right; any more
-/// are silent for now.
+/// The engine's audio channels for one call. Which channels carry what is up to the plan: the
+/// Main output is on its `main_out`, 0 and 1 unless told otherwise. Inputs are not read yet.
 pub struct AudioIo<'a> {
     pub inputs: &'a [&'a [f32]],
     pub outputs: &'a mut [&'a mut [f32]],

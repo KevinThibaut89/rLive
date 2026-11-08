@@ -109,6 +109,11 @@ impl Category {
 
 const ROW_H: f32 = 19.0;
 
+/// Where a row records that it was clicked, for the browser to preview it once it's drawn.
+fn clicked_row() -> Id {
+    Id::unique("rlive_browser_clicked_row")
+}
+
 /// One list row: hover highlight, drag source, double-click to apply.
 fn row(
     ui: &mut egui::Ui,
@@ -164,6 +169,9 @@ fn row(
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     }
     let double = resp.double_clicked();
+    if resp.clicked() {
+        ui.data_mut(|d| d.insert_temp(clicked_row(), Some(item.clone())));
+    }
     resp.dnd_set_drag_payload(item.clone());
     info(resp, hover);
     double.then_some(item)
@@ -280,6 +288,11 @@ fn list_category(
                             state.sample_files = list_samples(d);
                         }
                     }
+                    let r = ui.toggle_value(&mut state.preview_samples, "Preview");
+                    info(
+                        r,
+                        "Preview — click a sample to hear it, through Cue when it's on",
+                    );
                 });
             }
             let base = settings.sample_dir.clone().unwrap_or_default();
@@ -321,6 +334,7 @@ pub fn show(
     let full = ui.max_rect();
     // Claim the whole panel so egui keeps its size (children don't advance the cursor).
     ui.expand_to_include_rect(full);
+    let previewing = state.preview_samples;
     // Search
     let search = Rect::from_min_size(
         full.min + Vec2::new(6.0, 6.0),
@@ -409,6 +423,13 @@ pub fn show(
 
     if let Some(item) = activate {
         apply(session, state, &item);
+    }
+    let clicked: Option<BrowserItem> = ui.data_mut(|d| d.remove_temp(clicked_row())).flatten();
+    if let (Some(BrowserItem::Sample(path)), true) = (&clicked, state.preview_samples) {
+        session.preview_file(path);
+    }
+    if previewing && !state.preview_samples {
+        session.stop_preview();
     }
 }
 
