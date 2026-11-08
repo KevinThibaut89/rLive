@@ -1,4 +1,12 @@
 [package]
 name = "rlive-project"
+description = "Project/session model and file format for the rLive DAW"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rlive-core.workspace = true
+serde.workspace = true
+ron.workspace = true
+thiserror.workspace = true

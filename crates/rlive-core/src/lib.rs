@@ -15,6 +15,45 @@ pub use param::{ParamInfo, ParamKind};
 pub use processor::{AudioBuffer, ParamOutQueue, ProcessContext, Processor};
 pub use time::{Quantize, TimeSignature, TransportInfo, PPQ};
 
+/// Third-party plugin formats rLive can host.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub enum PluginFormat {
+    Clap,
+    Vst3,
+    AudioUnit,
+}
+
+impl PluginFormat {
+    pub const ALL: [PluginFormat; 3] = [
+        PluginFormat::Clap,
+        PluginFormat::Vst3,
+        PluginFormat::AudioUnit,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            PluginFormat::Clap => "CLAP",
+            PluginFormat::Vst3 => "VST3",
+            PluginFormat::AudioUnit => "AU",
+        }
+    }
+
+    /// Short lowercase name used on the scanner command line.
+    pub fn key(&self) -> &'static str {
+        match self {
+            PluginFormat::Clap => "clap",
+            PluginFormat::Vst3 => "vst3",
+            PluginFormat::AudioUnit => "au",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.key() == key)
+    }
+}
+
 /// Convert decibels to linear gain. Anything at or below -96 dB is treated as silence.
 #[inline]
 pub fn db_to_gain(db: f32) -> f32 {
