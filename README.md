@@ -11,8 +11,9 @@ builds and runs on Linux.
 - **Session view**: tracks × scenes clip launcher with quantized launching (none … 4 bars),
   scene launch, stop buttons, playing/queued indicators and per-clip progress.
 - **MIDI and audio clips**: looped or one-shot MIDI clips; WAV audio clips (played at original speed, no time-stretching yet).
-- **Piano roll**: draw (double-click), move, resize, delete notes; grid snap (Alt = free),
-  quantize, "Duplicate Loop", live playhead, clickable keyboard for previewing.
+- **Clip view**: piano roll with bar ruler and draggable loop end, velocity lane, draw
+  (double-click), move, resize, delete notes; grid snap (Alt = free), quantize,
+  "Duplicate Loop", live playhead, clickable keyboard for previewing, Cmd+wheel zoom.
 - **Mixer**: volume, pan, mute, solo, arm, stereo peak meters, master bus.
 - **Device chains** (Bitwig-style horizontal cards) on every track and the master:
   - Built-in: **Poly Synth** (2 PolyBLEP oscillators, noise, ZDF filter with envelope, glide),
@@ -55,6 +56,14 @@ Plugins are found in the standard locations (`~/Library/Audio/Plug-Ins/{CLAP,VST
 | Delete | Delete selected notes (piano roll) or clip |
 | A W S E D F T G Y H U J K | Play notes on the armed (or selected) track |
 | Z / X | Octave down / up |
+| Shift+Tab | Switch Device / Clip view |
+| ⌥⌘B / ⌥⌘L | Show/hide Browser / Detail View |
+| ⌘+ / ⌘− / ⌘0 | Zoom the whole UI in / out / reset |
+
+The layout follows Live: track headers, the clip-stop row, the mixer and the Master/scene
+column stay in place while the clip grid scrolls (wheel, Shift+wheel for horizontal); track
+widths and slot heights adapt to the window, and the mixer can be resized by dragging its top
+edge. Hovering any control explains it in the Info View at the bottom left.
 
 Clicking the triangle on a clip launches it; clicking the body selects it; double-clicking an
 empty MIDI slot creates a clip. Drag clips between slots to move them (Alt to copy).
@@ -85,6 +94,12 @@ never allocates, locks or frees memory while processing:
 
 **Plugins** are split into a main-thread `PluginHandle` (parameters, state, editor, plugin
 callbacks) and a `Processor` living in the engine; both share the underlying instance.
+
+## Credits
+
+The UI font is [Inter](https://rsms.me/inter/) by Rasmus Andersson, licensed under the SIL Open
+Font License 1.1 (`crates/rlive-app/assets/fonts/Inter-LICENSE.txt`). `rlive-test-vst3` is
+adapted from the `vst3` crate's example (MIT/Apache-2.0).
 
 ## Testing
 

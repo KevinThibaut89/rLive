@@ -1,16 +1,18 @@
-//! The rLive user interface.
+//! The rLive user interface (Ableton Live–style).
 
 mod browser;
 mod devices;
+mod icons;
 mod piano_roll;
 mod session_view;
+pub mod theme;
 pub mod widgets;
 
 use crate::audio::{self, AudioOutput};
 use crate::midi_input::{self, MidiInput, MidiRouting};
 use crate::session::{ChainRef, Session};
 use crate::settings::Settings;
-use egui::{Color32, Key, RichText};
+use egui::{Align2, Key, Pos2, Rect, RichText, Sense, Stroke, UiBuilder, Vec2};
 use rlive_core::{MidiMessage, Quantize, TimeSignature, TrackId};
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_project::{Project, TrackKind};
@@ -18,7 +20,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
-use widgets::MeterState;
+use theme::*;
+use widgets::{info, MeterState};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Detail {
@@ -44,10 +47,14 @@ pub struct UiState {
     pub selected_clip: Option<(TrackId, usize)>,
     pub detail: Detail,
     pub browser_filter: String,
+    pub browser_category: browser::Category,
     pub meters: HashMap<TrackId, MeterState>,
     pub master_meter: MeterState,
     pub renaming: Option<(TrackId, String)>,
     pub piano: piano_roll::PianoState,
+    pub layout: session_view::SessionLayout,
+    pub show_browser: bool,
+    pub show_detail: bool,
     pub computer_keys: bool,
     pub octave: i32,
     held: HashMap<Key, u8>,
@@ -60,8 +67,11 @@ pub struct UiState {
     pub scan_status: String,
     pub status: String,
     pub sample_files: Vec<PathBuf>,
-    tempo_edit: Option<f64>,
     pub request_scan: bool,
+    /// Device lists are slow to enumerate; refreshed only when Preferences opens.
+    audio_devices: Option<Vec<String>>,
+    midi_ports: Option<Vec<String>>,
+    tap_times: Vec<f64>,
 }
 
 pub struct RliveApp {
@@ -74,10 +84,15 @@ pub struct RliveApp {
     last_frame: std::time::Instant,
 }
 
+const MENU_H: f32 = 22.0;
+const CONTROL_BAR_H: f32 = 34.0;
+const STATUS_H: f32 = 22.0;
+
 impl RliveApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
-        apply_theme(&cc.egui_ctx);
+        theme::apply(&cc.egui_ctx);
         let settings = Settings::load();
+        cc.egui_ctx.set_zoom_factor(settings.zoom());
         let (audio, mut handle) = audio::start(settings.audio_device.as_deref());
         let sender = handle.take_midi_sender();
         let plugins = PluginCache::load(&PluginCache::default_path());
@@ -102,10 +117,14 @@ impl RliveApp {
             selected_clip: None,
             detail: Detail::Devices,
             browser_filter: String::new(),
+            browser_category: browser::Category::Instruments,
             meters: HashMap::new(),
             master_meter: MeterState::default(),
             renaming: None,
             piano: piano_roll::PianoState::default(),
+            layout: session_view::SessionLayout::default(),
+            show_browser: settings.show_browser.unwrap_or(true),
+            show_detail: settings.show_detail.unwrap_or(true),
             computer_keys: true,
             octave: 3,
             held: HashMap::new(),
@@ -122,8 +141,10 @@ impl RliveApp {
                 .map(|e| format!("Audio: {e}"))
                 .unwrap_or_default(),
             sample_files: Vec::new(),
-            tempo_edit: None,
             request_scan: false,
+            audio_devices: None,
+            midi_ports: None,
+            tap_times: Vec::new(),
         };
         if let Some(dir) = &settings.sample_dir {
             ui.sample_files = browser::list_samples(dir);
@@ -187,14 +208,11 @@ impl RliveApp {
                     let n = cache.plugins.len();
                     let failed = cache.files.iter().filter(|f| !f.ok).count();
                     self.session.plugins = cache;
-                    self.ui.scan_status = format!(
-                        "{n} plugins found{}",
-                        if failed > 0 {
-                            format!(", {failed} failed")
-                        } else {
-                            String::new()
-                        }
-                    );
+                    self.ui.scan_status = if failed > 0 {
+                        format!("{n} plugins found, {failed} failed")
+                    } else {
+                        format!("{n} plugins found")
+                    };
                     self.ui.scan_rx = None;
                     return;
                 }
@@ -239,42 +257,126 @@ impl RliveApp {
         }
     }
 
+    fn set_zoom(&mut self, ctx: &egui::Context, zoom: f32) {
+        let z = (zoom * 10.0).round() / 10.0;
+        let z = z.clamp(0.7, 2.0);
+        ctx.set_zoom_factor(z);
+        self.settings.zoom = Some(z);
+        self.settings.save();
+    }
+
+    fn toggle_browser(&mut self) {
+        self.ui.show_browser = !self.ui.show_browser;
+        self.settings.show_browser = Some(self.ui.show_browser);
+        self.settings.save();
+    }
+
+    fn toggle_detail(&mut self) {
+        self.ui.show_detail = !self.ui.show_detail;
+        self.settings.show_detail = Some(self.ui.show_detail);
+        self.settings.save();
+    }
+
+    fn tap_tempo(&mut self, now: f64) {
+        let taps = &mut self.ui.tap_times;
+        if taps.last().is_some_and(|t| now - t > 2.0) {
+            taps.clear();
+        }
+        taps.push(now);
+        if taps.len() > 5 {
+            taps.remove(0);
+        }
+        if taps.len() >= 2 {
+            let avg = (taps[taps.len() - 1] - taps[0]) / (taps.len() - 1) as f64;
+            if avg > 0.0 {
+                self.session.set_tempo((60.0 / avg).clamp(20.0, 999.0));
+            }
+        }
+    }
+
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        struct Keys {
+            space: bool,
+            save: bool,
+            save_as: bool,
+            open: bool,
+            new: bool,
+            del: bool,
+            dup: bool,
+            new_track: bool,
+            browser: bool,
+            detail: bool,
+            switch_detail: bool,
+            zoom_in: bool,
+            zoom_out: bool,
+            zoom_reset: bool,
+        }
         let typing = ctx.egui_wants_keyboard_input();
-        let (space, cmd_s, cmd_shift_s, cmd_o, cmd_n, del, cmd_d, cmd_t) = ctx.input(|i| {
+        let k = ctx.input(|i| {
             let cmd = i.modifiers.command;
-            (
-                i.key_pressed(Key::Space),
-                cmd && !i.modifiers.shift && i.key_pressed(Key::S),
-                cmd && i.modifiers.shift && i.key_pressed(Key::S),
-                cmd && i.key_pressed(Key::O),
-                cmd && i.key_pressed(Key::N),
-                i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
-                cmd && i.key_pressed(Key::D),
-                cmd && i.key_pressed(Key::T),
-            )
+            let alt = i.modifiers.alt;
+            let shift = i.modifiers.shift;
+            Keys {
+                space: i.key_pressed(Key::Space),
+                save: cmd && !shift && i.key_pressed(Key::S),
+                save_as: cmd && shift && i.key_pressed(Key::S),
+                open: cmd && i.key_pressed(Key::O),
+                new: cmd && i.key_pressed(Key::N),
+                del: i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
+                dup: cmd && i.key_pressed(Key::D),
+                new_track: cmd && !alt && i.key_pressed(Key::T),
+                browser: cmd && alt && i.key_pressed(Key::B),
+                detail: cmd && alt && i.key_pressed(Key::L),
+                switch_detail: shift && i.key_pressed(Key::Tab),
+                zoom_in: cmd && (i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals)),
+                zoom_out: cmd && i.key_pressed(Key::Minus),
+                zoom_reset: cmd && i.key_pressed(Key::Num0),
+            }
         });
-        if cmd_s {
+        if k.save {
             self.save(false);
         }
-        if cmd_shift_s {
+        if k.save_as {
             self.save(true);
         }
-        if cmd_o {
+        if k.open {
             self.open_dialog();
         }
-        if cmd_n {
+        if k.new {
             self.session.new_project();
             self.ui.selected_clip = None;
         }
-        if cmd_t {
+        if k.new_track {
             let id = self.session.add_track(TrackKind::Midi, None);
             self.ui.selected = Some(ChainRef::Track(id));
+        }
+        if k.browser {
+            self.toggle_browser();
+        }
+        if k.detail {
+            self.toggle_detail();
+        }
+        let zoom = ctx.zoom_factor();
+        if k.zoom_in {
+            self.set_zoom(ctx, zoom + 0.1);
+        }
+        if k.zoom_out {
+            self.set_zoom(ctx, zoom - 0.1);
+        }
+        if k.zoom_reset {
+            self.set_zoom(ctx, 1.0);
         }
         if typing {
             return;
         }
-        if space {
+        if k.switch_detail {
+            self.ui.show_detail = true;
+            self.ui.detail = match self.ui.detail {
+                Detail::Devices if self.ui.selected_clip.is_some() => Detail::Clip,
+                _ => Detail::Devices,
+            };
+        }
+        if k.space {
             if self.session.is_playing() {
                 self.session.stop();
             } else {
@@ -282,11 +384,12 @@ impl RliveApp {
             }
         }
         if let Some((t, slot)) = self.ui.selected_clip {
-            if del && !self.ui.piano.has_selection() {
+            let in_piano = self.ui.detail == Detail::Clip && self.ui.piano.has_selection();
+            if k.del && !in_piano {
                 self.session.set_clip(t, slot, None);
                 self.ui.selected_clip = None;
             }
-            if cmd_d {
+            if k.dup {
                 session_view::duplicate_clip(&mut self.session, t, slot);
             }
         }
@@ -315,7 +418,7 @@ impl RliveApp {
         let Some(target) = self.midi_target() else {
             return;
         };
-        let (pressed, released, z, x, cmd) = ctx.input(|i| {
+        let (pressed, released, z, x, modifier) = ctx.input(|i| {
             let pressed: Vec<Key> = KEYS
                 .iter()
                 .filter(|(k, _)| i.key_pressed(*k))
@@ -331,10 +434,10 @@ impl RliveApp {
                 released,
                 i.key_pressed(Key::Z),
                 i.key_pressed(Key::X),
-                i.modifiers.command,
+                i.modifiers.command || i.modifiers.alt,
             )
         });
-        if cmd {
+        if modifier {
             return;
         }
         if z {
@@ -400,35 +503,40 @@ impl RliveApp {
         }
     }
 
-    fn update_meters(&mut self) {
+    /// Returns true while any meter is still moving.
+    fn update_meters(&mut self) -> bool {
         let now = std::time::Instant::now();
-        let dt = (now - self.last_frame).as_secs_f32();
+        let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
+        let mut active = false;
         for (id, shared) in &self.session.track_shared {
             let peaks = shared.meter.take();
-            self.ui.meters.entry(*id).or_default().update(peaks, dt);
+            let m = self.ui.meters.entry(*id).or_default();
+            m.update(peaks, dt);
+            active |= m.active();
         }
         let m = self.session.engine.shared.master_meter.take();
         self.ui.master_meter.update(m, dt);
+        active || self.ui.master_meter.active()
     }
 
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui.button("New Live Set").clicked() {
+                if ui.button("New Live Set        ⌘N").clicked() {
                     self.session.new_project();
                     self.ui.selected_clip = None;
                     ui.close();
                 }
-                if ui.button("Open…").clicked() {
+                if ui.button("Open…               ⌘O").clicked() {
                     ui.close();
                     self.open_dialog();
                 }
-                if ui.button("Save").clicked() {
+                if ui.button("Save                ⌘S").clicked() {
                     ui.close();
                     self.save(false);
                 }
-                if ui.button("Save As…").clicked() {
+                if ui.button("Save As…           ⇧⌘S").clicked() {
                     ui.close();
                     self.save(true);
                 }
@@ -439,7 +547,7 @@ impl RliveApp {
                 }
             });
             ui.menu_button("Create", |ui| {
-                if ui.button("MIDI Track").clicked() {
+                if ui.button("MIDI Track          ⌘T").clicked() {
                     let id = self.session.add_track(TrackKind::Midi, None);
                     self.ui.selected = Some(ChainRef::Track(id));
                     ui.close();
@@ -454,9 +562,33 @@ impl RliveApp {
                     ui.close();
                 }
             });
+            ui.menu_button("View", |ui| {
+                let mut b = self.ui.show_browser;
+                if ui.checkbox(&mut b, "Browser            ⌥⌘B").changed() {
+                    self.toggle_browser();
+                }
+                let mut d = self.ui.show_detail;
+                if ui.checkbox(&mut d, "Detail View        ⌥⌘L").changed() {
+                    self.toggle_detail();
+                }
+                ui.checkbox(&mut self.ui.layout.show_mixer, "Mixer");
+                ui.separator();
+                let z = ui.ctx().zoom_factor();
+                if ui.button("Zoom In             ⌘+").clicked() {
+                    self.set_zoom(&ui.ctx().clone(), z + 0.1);
+                }
+                if ui.button("Zoom Out            ⌘−").clicked() {
+                    self.set_zoom(&ui.ctx().clone(), z - 0.1);
+                }
+                if ui.button("Actual Size         ⌘0").clicked() {
+                    self.set_zoom(&ui.ctx().clone(), 1.0);
+                }
+            });
             ui.menu_button("Options", |ui| {
-                if ui.button("Audio, MIDI & Plugins…").clicked() {
+                if ui.button("Preferences…").clicked() {
                     self.ui.show_settings = true;
+                    self.ui.audio_devices = None;
+                    self.ui.midi_ports = None;
                     ui.close();
                 }
                 if ui.button("Rescan Plugins").clicked() {
@@ -474,175 +606,309 @@ impl RliveApp {
         });
     }
 
-    fn transport_bar(&mut self, ui: &mut egui::Ui) {
-        let s = &mut self.session;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            // Tempo
-            let mut tempo = self.ui.tempo_edit.unwrap_or(s.project.tempo);
-            let r = ui.add(
-                egui::DragValue::new(&mut tempo)
-                    .range(20.0..=999.0)
-                    .speed(0.2)
-                    .fixed_decimals(2)
-                    .suffix(" BPM"),
-            );
-            if r.changed() {
-                s.set_tempo(tempo);
-            }
-            // Time signature
-            let mut sig = s.project.time_signature;
-            let mut changed = false;
-            changed |= ui
-                .add(egui::DragValue::new(&mut sig.numerator).range(1..=32))
-                .changed();
-            ui.label("/");
-            egui::ComboBox::from_id_salt("sig_den")
-                .width(40.0)
-                .selected_text(sig.denominator.to_string())
-                .show_ui(ui, |ui| {
-                    for d in [2u8, 4, 8, 16] {
-                        changed |= ui
-                            .selectable_value(&mut sig.denominator, d, d.to_string())
-                            .changed();
-                    }
-                });
-            if changed {
-                s.set_time_signature(TimeSignature { ..sig });
-            }
-            let mut metro = s.project.metronome;
-            if widgets::toggle_box(ui, metro, "Met", widgets::ACCENT, "Metronome").clicked() {
-                metro = !metro;
-                s.set_metronome(metro);
-            }
-            ui.separator();
+    /// Live-style control bar: tempo & signature left, transport centre, status right.
+    fn control_bar(&mut self, ui: &mut egui::Ui) {
+        let rect = ui.max_rect();
+        let p = ui.painter().clone();
+        p.rect_filled(rect, 0.0, BAR_BG);
+        p.line_segment(
+            [rect.left_bottom(), rect.right_bottom()],
+            Stroke::new(1.0, SEPARATOR),
+        );
+        let h = 22.0;
+        let cy = rect.center().y;
+        let narrow = rect.width() < 1100.0;
 
-            // Transport buttons
-            let playing = s.is_playing();
-            let (rect, play) = ui.allocate_exact_size(egui::vec2(28.0, 22.0), egui::Sense::click());
-            ui.painter().rect_filled(
-                rect,
-                3.0,
-                if playing {
-                    widgets::PLAY_GREEN
-                } else {
-                    Color32::from_gray(60)
-                },
-            );
-            widgets::play_triangle(
-                ui.painter(),
-                rect,
-                if playing {
-                    Color32::BLACK
-                } else {
-                    Color32::WHITE
-                },
-            );
-            if play.on_hover_text("Play (Space)").clicked() {
-                s.play();
-            }
-            let (rect, stop) = ui.allocate_exact_size(egui::vec2(28.0, 22.0), egui::Sense::click());
-            ui.painter().rect_filled(rect, 3.0, Color32::from_gray(60));
-            widgets::stop_square(ui.painter(), rect, Color32::WHITE);
-            if stop.on_hover_text("Stop (Space)").clicked() {
-                s.stop();
-            }
-            let tick = s.engine.shared.tick.load();
-            ui.label(
-                RichText::new(s.project.time_signature.format_position(tick))
-                    .monospace()
-                    .size(15.0)
-                    .color(if playing {
-                        widgets::PLAY_GREEN
-                    } else {
-                        Color32::from_gray(210)
-                    }),
-            );
-            ui.separator();
-            ui.label("Quantize");
-            let mut q = s.project.quantize;
-            egui::ComboBox::from_id_salt("quant")
-                .width(70.0)
-                .selected_text(q.label())
-                .show_ui(ui, |ui| {
-                    for opt in Quantize::ALL {
-                        ui.selectable_value(&mut q, opt, opt.label());
-                    }
-                });
-            if q != s.project.quantize {
-                s.set_quantize(q);
-            }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let load = s.engine.shared.cpu_load.load();
-                ui.label(
-                    RichText::new(format!("CPU {:>3.0}%", load * 100.0))
-                        .monospace()
-                        .color(if load > 0.8 {
-                            Color32::RED
-                        } else {
-                            widgets::TEXT_DIM
-                        }),
-                );
-                let midi_on = self.routing.activity.swap(false, Ordering::Relaxed);
-                ui.label(RichText::new("MIDI").color(if midi_on {
-                    widgets::ACCENT
-                } else {
-                    Color32::from_gray(80)
-                }))
-                .on_hover_text(
-                    self.midi
-                        .port_name
-                        .clone()
-                        .unwrap_or_else(|| "No MIDI input".into()),
-                );
-                if self.ui.computer_keys {
-                    ui.label(
-                        RichText::new(format!("Keys Oct {}", self.ui.octave))
-                            .color(widgets::TEXT_DIM),
-                    )
-                    .on_hover_text("Computer MIDI keyboard: A–K play notes, Z/X change octave");
+        // ---- left: tap, tempo, signature, metronome
+        let left = Rect::from_min_max(
+            Pos2::new(rect.left() + 8.0, cy - h / 2.0),
+            Pos2::new(rect.center().x - 120.0, cy + h / 2.0),
+        );
+        let mut lu = ui.new_child(
+            UiBuilder::new()
+                .max_rect(left)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        lu.spacing_mut().item_spacing.x = 4.0;
+        let r = widgets::state_button(&mut lu, Vec2::new(34.0, h), false, ACCENT, "TAP");
+        if info(r, "Tap Tempo — click in time to set the tempo").clicked() {
+            let now = lu.input(|i| i.time);
+            self.tap_tempo(now);
+        }
+        let mut tempo = self.session.project.tempo;
+        let r = lu.add_sized(
+            [70.0, h],
+            egui::DragValue::new(&mut tempo)
+                .range(20.0..=999.0)
+                .speed(0.25)
+                .fixed_decimals(2),
+        );
+        if r.changed() {
+            self.session.set_tempo(tempo);
+        }
+        info(r, "Tempo (BPM) — drag or double-click to type");
+        let mut sig = self.session.project.time_signature;
+        let mut changed = false;
+        let r = lu.add_sized(
+            [26.0, h],
+            egui::DragValue::new(&mut sig.numerator).range(1..=32),
+        );
+        changed |= r.changed();
+        info(r, "Time signature numerator");
+        lu.label(RichText::new("/").color(TEXT_DIM));
+        let r = egui::ComboBox::from_id_salt("sig_den")
+            .width(34.0)
+            .selected_text(sig.denominator.to_string())
+            .show_ui(&mut lu, |ui| {
+                for d in [2u8, 4, 8, 16] {
+                    changed |= ui
+                        .selectable_value(&mut sig.denominator, d, d.to_string())
+                        .changed();
                 }
             });
+        info(r.response, "Time signature denominator");
+        if changed {
+            self.session.set_time_signature(TimeSignature { ..sig });
+        }
+        let metro = self.session.project.metronome;
+        let r = widgets::icon_button(&mut lu, Vec2::new(26.0, h), metro, ACCENT, |p, r, c| {
+            icons::metronome(p, r, c)
         });
+        if info(r, "Metronome").clicked() {
+            self.session.set_metronome(!metro);
+        }
+
+        // ---- centre: transport + position
+        let playing = self.session.is_playing();
+        let centre = Rect::from_center_size(Pos2::new(rect.center().x, cy), Vec2::new(220.0, h));
+        let mut cu = ui.new_child(
+            UiBuilder::new()
+                .max_rect(centre)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        cu.spacing_mut().item_spacing.x = 3.0;
+        let r = widgets::icon_button(
+            &mut cu,
+            Vec2::new(30.0, h),
+            playing,
+            PLAY_GREEN,
+            icons::play,
+        );
+        if info(r, "Play (Space)").clicked() {
+            self.session.play();
+        }
+        let r = widgets::icon_button(&mut cu, Vec2::new(30.0, h), false, ACCENT, |p, r, c| {
+            icons::stop(p, r, c)
+        });
+        if info(r, "Stop (Space); stop twice to return to the start").clicked() {
+            self.session.stop();
+        }
+        let (rr, r) = cu.allocate_exact_size(Vec2::new(30.0, h), Sense::hover());
+        cu.painter().rect_filled(rr, 1.0, RAISED);
+        icons::record(cu.painter(), rr, hex(0x6a3a3a));
+        info(r, "Recording is not available yet");
+        cu.add_space(6.0);
+        let tick = self.session.engine.shared.tick.load();
+        let pos = self
+            .session
+            .project
+            .time_signature
+            .format_position(tick)
+            .replace('.', ".  ");
+        let (pr, r) = cu.allocate_exact_size(Vec2::new(96.0, h), Sense::hover());
+        cu.painter().rect_filled(pr, 1.0, FIELD_BG);
+        cu.painter().text(
+            pr.center(),
+            Align2::CENTER_CENTER,
+            pos,
+            egui::FontId::monospace(13.0),
+            if playing { PLAY_GREEN } else { TEXT },
+        );
+        info(r, "Song position (bar . beat . sixteenth)");
+
+        // ---- right: quantize, MIDI LED, keys, CPU
+        let right = Rect::from_min_max(
+            Pos2::new(rect.center().x + 120.0, cy - h / 2.0),
+            Pos2::new(rect.right() - 8.0, cy + h / 2.0),
+        );
+        let mut ru = ui.new_child(
+            UiBuilder::new()
+                .max_rect(right)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        ru.spacing_mut().item_spacing.x = 6.0;
+        // CPU meter
+        let load = self.session.engine.shared.cpu_load.load().clamp(0.0, 1.0);
+        let (cr, r) = ru.allocate_exact_size(
+            Vec2::new(if narrow { 34.0 } else { 70.0 }, h),
+            Sense::hover(),
+        );
+        ru.painter().rect_filled(cr, 1.0, FIELD_BG);
+        let bar = Rect::from_min_size(cr.min, Vec2::new(cr.width() * load, cr.height()));
+        ru.painter()
+            .rect_filled(bar, 1.0, if load > 0.8 { ARM_RED } else { hex(0x3c5a3c) });
+        ru.painter().text(
+            cr.center(),
+            Align2::CENTER_CENTER,
+            if narrow {
+                format!("{:.0}%", load * 100.0)
+            } else {
+                format!("CPU {:.0}%", load * 100.0)
+            },
+            theme::font(10.5),
+            TEXT,
+        );
+        info(r, "Audio engine load");
+        // MIDI activity LED
+        let midi_on = self.routing.activity.swap(false, Ordering::Relaxed);
+        let (lr, r) = ru.allocate_exact_size(Vec2::new(34.0, h), Sense::hover());
+        ru.painter().circle_filled(
+            Pos2::new(lr.right() - 5.0, lr.center().y),
+            3.5,
+            if midi_on { ACCENT } else { hex(0x4a4a4a) },
+        );
+        ru.painter().text(
+            Pos2::new(lr.left(), lr.center().y),
+            Align2::LEFT_CENTER,
+            "MIDI",
+            theme::font(10.0),
+            TEXT_DIM,
+        );
+        info(
+            r,
+            format!(
+                "MIDI input: {}",
+                self.midi
+                    .port_name
+                    .clone()
+                    .unwrap_or_else(|| "none connected".into())
+            ),
+        );
+        if !narrow {
+            let keys = self.ui.computer_keys;
+            let r = widgets::icon_button(&mut ru, Vec2::new(28.0, h), keys, ACCENT, |p, r, c| {
+                icons::keyboard(p, r, c)
+            });
+            if info(
+                r,
+                format!(
+                    "Computer MIDI keyboard (octave {}): A–K play notes, Z/X change octave",
+                    self.ui.octave
+                ),
+            )
+            .clicked()
+            {
+                self.ui.computer_keys = !keys;
+            }
+        }
+        let mut q = self.session.project.quantize;
+        let r = egui::ComboBox::from_id_salt("quant")
+            .width(64.0)
+            .selected_text(q.label())
+            .show_ui(&mut ru, |ui| {
+                for opt in Quantize::ALL {
+                    ui.selectable_value(&mut q, opt, opt.label());
+                }
+            });
+        info(r.response, "Global launch quantization");
+        if q != self.session.project.quantize {
+            self.session.set_quantize(q);
+        }
     }
 
+    /// Info view (left), messages (middle), panel toggles (right).
     fn status_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            let msg = self.session.messages.last().cloned();
-            let text = if !self.ui.status.is_empty() {
-                self.ui.status.clone()
-            } else {
-                msg.unwrap_or_default()
-            };
-            ui.label(RichText::new(text).color(widgets::TEXT_DIM).size(11.0));
+        let rect = ui.max_rect();
+        let p = ui.painter().clone();
+        p.rect_filled(rect, 0.0, BAR_BG);
+        p.line_segment(
+            [rect.left_top(), rect.right_top()],
+            Stroke::new(1.0, SEPARATOR),
+        );
+        let mut u = ui.new_child(
+            UiBuilder::new()
+                .max_rect(rect.shrink2(Vec2::new(4.0, 2.0)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        u.spacing_mut().item_spacing.x = 6.0;
+        let b = self.ui.show_browser;
+        let r = widgets::bare_icon(&mut u, Vec2::new(22.0, 18.0), |p, r, c| {
+            icons::panel_toggle(p, r, icons::PanelSide::Left, b, if b { ACCENT } else { c })
+        });
+        if info(r, "Show/hide the Browser (⌥⌘B)").clicked() {
+            self.toggle_browser();
+        }
+        let info_text = widgets::info_text(u.ctx()).unwrap_or_default();
+        let right_w = 330.0;
+        let avail = (u.available_width() - right_w).max(50.0);
+        let (ir, _) = u.allocate_exact_size(Vec2::new(avail, 18.0), Sense::hover());
+        let msg = if !info_text.is_empty() {
+            (info_text, TEXT)
+        } else if !self.ui.status.is_empty() {
+            (self.ui.status.clone(), TEXT_DIM)
+        } else {
+            (
+                self.session.messages.last().cloned().unwrap_or_default(),
+                TEXT_DIM,
+            )
+        };
+        let galley = u.painter().layout_no_wrap(msg.0, theme::font(11.0), msg.1);
+        u.painter().with_clip_rect(ir).galley(
+            Pos2::new(ir.left(), ir.center().y - galley.size().y / 2.0),
+            galley,
+            msg.1,
+        );
+
+        u.with_layout(egui::Layout::right_to_left(egui::Align::Center), |u| {
+            let d = self.ui.show_detail;
+            let r = widgets::bare_icon(u, Vec2::new(22.0, 18.0), |p, r, c| {
+                icons::panel_toggle(
+                    p,
+                    r,
+                    icons::PanelSide::Bottom,
+                    d,
+                    if d { ACCENT } else { c },
+                )
+            });
+            if info(r, "Show/hide the Detail View (⌥⌘L)").clicked() {
+                self.toggle_detail();
+            }
+            if self.ui.selected_clip.is_some() {
+                let clip_on = self.ui.detail == Detail::Clip;
+                let r =
+                    widgets::state_button(u, Vec2::new(40.0, 16.0), clip_on, hex(0x8a8a8a), "Clip");
+                if info(r, "Clip View (Shift+Tab toggles)").clicked() {
+                    self.ui.detail = Detail::Clip;
+                    self.ui.show_detail = true;
+                }
+            }
+            let dev_on = self.ui.detail == Detail::Devices;
+            let r =
+                widgets::state_button(u, Vec2::new(52.0, 16.0), dev_on, hex(0x8a8a8a), "Devices");
+            if info(r, "Device View (Shift+Tab toggles)").clicked() {
+                self.ui.detail = Detail::Devices;
+                self.ui.show_detail = true;
+            }
+            let name = self
+                .session
+                .path
+                .as_ref()
+                .and_then(|p| p.file_stem())
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Untitled".into());
+            let dirty = if self.session.dirty { "*" } else { "" };
+            u.label(
+                RichText::new(format!("{name}{dirty}"))
+                    .size(11.0)
+                    .color(TEXT_DIM),
+            );
             if !self.ui.scan_status.is_empty() {
-                ui.separator();
-                ui.label(
+                u.label(
                     RichText::new(&self.ui.scan_status)
-                        .color(widgets::TEXT_DIM)
-                        .size(11.0),
+                        .size(11.0)
+                        .color(TEXT_DIM),
                 );
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let name = self
-                    .session
-                    .path
-                    .as_ref()
-                    .and_then(|p| p.file_stem())
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "Untitled".into());
-                let dirty = if self.session.dirty { " *" } else { "" };
-                ui.label(RichText::new(format!("{name}{dirty}")).size(11.0));
-                ui.label(
-                    RichText::new(format!(
-                        "{} · {:.0} Hz",
-                        self.audio.device_name, self.audio.sample_rate
-                    ))
-                    .size(11.0)
-                    .color(widgets::TEXT_DIM),
-                );
-            });
         });
     }
 
@@ -652,46 +918,69 @@ impl RliveApp {
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.heading("Audio");
-                let devices = audio::output_device_names();
+                widgets::section_label(ui, "AUDIO");
+                let devices = self
+                    .ui
+                    .audio_devices
+                    .get_or_insert_with(audio::output_device_names)
+                    .clone();
                 let current = self
                     .settings
                     .audio_device
                     .clone()
                     .unwrap_or_else(|| "System default".into());
                 let mut choice = self.settings.audio_device.clone();
-                egui::ComboBox::from_id_salt("audio_dev")
-                    .width(260.0)
-                    .selected_text(current)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut choice, None, "System default");
-                        for d in devices {
-                            ui.selectable_value(&mut choice, Some(d.clone()), d);
-                        }
-                    });
+                ui.horizontal(|ui| {
+                    ui.label("Output");
+                    egui::ComboBox::from_id_salt("audio_dev")
+                        .width(240.0)
+                        .selected_text(current)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut choice, None, "System default");
+                            for d in devices {
+                                ui.selectable_value(&mut choice, Some(d.clone()), d);
+                            }
+                        });
+                    if ui.small_button("Refresh").clicked() {
+                        self.ui.audio_devices = None;
+                    }
+                });
                 if choice != self.settings.audio_device {
                     self.settings.audio_device = choice;
                     self.settings.save();
                     self.restart_audio();
                 }
-                ui.label(format!(
-                    "Running: {} @ {} Hz",
-                    self.audio.device_name, self.audio.sample_rate
-                ));
-                ui.separator();
-                ui.heading("MIDI input");
-                let ports = midi_input::port_names();
+                ui.label(
+                    RichText::new(format!(
+                        "Running: {} @ {} Hz",
+                        self.audio.device_name, self.audio.sample_rate
+                    ))
+                    .color(TEXT_DIM),
+                );
+                ui.add_space(6.0);
+                widgets::section_label(ui, "MIDI");
+                let ports = self
+                    .ui
+                    .midi_ports
+                    .get_or_insert_with(midi_input::port_names)
+                    .clone();
                 let mut port = self.settings.midi_input.clone();
-                egui::ComboBox::from_id_salt("midi_port")
-                    .width(260.0)
-                    .selected_text(port.clone().unwrap_or_else(|| "First available".into()))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut port, None, "First available");
-                        for p in ports {
-                            ui.selectable_value(&mut port, Some(p.clone()), p);
-                        }
-                    });
-                if port != self.settings.midi_input || ui.button("Reconnect").clicked() {
+                let mut reconnect = false;
+                ui.horizontal(|ui| {
+                    ui.label("Input ");
+                    egui::ComboBox::from_id_salt("midi_port")
+                        .width(240.0)
+                        .selected_text(port.clone().unwrap_or_else(|| "First available".into()))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut port, None, "First available");
+                            for p in ports {
+                                ui.selectable_value(&mut port, Some(p.clone()), p);
+                            }
+                        });
+                    reconnect = ui.small_button("Reconnect").clicked();
+                });
+                if port != self.settings.midi_input || reconnect {
+                    self.ui.midi_ports = None;
                     self.settings.midi_input = port;
                     self.settings.save();
                     self.midi = MidiInput::none();
@@ -704,14 +993,33 @@ impl RliveApp {
                         MidiInput::none()
                     });
                 }
-                ui.separator();
-                ui.heading("Plugins");
-                ui.label("Searched: system CLAP/VST3 folders, Audio Units, plus:");
+                ui.add_space(6.0);
+                widgets::section_label(ui, "LOOK");
+                ui.horizontal(|ui| {
+                    ui.label("Zoom");
+                    let mut z = ui.ctx().zoom_factor();
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut z, 0.7..=2.0)
+                                .step_by(0.1)
+                                .suffix("×"),
+                        )
+                        .changed()
+                    {
+                        self.set_zoom(&ui.ctx().clone(), z);
+                    }
+                });
+                ui.add_space(6.0);
+                widgets::section_label(ui, "PLUG-INS");
+                ui.label(
+                    RichText::new("System CLAP/VST3 folders and Audio Units are searched, plus:")
+                        .color(TEXT_DIM),
+                );
                 let mut remove = None;
                 for (i, d) in self.settings.plugin_dirs.iter().enumerate() {
                     ui.horizontal(|ui| {
                         ui.label(d.display().to_string());
-                        if ui.small_button("x").clicked() {
+                        if ui.small_button("Remove").clicked() {
                             remove = Some(i);
                         }
                     });
@@ -721,7 +1029,7 @@ impl RliveApp {
                     self.settings.save();
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Add folder…").clicked() {
+                    if ui.button("Add Folder…").clicked() {
                         if let Some(d) = rfd::FileDialog::new().pick_folder() {
                             self.settings.plugin_dirs.push(d);
                             self.settings.save();
@@ -734,7 +1042,7 @@ impl RliveApp {
                         self.start_plugin_scan();
                     }
                 });
-                ui.label(&self.ui.scan_status);
+                ui.label(RichText::new(&self.ui.scan_status).color(TEXT_DIM));
                 let failed: Vec<_> = self
                     .session
                     .plugins
@@ -806,6 +1114,7 @@ impl RliveApp {
             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
             ui.label("A session-oriented DAW written in Rust, inspired by Ableton Live and Bitwig Studio.");
             ui.label("Hosts CLAP, VST3 and Audio Unit plugins.");
+            ui.label(RichText::new("UI font: Inter (SIL Open Font License 1.1)").color(TEXT_DIM));
         });
         self.ui.show_about = open;
     }
@@ -813,6 +1122,7 @@ impl RliveApp {
 
 impl eframe::App for RliveApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        widgets::info_begin_frame(ctx);
         self.session.idle();
         self.poll_scan();
         if std::mem::take(&mut self.ui.request_scan) && self.ui.scan_rx.is_none() {
@@ -822,54 +1132,67 @@ impl eframe::App for RliveApp {
             *self.routing.selected.lock().unwrap() = Some(t);
         }
         self.handle_shortcuts(ctx);
-        // Keep meters and playheads moving.
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        self.update_meters();
-        egui::Panel::top("menu").show(ui, |ui| {
-            self.menu_bar(ui);
-        });
-        egui::Panel::top("transport")
+        let meters_moving = self.update_meters();
+        // Repaint continuously only while something animates; otherwise egui repaints on input.
+        if self.session.is_playing() || meters_moving || self.ui.scan_rx.is_some() {
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+
+        egui::Panel::top("menu")
+            .exact_size(MENU_H)
             .frame(
                 egui::Frame::new()
-                    .fill(Color32::from_gray(45))
-                    .inner_margin(6.0),
+                    .fill(BAR_BG)
+                    .inner_margin(egui::Margin::symmetric(6, 1)),
             )
-            .show(ui, |ui| self.transport_bar(ui));
+            .show(ui, |ui| self.menu_bar(ui));
+        egui::Panel::top("control_bar")
+            .exact_size(CONTROL_BAR_H)
+            .frame(egui::Frame::new())
+            .show(ui, |ui| self.control_bar(ui));
         egui::Panel::bottom("status")
-            .frame(
-                egui::Frame::new()
-                    .fill(Color32::from_gray(30))
-                    .inner_margin(egui::Margin::symmetric(8, 3)),
-            )
+            .exact_size(STATUS_H)
+            .frame(egui::Frame::new())
             .show(ui, |ui| self.status_bar(ui));
-        egui::Panel::left("browser")
-            .resizable(true)
-            .default_size(210.0)
-            .frame(egui::Frame::new().fill(widgets::PANEL_BG).inner_margin(6.0))
-            .show(ui, |ui| {
-                browser::show(ui, &mut self.session, &mut self.ui, &mut self.settings)
-            });
-        egui::Panel::bottom("detail")
-            .resizable(true)
-            .default_size(260.0)
-            .min_size(150.0)
-            .frame(egui::Frame::new().fill(widgets::PANEL_BG).inner_margin(6.0))
-            .show(ui, |ui| match self.ui.detail {
-                Detail::Clip if self.ui.selected_clip.is_some() => {
-                    piano_roll::show(ui, &mut self.session, &mut self.ui)
-                }
-                _ => devices::show(ui, &mut self.session, &mut self.ui),
-            });
+        if self.ui.show_browser {
+            egui::Panel::left("browser")
+                .resizable(true)
+                .default_size(250.0)
+                .size_range(180.0..=520.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(PANEL)
+                        .stroke(Stroke::new(1.0, SEPARATOR)),
+                )
+                .show(ui, |ui| {
+                    browser::show(ui, &mut self.session, &mut self.ui, &mut self.settings)
+                });
+        }
+        if self.ui.show_detail {
+            egui::Panel::bottom("detail")
+                .resizable(true)
+                .default_size(250.0)
+                .size_range(130.0..=700.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(PANEL_DARK)
+                        .stroke(Stroke::new(1.0, SEPARATOR)),
+                )
+                .show(ui, |ui| match self.ui.detail {
+                    Detail::Clip if self.ui.selected_clip.is_some() => {
+                        piano_roll::show(ui, &mut self.session, &mut self.ui)
+                    }
+                    _ => devices::show(ui, &mut self.session, &mut self.ui),
+                });
+        }
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(Color32::from_gray(32))
-                    .inner_margin(4.0),
-            )
+            .frame(egui::Frame::new().fill(GRID_BG))
             .show(ui, |ui| {
                 session_view::show(ui, &mut self.session, &mut self.ui)
             });
@@ -880,18 +1203,8 @@ impl eframe::App for RliveApp {
         self.session.stop();
         self.settings.save();
     }
-}
 
-fn apply_theme(ctx: &egui::Context) {
-    let mut visuals = egui::Visuals::dark();
-    visuals.panel_fill = widgets::PANEL_BG;
-    visuals.window_fill = Color32::from_gray(40);
-    visuals.extreme_bg_color = Color32::from_gray(24);
-    visuals.selection.bg_fill = widgets::ACCENT.gamma_multiply(0.6);
-    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, widgets::ACCENT);
-    ctx.set_visuals(visuals);
-    ctx.global_style_mut(|s| {
-        s.spacing.item_spacing = egui::vec2(6.0, 4.0);
-        s.spacing.button_padding = egui::vec2(6.0, 2.0);
-    });
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        APP_BG.to_normalized_gamma_f32()
+    }
 }

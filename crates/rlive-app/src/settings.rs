@@ -10,9 +10,17 @@ pub struct Settings {
     pub midi_input: Option<String>,
     pub sample_dir: Option<PathBuf>,
     pub plugin_dirs: Vec<PathBuf>,
+    /// UI zoom factor (like Live's "Zoom Display").
+    pub zoom: Option<f32>,
+    pub show_browser: Option<bool>,
+    pub show_detail: Option<bool>,
 }
 
 impl Settings {
+    pub fn zoom(&self) -> f32 {
+        self.zoom.unwrap_or(1.0).clamp(0.7, 2.0)
+    }
+
     pub fn path() -> PathBuf {
         rlive_plugin_host::scanner::PluginCache::default_path().with_file_name("settings.json")
     }

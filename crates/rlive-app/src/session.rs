@@ -808,6 +808,17 @@ impl Session {
         self.dirty = true;
     }
 
+    /// Fold/unfold a device in the device view (UI state stored in the project).
+    pub fn set_device_expanded(&mut self, chain: ChainRef, id: DeviceId, expanded: bool) {
+        if let Some(d) = self
+            .chain_mut(chain)
+            .and_then(|v| v.iter_mut().find(|d| d.id == id))
+        {
+            d.expanded = expanded;
+            self.dirty = true;
+        }
+    }
+
     pub fn set_bypass(&mut self, chain: ChainRef, id: DeviceId, bypass: bool) {
         if let Some(d) = self
             .chain_mut(chain)

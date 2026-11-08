@@ -1,10 +1,12 @@
-//! Left-hand browser: built-in devices, plugins and samples. Drag items onto tracks,
-//! or double-click to add them to the selected track.
+//! Live-style browser: categories on the left, items on the right, search on top.
+//! Drag items onto tracks/devices, or double-click to add them to the selected track.
 
-use super::{widgets, BrowserItem, UiState};
+use super::theme::{self, *};
+use super::widgets::info;
+use super::{BrowserItem, UiState};
 use crate::session::{ChainRef, Session};
 use crate::settings::Settings;
-use egui::{Id, RichText};
+use egui::{Align2, Id, Pos2, Rect, Sense, Stroke, Vec2};
 use rlive_core::PluginFormat;
 use rlive_devices::DeviceRole;
 use rlive_project::TrackKind;
@@ -75,39 +77,234 @@ pub fn apply(session: &mut Session, ui_state: &mut UiState, item: &BrowserItem) 
     }
 }
 
-fn item_row(
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Category {
+    Instruments,
+    AudioEffects,
+    Plugins,
+    Samples,
+}
+
+impl Category {
+    const ALL: [Category; 4] = [
+        Category::Instruments,
+        Category::AudioEffects,
+        Category::Plugins,
+        Category::Samples,
+    ];
+
+    fn label(&self) -> &'static str {
+        match self {
+            Category::Instruments => "Instruments",
+            Category::AudioEffects => "Audio Effects",
+            Category::Plugins => "Plug-Ins",
+            Category::Samples => "Samples",
+        }
+    }
+}
+
+const ROW_H: f32 = 19.0;
+
+/// One list row: hover highlight, drag source, double-click to apply.
+fn row(
     ui: &mut egui::Ui,
-    _id: Id,
     item: BrowserItem,
-    label: RichText,
+    text: &str,
+    sub: Option<&str>,
     hover: &str,
 ) -> Option<BrowserItem> {
-    let text = label.text().to_string();
-    let resp = ui.add(
-        egui::Label::new(label)
-            .selectable(false)
-            .sense(egui::Sense::click_and_drag()),
+    let (rect, resp) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width(), ROW_H),
+        Sense::click_and_drag(),
     );
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    let p = ui.painter();
+    if resp.hovered() || resp.dragged() {
+        p.rect_filled(rect, 0.0, hex(0x3d4a57));
     }
+    let mut x = rect.left() + 8.0;
+    if let Some(sub) = sub {
+        let r = p.text(
+            Pos2::new(rect.right() - 6.0, rect.center().y),
+            Align2::RIGHT_CENTER,
+            sub,
+            theme::font(9.5),
+            TEXT_FAINT,
+        );
+        let _ = r;
+    }
+    let galley = p.layout_no_wrap(text.to_string(), theme::font(11.5), TEXT);
+    let clip = Rect::from_min_max(
+        Pos2::new(x, rect.top()),
+        Pos2::new(
+            rect.right() - if sub.is_some() { 40.0 } else { 4.0 },
+            rect.bottom(),
+        ),
+    );
+    p.with_clip_rect(clip.intersect(ui.clip_rect())).galley(
+        Pos2::new(x, rect.center().y - galley.size().y / 2.0),
+        galley,
+        TEXT,
+    );
+    x += 0.0;
+    let _ = x;
     if resp.dragged() {
-        // Drag preview following the pointer.
         if let Some(pos) = ui.ctx().pointer_latest_pos() {
             egui::Area::new(Id::unique("browser_drag_preview"))
                 .order(egui::Order::Tooltip)
                 .fixed_pos(pos + egui::vec2(12.0, 4.0))
                 .interactable(false)
                 .show(ui.ctx(), |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(&text));
+                    egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(text));
                 });
         }
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     }
     let double = resp.double_clicked();
     resp.dnd_set_drag_payload(item.clone());
-    resp.on_hover_text(hover);
+    info(resp, hover);
     double.then_some(item)
+}
+
+fn group_header(ui: &mut egui::Ui, text: &str) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 18.0), Sense::hover());
+    ui.painter().text(
+        Pos2::new(rect.left() + 6.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        text,
+        theme::font_bold(10.0),
+        TEXT_DIM,
+    );
+}
+
+fn list_category(
+    ui: &mut egui::Ui,
+    session: &Session,
+    state: &mut UiState,
+    settings: &mut Settings,
+    cat: Category,
+    filter: &str,
+    activate: &mut Option<BrowserItem>,
+) -> usize {
+    let mut shown = 0;
+    match cat {
+        Category::Instruments | Category::AudioEffects => {
+            let role = if cat == Category::Instruments {
+                DeviceRole::Instrument
+            } else {
+                DeviceRole::AudioEffect
+            };
+            for b in rlive_devices::builtins().iter().filter(|b| b.role == role) {
+                if !matches(filter, b.name) {
+                    continue;
+                }
+                shown += 1;
+                if let Some(it) = row(
+                    ui,
+                    BrowserItem::Builtin(b.id),
+                    b.name,
+                    None,
+                    &format!("{} — drag onto a track or double-click to add", b.name),
+                ) {
+                    *activate = Some(it);
+                }
+            }
+        }
+        Category::Plugins => {
+            if session.plugins.plugins.is_empty() && filter.is_empty() {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("No plug-ins scanned yet.").color(TEXT_DIM));
+                if ui.button("Scan Plug-Ins").clicked() {
+                    state.request_scan = true;
+                }
+            }
+            for format in PluginFormat::ALL {
+                let mut list: Vec<_> = session
+                    .plugins_of(format)
+                    .filter(|p| matches(filter, &p.name) || matches(filter, &p.vendor))
+                    .cloned()
+                    .collect();
+                if list.is_empty() {
+                    continue;
+                }
+                list.sort_by_key(|p| (p.vendor.to_lowercase(), p.name.to_lowercase()));
+                group_header(ui, format.label());
+                for p in list {
+                    shown += 1;
+                    let hover = format!(
+                        "{} — {} {} ({})",
+                        p.name,
+                        p.vendor,
+                        p.version,
+                        if p.is_instrument {
+                            "instrument"
+                        } else {
+                            "effect"
+                        }
+                    );
+                    let sub = if p.is_instrument { "INST" } else { "FX" };
+                    if let Some(it) = row(
+                        ui,
+                        BrowserItem::Plugin(p.clone()),
+                        &p.name,
+                        Some(sub),
+                        &hover,
+                    ) {
+                        *activate = Some(it);
+                    }
+                }
+            }
+        }
+        Category::Samples => {
+            if filter.is_empty() {
+                ui.horizontal(|ui| {
+                    let label = settings
+                        .sample_dir
+                        .as_ref()
+                        .and_then(|d| d.file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "Choose Folder…".into());
+                    if ui.button(label).clicked() {
+                        if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                            state.sample_files = list_samples(&dir);
+                            settings.sample_dir = Some(dir);
+                            settings.save();
+                        }
+                    }
+                    if settings.sample_dir.is_some() && ui.small_button("Refresh").clicked() {
+                        if let Some(d) = &settings.sample_dir {
+                            state.sample_files = list_samples(d);
+                        }
+                    }
+                });
+            }
+            let base = settings.sample_dir.clone().unwrap_or_default();
+            for path in state.sample_files.iter().take(3000) {
+                let rel = path
+                    .strip_prefix(&base)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string();
+                if !matches(filter, &rel) {
+                    continue;
+                }
+                shown += 1;
+                let name = path
+                    .file_stem()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if let Some(it) = row(
+                    ui,
+                    BrowserItem::Sample(path.clone()),
+                    &name,
+                    Some("WAV"),
+                    &rel,
+                ) {
+                    *activate = Some(it);
+                }
+            }
+        }
+    }
+    shown
 }
 
 pub fn show(
@@ -116,151 +313,102 @@ pub fn show(
     state: &mut UiState,
     settings: &mut Settings,
 ) {
-    ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut state.browser_filter).hint_text("Search"));
-    });
-    ui.add_space(4.0);
+    let full = ui.max_rect();
+    // Claim the whole panel so egui keeps its size (children don't advance the cursor).
+    ui.expand_to_include_rect(full);
+    // Search
+    let search = Rect::from_min_size(
+        full.min + Vec2::new(6.0, 6.0),
+        Vec2::new(full.width() - 12.0, 20.0),
+    );
+    ui.put(
+        search,
+        egui::TextEdit::singleline(&mut state.browser_filter)
+            .hint_text("Search (all categories)")
+            .font(theme::font(11.5)),
+    );
+    let body = Rect::from_min_max(Pos2::new(full.left(), search.bottom() + 6.0), full.max);
+    ui.painter().line_segment(
+        [body.left_top(), body.right_top()],
+        Stroke::new(1.0, SEPARATOR),
+    );
     let filter = state.browser_filter.clone();
     let mut activate: Option<BrowserItem> = None;
 
+    // Categories column
+    let cat_w = (full.width() * 0.38).clamp(92.0, 130.0);
+    let cats = Rect::from_min_max(body.min, Pos2::new(body.left() + cat_w, body.bottom()));
+    ui.painter().rect_filled(cats, 0.0, PANEL_DARK);
+    ui.painter().line_segment(
+        [cats.right_top(), cats.right_bottom()],
+        Stroke::new(1.0, SEPARATOR),
+    );
+    let mut cu = ui.new_child(egui::UiBuilder::new().max_rect(cats.shrink2(Vec2::new(0.0, 4.0))));
+    widgets_label(&mut cu, "CATEGORIES");
+    for c in Category::ALL {
+        let (r, resp) = cu.allocate_exact_size(Vec2::new(cat_w, 20.0), Sense::click());
+        let sel = state.browser_category == c && filter.is_empty();
+        if sel {
+            cu.painter().rect_filled(r, 0.0, hex(0x46525e));
+        } else if resp.hovered() {
+            cu.painter().rect_filled(r, 0.0, RAISED);
+        }
+        cu.painter().text(
+            Pos2::new(r.left() + 10.0, r.center().y),
+            Align2::LEFT_CENTER,
+            c.label(),
+            theme::font(11.5),
+            if sel { hex(0xffffff) } else { TEXT },
+        );
+        if info(resp, format!("Browse {}", c.label())).clicked() {
+            state.browser_category = c;
+            state.browser_filter.clear();
+        }
+    }
+
+    // Items column
+    let items = Rect::from_min_max(Pos2::new(cats.right() + 1.0, body.top()), body.max);
+    let mut iu = ui.new_child(egui::UiBuilder::new().max_rect(items));
+    iu.set_clip_rect(items.intersect(ui.clip_rect()));
     egui::ScrollArea::vertical()
+        .id_salt("browser_items")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for (title, role) in [
-                ("Instruments", DeviceRole::Instrument),
-                ("Audio Effects", DeviceRole::AudioEffect),
-            ] {
-                egui::CollapsingHeader::new(RichText::new(title).strong())
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        for b in rlive_devices::builtins().iter().filter(|b| b.role == role) {
-                            if !matches(&filter, b.name) {
-                                continue;
-                            }
-                            if let Some(it) = item_row(
-                                ui,
-                                Id::unique(("builtin", b.id)),
-                                BrowserItem::Builtin(b.id),
-                                RichText::new(b.name),
-                                "Drag onto a track or double-click to add",
-                            ) {
-                                activate = Some(it);
-                            }
-                        }
-                    });
+        .show(&mut iu, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            if filter.is_empty() {
+                list_category(
+                    ui,
+                    session,
+                    state,
+                    settings,
+                    state.browser_category,
+                    &filter,
+                    &mut activate,
+                );
+            } else {
+                let mut total = 0;
+                for c in Category::ALL {
+                    group_header(ui, &c.label().to_uppercase());
+                    total += list_category(ui, session, state, settings, c, &filter, &mut activate);
+                }
+                if total == 0 {
+                    ui.label(egui::RichText::new("No results").color(TEXT_DIM));
+                }
             }
-
-            egui::CollapsingHeader::new(RichText::new("Plugins").strong())
-                .default_open(true)
-                .show(ui, |ui| {
-                    if session.plugins.plugins.is_empty() {
-                        ui.label(RichText::new("No plugins scanned yet.").color(widgets::TEXT_DIM));
-                        if ui.button("Scan plugins").clicked() {
-                            state.request_scan = true;
-                        }
-                    }
-                    for format in PluginFormat::ALL {
-                        let list: Vec<_> = session
-                            .plugins_of(format)
-                            .filter(|p| matches(&filter, &p.name) || matches(&filter, &p.vendor))
-                            .cloned()
-                            .collect();
-                        if list.is_empty() {
-                            continue;
-                        }
-                        egui::CollapsingHeader::new(format!("{} ({})", format.label(), list.len()))
-                            .id_salt(("fmt", format.key()))
-                            .show(ui, |ui| {
-                                let mut vendor = String::new();
-                                let mut sorted = list;
-                                sorted.sort_by_key(|a| {
-                                    (a.vendor.to_lowercase(), a.name.to_lowercase())
-                                });
-                                for p in sorted {
-                                    if p.vendor != vendor {
-                                        vendor = p.vendor.clone();
-                                        ui.label(
-                                            RichText::new(&vendor).small().color(widgets::TEXT_DIM),
-                                        );
-                                    }
-                                    let icon = if p.is_instrument { "[inst] " } else { "" };
-                                    let hover = format!(
-                                        "{} {} {}\n{}",
-                                        p.vendor,
-                                        p.name,
-                                        p.version,
-                                        p.path.display()
-                                    );
-                                    if let Some(it) = item_row(
-                                        ui,
-                                        Id::unique(("plugin", format.key(), &p.id)),
-                                        BrowserItem::Plugin(p.clone()),
-                                        RichText::new(format!("{icon}{}", p.name)),
-                                        &hover,
-                                    ) {
-                                        activate = Some(it);
-                                    }
-                                }
-                            });
-                    }
-                });
-
-            egui::CollapsingHeader::new(RichText::new("Samples").strong())
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let label = settings
-                            .sample_dir
-                            .as_ref()
-                            .and_then(|d| d.file_name())
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "Choose folder…".into());
-                        if ui.button(label).clicked() {
-                            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                                state.sample_files = list_samples(&dir);
-                                settings.sample_dir = Some(dir);
-                                settings.save();
-                            }
-                        }
-                        if settings.sample_dir.is_some()
-                            && ui
-                                .small_button("Refresh")
-                                .on_hover_text("Refresh")
-                                .clicked()
-                        {
-                            if let Some(d) = &settings.sample_dir {
-                                state.sample_files = list_samples(d);
-                            }
-                        }
-                    });
-                    let base = settings.sample_dir.clone().unwrap_or_default();
-                    for path in state.sample_files.iter().take(2000) {
-                        let rel = path
-                            .strip_prefix(&base)
-                            .unwrap_or(path)
-                            .display()
-                            .to_string();
-                        if !matches(&filter, &rel) {
-                            continue;
-                        }
-                        let name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-                        if let Some(it) = item_row(
-                            ui,
-                            Id::unique(("sample", path)),
-                            BrowserItem::Sample(path.clone()),
-                            RichText::new(name.clone()),
-                            &rel,
-                        ) {
-                            activate = Some(it);
-                        }
-                    }
-                });
         });
 
     if let Some(item) = activate {
         apply(session, state, &item);
     }
+}
+
+fn widgets_label(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(text)
+                .font(theme::font_bold(9.5))
+                .color(TEXT_FAINT),
+        );
+    });
 }
