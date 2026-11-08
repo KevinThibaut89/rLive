@@ -9,6 +9,7 @@ license.workspace = true
 rlive-core.workspace = true
 hound.workspace = true
 thiserror.workspace = true
+realfft.workspace = true
 
 [dev-dependencies]
 rlive-testkit.workspace = true

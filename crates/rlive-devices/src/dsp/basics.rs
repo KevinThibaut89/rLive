@@ -286,6 +286,8 @@ pub enum BiquadKind {
     HighShelf,
     LowPass,
     HighPass,
+    BandPass,
+    Notch,
 }
 
 impl Biquad {
@@ -341,6 +343,8 @@ impl Biquad {
                 -2.0 * cos,
                 1.0 - alpha,
             ),
+            BiquadKind::BandPass => (alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
+            BiquadKind::Notch => (1.0, -2.0 * cos, 1.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
         };
         self.b0 = b0 / a0;
         self.b1 = b1 / a0;
