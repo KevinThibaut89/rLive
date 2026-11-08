@@ -1,5 +1,5 @@
 use rlive_core::{
-    DeviceId, MidiMessage, ProcessContext, Processor, Quantize, SampleBuffer, TrackId,
+    DeviceId, MidiMessage, ProcessContext, Processor, Quantize, SampleBuffer, ScaleInfo, TrackId,
 };
 use rlive_engine::*;
 use std::sync::{Arc, Mutex};
@@ -359,6 +359,7 @@ fn audio_clip_plays_and_loops() {
         length: 960,
         looped: true,
         gain: 1.0,
+        scale: None,
     };
     track.set_slot(0, Some(Arc::new(ClipData::Audio(clip))));
     h.send(EngineCommand::graph(GraphOp::AddTrack {
@@ -433,6 +434,7 @@ fn tempo_change_during_audio_is_seamless() {
         length: 3840 * 2,
         looped: false,
         gain: 1.0,
+        scale: None,
     };
     track.set_slot(0, Some(Arc::new(ClipData::Audio(clip))));
     h.send(EngineCommand::graph(GraphOp::AddTrack {
@@ -1210,6 +1212,7 @@ fn audio_clip(value: f32, frames: usize, length: u64, looped: bool) -> Arc<ClipD
         length,
         looped,
         gain: 1.0,
+        scale: None,
     }))
 }
 
@@ -1245,6 +1248,7 @@ fn lane_audio_reseeds_on_a_seek() {
         length: 7680,
         looped: true,
         gain: 1.0,
+        scale: None,
     }));
     let lane = lane_of(vec![lane_clip(0, 7680, 0, data)]);
     let (mut engine, mut h, _, _) = engine_with_lane(lane);
@@ -1512,4 +1516,81 @@ fn midi_sender_reaches_track() {
         .unwrap()
         .iter()
         .any(|(_, m)| matches!(m, MidiMessage::NoteOn { key: 61, .. })));
+}
+
+/// Records the scale devices are told about, each block.
+struct ScaleSpy(Arc<Mutex<Vec<Option<ScaleInfo>>>>);
+
+impl Processor for ScaleSpy {
+    fn activate(&mut self, _: f64, _: usize) {}
+    fn process(&mut self, ctx: &mut ProcessContext) {
+        self.0.lock().unwrap().push(ctx.transport.scale);
+    }
+    fn set_param(&mut self, _: u32, _: f64) {}
+}
+
+const D_MAJOR: ScaleInfo = ScaleInfo {
+    root: 2,
+    mask: 0b1010_1011_0101,
+};
+
+fn scaled_clip() -> Arc<ClipData> {
+    let notes = vec![Note {
+        start: 0,
+        length: 480,
+        key: 60,
+        velocity: 0.8,
+        ..Note::default()
+    }];
+    Arc::new(ClipData::Midi(
+        MidiClip::new(3840, notes, true).with_scale(Some(D_MAJOR)),
+    ))
+}
+
+#[test]
+fn a_launched_clips_scale_reaches_the_devices_on_its_track() {
+    let (mut engine, mut h) = create_engine(SR, BLOCK);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (tid, mut track) = track_with(Box::new(ScaleSpy(seen.clone())));
+    track.set_slot(0, Some(scaled_clip()));
+    h.send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))
+        .ok()
+        .unwrap();
+    run(&mut engine, 1_000);
+    assert_eq!(
+        seen.lock().unwrap().last(),
+        Some(&None),
+        "nothing playing yet"
+    );
+    h.send(EngineCommand::Launch(LaunchCmd::LaunchClip {
+        track: tid,
+        slot: 0,
+    }))
+    .ok()
+    .unwrap();
+    run(&mut engine, 5_000);
+    assert_eq!(seen.lock().unwrap().last(), Some(&Some(D_MAJOR)));
+}
+
+#[test]
+fn a_timeline_clips_scale_reaches_the_devices_on_its_track() {
+    let (mut engine, mut h) = create_engine(SR, BLOCK);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (_tid, mut track) = track_with(Box::new(ScaleSpy(seen.clone())));
+    track.set_lane(Arc::new(ArrangementLane {
+        clips: vec![LaneClip {
+            start: 0,
+            end: 3840,
+            offset: 0,
+            data: scaled_clip(),
+        }],
+    }));
+    h.send(EngineCommand::graph(GraphOp::AddTrack { index: 0, track }))
+        .ok()
+        .unwrap();
+    h.send(EngineCommand::Transport(TransportCmd::Play))
+        .ok()
+        .unwrap();
+    run(&mut engine, 5_000);
+    assert_eq!(seen.lock().unwrap().last(), Some(&Some(D_MAJOR)));
 }

@@ -927,14 +927,14 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 
 | Effect (pages) | Modes and options | Main parameter groups | Technique | Effort | Status |
 |---|---|---|---|---|---|
-| Arpeggiator (691-693) | Styles incl. Play Order, Chord Trigger, 3 random; Sync or Free; Retrigger Off, Note, Beat | Rate, gate, distance, steps, offset, groove, repeats, velocity slope, hold | Note scheduler, groove lookup | M | `[ ]` |
-| CC Control (694-695) | 2 pages; Learn; Send all | Mod Wheel, Pitch Bend, Pressure, Custom A toggle, B-M assignable | CC emission, merges with existing automation | S. Push display [H] | `[ ]` |
-| Chord (695-696) | Learn; Velocity or Chance sliders | 6 shifts ±36 (no duplicates), strum to 400 ms, tension, crescendo; duplicate-strum and per-note options | Note generation, MPE forwarding | M | `[ ]` |
-| Note Length (697-698) | Note On or Off trigger; Latch | Gate, length; release vel, decay, key scale | Note-off scheduling | S | `[ ]` |
-| Pitch (698-699) | Block, Fold, Limit | Pitch ±128 (or ±30 degrees), step buttons, lowest, range | Remap | S | `[ ]` |
-| Random (699-700) | Random or Alt; Add, Sub, Bi | Chance, choices, interval | Seeded RNG, round robin | S | `[ ]` |
-| Scale (701-702) | User scale; Fold | 13×13 matrix, base, transpose, lowest, range | Lookup table, matrix UI | S | `[ ]` |
-| Velocity (702-703) | Clip, Gate, Fixed; Velocity, Rel. Vel., both | Curve, lowest, range, outputs, random, drive, compand | Curve function, curve UI | S | `[ ]` |
+| Arpeggiator (691-693) | Styles incl. Play Order, Chord Trigger, 3 random; Sync or Free; Retrigger Off, Note, Beat | Rate, gate, distance, steps, offset, groove, repeats, velocity slope, hold | Note scheduler, groove lookup | M | `[~]` |
+| CC Control (694-695) | 2 pages; Learn; Send all | Mod Wheel, Pitch Bend, Pressure, Custom A toggle, B-M assignable | CC emission, merges with existing automation | S. Push display [H] | `[~]` |
+| Chord (695-696) | Learn; Velocity or Chance sliders | 6 shifts ±36 (no duplicates), strum to 400 ms, tension, crescendo; duplicate-strum and per-note options | Note generation, MPE forwarding | M | `[x]` |
+| Note Length (697-698) | Note On or Off trigger; Latch | Gate, length; release vel, decay, key scale | Note-off scheduling | S | `[x]` |
+| Pitch (698-699) | Block, Fold, Limit | Pitch ±128 (or ±30 degrees), step buttons, lowest, range | Remap | S | `[x]` |
+| Random (699-700) | Random or Alt; Add, Sub, Bi | Chance, choices, interval | Seeded RNG, round robin | S | `[x]` |
+| Scale (701-702) | User scale; Fold | 13×13 matrix, base, transpose, lowest, range | Lookup table, matrix UI | S | `[~]` |
+| Velocity (702-703) | Clip, Gate, Fixed; Velocity, Rel. Vel., both | Curve, lowest, range, outputs, random, drive, compand | Curve function, curve UI | S | `[~]` |
 
 
 ## Manual inconsistencies to confirm
@@ -1116,10 +1116,10 @@ Listed as editable with Suite or Standard plus add-on; otherwise editions not st
 
 **MIDI effects (6):**
 - `[ ]` Envelope MIDI (848-850) [M]: ADSR with Free, Sync, Loop, Echo; velocity, slopes
-- `[ ]` Expression Control (851-852) [M]: 5 slots from 10 sources incl. Increment and Random; curves, smoothing
-- `[ ]` MIDI Monitor (853-854) [S]: note, flow, MPE views; freeze
-- `[ ]` MPE Control (855-860) [M]: per-source curves and smoothing; pressure to aftertouch, slide to CC1, note bend to global; Abs/Rel/Onset slide, Centered, pitch range
-- `[ ]` Note Echo (861-862) [S]: synced or ms echoes with pitch, velocity, feedback, MPE feedback
+- `[~]` Expression Control (851-852) [M]: 5 slots from 10 sources incl. Increment and Random; curves, smoothing
+- `[~]` MIDI Monitor (853-854) [S]: note, flow, MPE views; freeze
+- `[~]` MPE Control (855-860) [M]: per-source curves and smoothing; pressure to aftertouch, slide to CC1, note bend to global; Abs/Rel/Onset slide, Centered, pitch range
+- `[x]` Note Echo (861-862) [S]: synced or ms echoes with pitch, velocity, feedback, MPE feedback
 - `[ ]` Shaper MIDI (862-864) [M]: note-triggered breakpoints, sustain point, velocity, loop, echo
 
 **Shared modulator core [L]:** map any automatable parameter, up to 8 targets; Modulation (base plus bipolar/unipolar depth) or Remote Control (min/max override). Depends on the parameter graph and parameter locking in the UI.

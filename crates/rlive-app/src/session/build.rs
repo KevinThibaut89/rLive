@@ -6,7 +6,8 @@ use rlive_audio_io::{SampleCache, SampleStatus};
 use rlive_core::envelope::segment_value;
 use rlive_core::time::{BarMap, TempoMap, TempoPoint, TimeMaps};
 use rlive_core::warp::{self, WarpMap};
-use rlive_core::{DeviceId, ParamInfo, Ports, Processor, Section, ViewChannel};
+use rlive_core::{DeviceId, ParamInfo, Ports, Processor, ScaleInfo, Section, ViewChannel};
+use rlive_devices::devices::b1::common::SCALES;
 use rlive_devices::{DeviceInit, DeviceRole};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
@@ -17,12 +18,24 @@ use rlive_engine::{
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
 use rlive_project::{
-    ArrangementClip, Breakpoint, Chain, Clip, ClipContent, Device, DeviceKind, Project, RackKind,
-    Track, TrackKind, Warp, WarpMode as ProjectWarpMode,
+    ArrangementClip, Breakpoint, Chain, Clip, ClipContent, ClipScale, Device, DeviceKind, Project,
+    RackKind, Track, TrackKind, Warp, WarpMode as ProjectWarpMode,
 };
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+
+/// A clip's scale as devices see it, or `None` when it's off or isn't a scale rLive knows.
+fn clip_scale(scale: &ClipScale) -> Option<ScaleInfo> {
+    if !scale.enabled {
+        return None;
+    }
+    let (_, mask) = SCALES.iter().find(|(name, _)| *name == scale.name)?;
+    Some(ScaleInfo {
+        root: scale.root % 12,
+        mask: *mask,
+    })
+}
 
 /// UI-side state of one device in a chain.
 pub struct DeviceRuntime {
@@ -373,7 +386,10 @@ impl Builder<'_> {
                         expr: n.expr.as_deref().map(engine_expression).map(Box::new),
                     })
                     .collect();
-                ClipData::Midi(MidiClip::new(clip.length, notes, clip.looped))
+                ClipData::Midi(
+                    MidiClip::new(clip.length, notes, clip.looped)
+                        .with_scale(clip_scale(&clip.scale)),
+                )
             }
             ClipContent::Audio {
                 file,
@@ -392,6 +408,7 @@ impl Builder<'_> {
                     length: clip.length,
                     looped: clip.looped,
                     gain: rlive_core::db_to_gain(*gain_db),
+                    scale: clip_scale(&clip.scale),
                 };
                 if warp.enabled {
                     ClipData::Warped(WarpedClip {
@@ -572,6 +589,20 @@ fn engine_expression(expr: &rlive_project::NoteExpression) -> NoteExpression {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_clip_scale_reaches_devices_only_when_on_and_known() {
+        let scale = |enabled, name: &str| ClipScale {
+            enabled,
+            root: 14,
+            name: name.into(),
+        };
+        let on = super::clip_scale(&scale(true, "Major")).unwrap();
+        assert_eq!(on.root, 2, "wrapped to a pitch class");
+        assert_eq!(on.mask, SCALES[0].1);
+        assert_eq!(super::clip_scale(&scale(false, "Major")), None);
+        assert_eq!(super::clip_scale(&scale(true, "Nonsense")), None);
+    }
+
     use super::*;
     use rlive_core::warp::{BeatsLoop, BeatsPreserve, WarpMode as CoreWarpMode};
     use rlive_core::{TimeSignature, PPQ};

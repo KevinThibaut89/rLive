@@ -519,11 +519,15 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
     let mut input = None;
     for dev in devices.iter_mut() {
         let dev = &mut **dev;
+        // A MIDI effect that has just been switched off still owes the chain note-offs: `reset`
+        // queues them, and it has to run once more to hand them over.
+        let mut flush = false;
         if let Some(bypass) = at.bus.take_switch(dev.cells.start) {
             if bypass != dev.bypass {
                 dev.bypass = bypass;
                 if bypass {
                     dev.reset();
+                    flush = dev.midi_effect;
                 }
             }
         }
@@ -533,7 +537,7 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
                 dev.bypass_delay.read(line, left, right);
             }
         }
-        if dev.bypass {
+        if dev.bypass && !flush {
             continue;
         }
         let [a, b] = &mut *midi;
@@ -549,16 +553,25 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
                     .view
                     .as_deref()
                     .map_or(ViewWriter::none(), ViewWriter::new);
+                let (frames, params) = if flush {
+                    // No audio to touch, no input, and parameters wait for the device's return.
+                    (0, &[][..])
+                } else {
+                    (
+                        left.len(),
+                        at.bus.take_segment(dev.cells.start, at.from, at.to),
+                    )
+                };
                 let mut ctx = ProcessContext {
                     audio: AudioBuffer {
-                        left: &mut *left,
-                        right: &mut *right,
+                        left: &mut left[..frames],
+                        right: &mut right[..frames],
                     },
                     sidechain: None,
                     aux_out: &mut [],
-                    events: heard,
+                    events: if flush { &[] } else { heard },
                     events_out: &mut *out,
-                    params: at.bus.take_segment(dev.cells.start, at.from, at.to),
+                    params,
                     transport: at.transport,
                     param_out: &mut *at.param_out,
                     mod_out: &mut dev.mod_out,
@@ -567,7 +580,22 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
                 processor.process(&mut ctx);
                 dev.latency.store(processor.latency(), Ordering::Relaxed);
             }
+            DeviceBody::Rack(rack) if flush => {
+                let mut none = Stretch {
+                    transport: at.transport,
+                    param_out: &mut *at.param_out,
+                    bus: &mut *at.bus,
+                    on_param: &mut *at.on_param,
+                    from: at.from,
+                    to: at.from,
+                };
+                rack.run(&mut left[..0], &mut right[..0], &[], out, &mut none);
+            }
             DeviceBody::Rack(rack) => rack.run(left, right, heard, out, at),
+        }
+        if flush {
+            // The device is gone from the stream now, so what it heard carries on past it.
+            out.extend(heard);
         }
         if dev.midi_effect {
             out.sort();
@@ -881,7 +909,15 @@ impl TrackNode {
         for e in segment.iter_mut() {
             e.offset -= from as u32;
         }
-        let transport = ctx.at(from);
+        let mut transport = ctx.at(from);
+        // The scale of whatever this track is playing: a launched clip wins over the timeline.
+        transport.scale = self
+            .player
+            .playing
+            .as_ref()
+            .map(|p| &p.clip)
+            .or_else(|| self.lane.current_clip())
+            .and_then(|c| c.scale());
         let id = self.id;
         run_chain(
             &mut self.devices,

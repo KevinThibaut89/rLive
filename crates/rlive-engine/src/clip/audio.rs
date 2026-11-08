@@ -320,6 +320,7 @@ mod tests {
             length,
             looped,
             gain,
+            scale: None,
         }
     }
 

@@ -2662,6 +2662,7 @@ name = "rlive-engine"
 version = "0.1.0"
 dependencies = [
  "rlive-core",
+ "rlive-devices",
  "rlive-testkit",
  "rtrb",
 ]

@@ -32,7 +32,7 @@ pub use processor::{
 };
 pub use sample::SampleBuffer;
 pub use time::{
-    BarMap, Quantize, TempoMap, TempoPoint, TimeMaps, TimeSignature, TransportInfo, PPQ,
+    BarMap, Quantize, ScaleInfo, TempoMap, TempoPoint, TimeMaps, TimeSignature, TransportInfo, PPQ,
 };
 pub use view::{ViewChannel, ViewId, ViewReader, ViewWriter, METER_VALUES, SCOPE_VALUES};
 

@@ -404,6 +404,7 @@ impl Engine {
             sample_rate: self.sample_rate,
             bar_start: bar.start,
             loop_range: self.loop_range,
+            scale: None,
         }
     }
 

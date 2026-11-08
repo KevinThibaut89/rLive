@@ -1,6 +1,7 @@
 pub mod arpeggiator;
 pub mod cc_control;
 pub mod chord;
+pub mod common;
 pub mod expression_control;
 pub mod midi_monitor;
 pub mod mpe_control;

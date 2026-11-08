@@ -79,6 +79,287 @@ rlive.utility	2	Width
 rlive.utility	3	Mono
 rlive.utility	4	Phase L
 rlive.utility	5	Phase R
+rlive.pitch	0	Pitch
+rlive.pitch	1	Step Width
+rlive.pitch	2	Step Up
+rlive.pitch	3	Step Down
+rlive.pitch	4	Lowest
+rlive.pitch	5	Range
+rlive.pitch	6	Mode
+rlive.pitch	7	Use Current Scale
+rlive.velocity	0	Drive
+rlive.velocity	1	Compand
+rlive.velocity	2	Out Hi
+rlive.velocity	3	Out Low
+rlive.velocity	4	Range
+rlive.velocity	5	Lowest
+rlive.velocity	6	Mode
+rlive.velocity	7	Operation
+rlive.velocity	8	Random
+rlive.scale	0	Base
+rlive.scale	1	Scale Name
+rlive.scale	2	Transpose
+rlive.scale	3	Fold
+rlive.scale	4	Lowest
+rlive.scale	5	Range
+rlive.scale	6	Use Current Scale
+rlive.scale	7	Map 0
+rlive.scale	8	Map 1
+rlive.scale	9	Map 2
+rlive.scale	10	Map 3
+rlive.scale	11	Map 4
+rlive.scale	12	Map 5
+rlive.scale	13	Map 6
+rlive.scale	14	Map 7
+rlive.scale	15	Map 8
+rlive.scale	16	Map 9
+rlive.scale	17	Map 10
+rlive.scale	18	Map 11
+rlive.note_length	0	Trigger
+rlive.note_length	1	Time Mode
+rlive.note_length	2	Length
+rlive.note_length	3	Sync Length
+rlive.note_length	4	Gate
+rlive.note_length	5	Release Velocity
+rlive.note_length	6	Decay Time
+rlive.note_length	7	Key Scale
+rlive.note_length	8	Latch
+rlive.chord	0	Shift 1
+rlive.chord	1	Shift 2
+rlive.chord	2	Shift 3
+rlive.chord	3	Shift 4
+rlive.chord	4	Shift 5
+rlive.chord	5	Shift 6
+rlive.chord	6	Velocity 1
+rlive.chord	7	Velocity 2
+rlive.chord	8	Velocity 3
+rlive.chord	9	Velocity 4
+rlive.chord	10	Velocity 5
+rlive.chord	11	Velocity 6
+rlive.chord	12	Chance 1
+rlive.chord	13	Chance 2
+rlive.chord	14	Chance 3
+rlive.chord	15	Chance 4
+rlive.chord	16	Chance 5
+rlive.chord	17	Chance 6
+rlive.chord	18	Velocity On
+rlive.chord	19	Chance On
+rlive.chord	20	Strum
+rlive.chord	21	Tension
+rlive.chord	22	Crescendo
+rlive.chord	23	Use Current Scale
+rlive.chord	24	Play Duplicate Notes When Strumming
+rlive.chord	25	Send Per Note Events to Generated Notes
+rlive.chord	26	Learn
+rlive.random	0	Chance
+rlive.random	1	Choices
+rlive.random	2	Interval
+rlive.random	3	Mode
+rlive.random	4	Sign
+rlive.random	5	Use Current Scale
+rlive.cc_control	0	Mod Wheel
+rlive.cc_control	1	Pitch Bend
+rlive.cc_control	2	Pressure
+rlive.cc_control	3	Custom A
+rlive.cc_control	4	Custom A CC
+rlive.cc_control	5	Custom B
+rlive.cc_control	6	Custom C
+rlive.cc_control	7	Custom D
+rlive.cc_control	8	Custom E
+rlive.cc_control	9	Custom F
+rlive.cc_control	10	Custom G
+rlive.cc_control	11	Custom H
+rlive.cc_control	12	Custom I
+rlive.cc_control	13	Custom J
+rlive.cc_control	14	Custom K
+rlive.cc_control	15	Custom L
+rlive.cc_control	16	Custom M
+rlive.cc_control	17	Custom B CC
+rlive.cc_control	18	Custom C CC
+rlive.cc_control	19	Custom D CC
+rlive.cc_control	20	Custom E CC
+rlive.cc_control	21	Custom F CC
+rlive.cc_control	22	Custom G CC
+rlive.cc_control	23	Custom H CC
+rlive.cc_control	24	Custom I CC
+rlive.cc_control	25	Custom J CC
+rlive.cc_control	26	Custom K CC
+rlive.cc_control	27	Custom L CC
+rlive.cc_control	28	Custom M CC
+rlive.cc_control	29	Learn
+rlive.cc_control	30	Send
+rlive.cc_control	31	Learn Target
+rlive.arpeggiator	0	Style
+rlive.arpeggiator	1	Sync
+rlive.arpeggiator	2	Rate
+rlive.arpeggiator	3	Sync Rate
+rlive.arpeggiator	4	Gate
+rlive.arpeggiator	5	Hold
+rlive.arpeggiator	6	Offset
+rlive.arpeggiator	7	Distance
+rlive.arpeggiator	8	Steps
+rlive.arpeggiator	9	Root
+rlive.arpeggiator	10	Scale
+rlive.arpeggiator	11	Use Current Scale
+rlive.arpeggiator	12	Groove
+rlive.arpeggiator	13	Retrigger
+rlive.arpeggiator	14	Interval
+rlive.arpeggiator	15	Repeats
+rlive.arpeggiator	16	Velocity
+rlive.arpeggiator	17	Decay
+rlive.arpeggiator	18	Target
+rlive.arpeggiator	19	Vel. Retrigger
+rlive.midi_monitor	0	Display
+rlive.midi_monitor	1	Freeze
+rlive.note_echo	0	Sync
+rlive.note_echo	1	Delay Time
+rlive.note_echo	2	Delay Offset
+rlive.note_echo	3	Delay Time Free
+rlive.note_echo	4	Input
+rlive.note_echo	5	Pitch
+rlive.note_echo	6	Delay
+rlive.note_echo	7	Fback
+rlive.note_echo	8	MPE
+rlive.note_echo	9	Press
+rlive.note_echo	10	Slide
+rlive.note_echo	11	Note PB
+rlive.expression_control	0	1 Source
+rlive.expression_control	1	1 Modulation
+rlive.expression_control	2	1 Polarity
+rlive.expression_control	3	1 Output Max
+rlive.expression_control	4	1 Output Min
+rlive.expression_control	5	1 Curve Type
+rlive.expression_control	6	1 Curve A
+rlive.expression_control	7	1 Curve B
+rlive.expression_control	8	1 Curve Link
+rlive.expression_control	9	1 Min
+rlive.expression_control	10	1 Max
+rlive.expression_control	11	1 X
+rlive.expression_control	12	1 Y
+rlive.expression_control	13	1 Increment Steps
+rlive.expression_control	14	1 Random Amount
+rlive.expression_control	15	1 Smoothing Type
+rlive.expression_control	16	1 Rise
+rlive.expression_control	17	1 Fall
+rlive.expression_control	20	2 Source
+rlive.expression_control	21	2 Modulation
+rlive.expression_control	22	2 Polarity
+rlive.expression_control	23	2 Output Max
+rlive.expression_control	24	2 Output Min
+rlive.expression_control	25	2 Curve Type
+rlive.expression_control	26	2 Curve A
+rlive.expression_control	27	2 Curve B
+rlive.expression_control	28	2 Curve Link
+rlive.expression_control	29	2 Min
+rlive.expression_control	30	2 Max
+rlive.expression_control	31	2 X
+rlive.expression_control	32	2 Y
+rlive.expression_control	33	2 Increment Steps
+rlive.expression_control	34	2 Random Amount
+rlive.expression_control	35	2 Smoothing Type
+rlive.expression_control	36	2 Rise
+rlive.expression_control	37	2 Fall
+rlive.expression_control	40	3 Source
+rlive.expression_control	41	3 Modulation
+rlive.expression_control	42	3 Polarity
+rlive.expression_control	43	3 Output Max
+rlive.expression_control	44	3 Output Min
+rlive.expression_control	45	3 Curve Type
+rlive.expression_control	46	3 Curve A
+rlive.expression_control	47	3 Curve B
+rlive.expression_control	48	3 Curve Link
+rlive.expression_control	49	3 Min
+rlive.expression_control	50	3 Max
+rlive.expression_control	51	3 X
+rlive.expression_control	52	3 Y
+rlive.expression_control	53	3 Increment Steps
+rlive.expression_control	54	3 Random Amount
+rlive.expression_control	55	3 Smoothing Type
+rlive.expression_control	56	3 Rise
+rlive.expression_control	57	3 Fall
+rlive.expression_control	60	4 Source
+rlive.expression_control	61	4 Modulation
+rlive.expression_control	62	4 Polarity
+rlive.expression_control	63	4 Output Max
+rlive.expression_control	64	4 Output Min
+rlive.expression_control	65	4 Curve Type
+rlive.expression_control	66	4 Curve A
+rlive.expression_control	67	4 Curve B
+rlive.expression_control	68	4 Curve Link
+rlive.expression_control	69	4 Min
+rlive.expression_control	70	4 Max
+rlive.expression_control	71	4 X
+rlive.expression_control	72	4 Y
+rlive.expression_control	73	4 Increment Steps
+rlive.expression_control	74	4 Random Amount
+rlive.expression_control	75	4 Smoothing Type
+rlive.expression_control	76	4 Rise
+rlive.expression_control	77	4 Fall
+rlive.expression_control	80	5 Source
+rlive.expression_control	81	5 Modulation
+rlive.expression_control	82	5 Polarity
+rlive.expression_control	83	5 Output Max
+rlive.expression_control	84	5 Output Min
+rlive.expression_control	85	5 Curve Type
+rlive.expression_control	86	5 Curve A
+rlive.expression_control	87	5 Curve B
+rlive.expression_control	88	5 Curve Link
+rlive.expression_control	89	5 Min
+rlive.expression_control	90	5 Max
+rlive.expression_control	91	5 X
+rlive.expression_control	92	5 Y
+rlive.expression_control	93	5 Increment Steps
+rlive.expression_control	94	5 Random Amount
+rlive.expression_control	95	5 Smoothing Type
+rlive.expression_control	96	5 Rise
+rlive.expression_control	97	5 Fall
+rlive.mpe_control	0	Press On
+rlive.mpe_control	1	Press Curve Type
+rlive.mpe_control	2	Press Curve
+rlive.mpe_control	3	Press Curve B
+rlive.mpe_control	4	Press Curve Link
+rlive.mpe_control	5	Press Min
+rlive.mpe_control	6	Press Max
+rlive.mpe_control	7	Press X
+rlive.mpe_control	8	Press Y
+rlive.mpe_control	9	Press Smooth
+rlive.mpe_control	10	Press Rise
+rlive.mpe_control	11	Press Fall
+rlive.mpe_control	12	Press Default
+rlive.mpe_control	13	Press Default Value
+rlive.mpe_control	14	Press Swap to Slide
+rlive.mpe_control	15	Press to AT
+rlive.mpe_control	20	Slide On
+rlive.mpe_control	21	Slide Curve Type
+rlive.mpe_control	22	Slide Curve
+rlive.mpe_control	23	Slide Curve B
+rlive.mpe_control	24	Slide Curve Link
+rlive.mpe_control	25	Slide Min
+rlive.mpe_control	26	Slide Max
+rlive.mpe_control	27	Slide X
+rlive.mpe_control	28	Slide Y
+rlive.mpe_control	29	Slide Smooth
+rlive.mpe_control	30	Slide Rise
+rlive.mpe_control	31	Slide Fall
+rlive.mpe_control	32	Slide Default
+rlive.mpe_control	33	Slide Default Value
+rlive.mpe_control	34	Slide Centered
+rlive.mpe_control	35	Slide Mode
+rlive.mpe_control	36	Slide to Mod
+rlive.mpe_control	40	NotePB On
+rlive.mpe_control	41	NotePB Curve Type
+rlive.mpe_control	42	NotePB Curve
+rlive.mpe_control	43	NotePB Curve B
+rlive.mpe_control	44	NotePB Curve Link
+rlive.mpe_control	45	NotePB Min
+rlive.mpe_control	46	NotePB Max
+rlive.mpe_control	47	NotePB X
+rlive.mpe_control	48	NotePB Y
+rlive.mpe_control	49	NotePB Smooth
+rlive.mpe_control	50	NotePB Rise
+rlive.mpe_control	51	NotePB Fall
+rlive.mpe_control	52	NotePB Pitch Range
+rlive.mpe_control	53	NotePB to PB
 rlive.gate	0	Threshold
 rlive.gate	1	Return
 rlive.gate	2	Attack

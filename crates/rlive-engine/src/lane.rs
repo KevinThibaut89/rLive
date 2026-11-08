@@ -62,6 +62,13 @@ impl LanePlayer {
         }
     }
 
+    /// The clip under the playhead, if any.
+    pub fn current_clip(&self) -> Option<&Arc<ClipData>> {
+        self.current
+            .and_then(|i| self.lane.clips.get(i))
+            .map(|c| &c.data)
+    }
+
     /// Release everything sounding at `offset` and chase afresh on the next render.
     pub fn release_and_resync(&mut self, offset: u32, ev: &mut Vec<MidiEvent>) {
         self.voices.release_all(offset, ev);

@@ -1,7 +1,7 @@
 //! The clip content the engine plays.
 
 use rlive_core::warp::{WarpMap, WarpMode};
-use rlive_core::SampleBuffer;
+use rlive_core::{SampleBuffer, ScaleInfo};
 use std::sync::Arc;
 
 /// A point on an expression envelope, `time` ticks after the note starts.
@@ -56,6 +56,8 @@ pub struct MidiClip {
     pub looped: bool,
     /// Longest note in `notes` (at least 1), the lookback needed to find held notes.
     pub(super) max_len: u64,
+    /// The clip's scale, for devices with Use Current Scale.
+    pub scale: Option<ScaleInfo>,
 }
 
 impl MidiClip {
@@ -68,7 +70,14 @@ impl MidiClip {
             notes,
             looped,
             max_len,
+            scale: None,
         }
+    }
+
+    /// The clip with a scale for scale-aware devices.
+    pub fn with_scale(mut self, scale: Option<ScaleInfo>) -> Self {
+        self.scale = scale;
+        self
     }
 }
 
@@ -80,6 +89,8 @@ pub struct AudioClip {
     pub length: u64,
     pub looped: bool,
     pub gain: f32,
+    /// The clip's scale, for devices with Use Current Scale.
+    pub scale: Option<ScaleInfo>,
 }
 
 impl PartialEq for AudioClip {
@@ -89,6 +100,7 @@ impl PartialEq for AudioClip {
             && self.length == other.length
             && self.looped == other.looped
             && self.gain == other.gain
+            && self.scale == other.scale
     }
 }
 
@@ -116,6 +128,15 @@ impl ClipData {
             ClipData::Midi(c) => c.length,
             ClipData::Audio(c) => c.length,
             ClipData::Warped(c) => c.audio.length,
+        }
+    }
+
+    /// The scale devices should follow while this clip plays.
+    pub fn scale(&self) -> Option<ScaleInfo> {
+        match self {
+            ClipData::Midi(c) => c.scale,
+            ClipData::Audio(c) => c.scale,
+            ClipData::Warped(c) => c.audio.scale,
         }
     }
 

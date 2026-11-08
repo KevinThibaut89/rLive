@@ -162,10 +162,13 @@ fn ids_are_unique_and_the_saved_ones_are_unchanged() {
 
 #[test]
 fn only_what_exists_is_shown_and_every_stub_is_hidden() {
+    let built = |b: &BuiltinInfo| {
+        EXISTING.iter().any(|(id, _)| *id == b.id)
+            || b.role == DeviceRole::MidiEffect && BATCHES[0].1.contains(&b.name)
+    };
     for b in builtins() {
-        let exists = EXISTING.iter().any(|(id, _)| *id == b.id);
-        assert_eq!(b.visible(), exists, "{}", b.id);
-        let want = if exists { Status::Beta } else { Status::Stub };
+        assert_eq!(b.visible(), built(b), "{}", b.id);
+        let want = if built(b) { Status::Beta } else { Status::Stub };
         assert_eq!(b.status, want, "{}", b.id);
     }
 }
@@ -379,7 +382,7 @@ fn midi_effect_stubs_forward_their_events() {
     let events = [note_on(0, 60), note_on(40, 62)];
     for b in builtins()
         .iter()
-        .filter(|b| b.role == DeviceRole::MidiEffect)
+        .filter(|b| b.role == DeviceRole::MidiEffect && b.status == Status::Stub)
     {
         let mut p = ready(b);
         let mut h = Harness::new(SR);

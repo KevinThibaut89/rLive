@@ -126,6 +126,18 @@ pub struct TransportInfo {
     pub bar_start: f64,
     /// The Arrangement loop as (start, end) ticks, when it is on.
     pub loop_range: Option<(f64, f64)>,
+    /// The current clip's scale, for devices with Use Current Scale. `None` when there is none
+    /// or nothing is delivering one; those devices then work in semitones.
+    pub scale: Option<ScaleInfo>,
+}
+
+/// A scale as it reaches devices: small and `Copy`, so it can ride in [`TransportInfo`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScaleInfo {
+    /// Root pitch class, 0 (C) to 11.
+    pub root: u8,
+    /// Bit `n` is set when the note `n` semitones above the root is in the scale.
+    pub mask: u16,
 }
 
 impl TransportInfo {
@@ -150,6 +162,7 @@ impl Default for TransportInfo {
             sample_rate: 48_000.0,
             bar_start: 0.0,
             loop_range: None,
+            scale: None,
         }
     }
 }

@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn a_stub_gets_an_empty_auto_panel() {
-        let (_e, s) = session(vec![Device::builtin("rlive.cc_control", "CC Control")]);
+        let (_e, s) = session(vec![Device::builtin("rlive.ds_kick", "DS Kick")]);
         with_plan(&s, |nodes| {
             assert_eq!(controls(&nodes[0]).visible, 0);
             assert_eq!(nodes[0].width, 150.0);
