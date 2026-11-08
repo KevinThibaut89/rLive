@@ -271,8 +271,8 @@ impl IBStreamTrait for MemoryStream {
     unsafe fn seek(&self, pos: int64, mode: int32, result: *mut int64) -> tresult {
         let len = self.data.borrow().len() as i64;
         let base = match mode as u32 {
-            m if m == IBStream_::IStreamSeekMode_::kIBSeekSet as u32 => 0,
-            m if m == IBStream_::IStreamSeekMode_::kIBSeekCur as u32 => self.pos.get() as i64,
+            m if m == IBStream_::IStreamSeekMode_::kIBSeekSet => 0,
+            m if m == IBStream_::IStreamSeekMode_::kIBSeekCur => self.pos.get() as i64,
             _ => len,
         };
         let new = (base + pos).clamp(0, len);
@@ -1167,16 +1167,14 @@ impl PluginHandle for Vst3Handle {
             .map(|(id, value)| HostNotification::ParamChanged { id, value })
             .collect();
         let flags = self.handler.restart.swap(0, Ordering::AcqRel);
-        if flags & (RestartFlags_::kParamTitlesChanged | RestartFlags_::kParamValuesChanged) as i32
-            != 0
-        {
+        if flags & (RestartFlags_::kParamTitlesChanged | RestartFlags_::kParamValuesChanged) != 0 {
             self.rescan_params();
             out.push(HostNotification::ParamsRescanned);
         }
-        if flags & RestartFlags_::kLatencyChanged as i32 != 0 {
+        if flags & RestartFlags_::kLatencyChanged != 0 {
             out.push(HostNotification::LatencyChanged);
         }
-        if flags & (RestartFlags_::kReloadComponent | RestartFlags_::kIoChanged) as i32 != 0 {
+        if flags & (RestartFlags_::kReloadComponent | RestartFlags_::kIoChanged) != 0 {
             out.push(HostNotification::RestartRequested);
         }
         #[cfg(target_os = "macos")]
@@ -1357,8 +1355,7 @@ impl Processor for Vst3Processor {
         use ProcessContext_::StatesAndFlags_ as F;
         self.context.state =
             (F::kTempoValid | F::kTimeSigValid | F::kProjectTimeMusicValid | F::kBarPositionValid)
-                as u32
-                | if t.playing { F::kPlaying as u32 } else { 0 };
+                | if t.playing { F::kPlaying } else { 0 };
         self.context.sampleRate = t.sample_rate;
         self.context.projectTimeSamples = t.sample_pos as i64;
         self.context.projectTimeMusic = beats;

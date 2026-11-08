@@ -1,4 +1,5 @@
 //! Small DSP building blocks shared by the built-in devices.
+#![allow(clippy::should_implement_trait)]
 
 use std::f32::consts::{PI, TAU};
 

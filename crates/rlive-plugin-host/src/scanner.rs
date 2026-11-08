@@ -206,7 +206,7 @@ impl PluginCache {
         if let Ok(aus) = crate::scan_audio_units() {
             plugins.extend(aus);
         }
-        plugins.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        plugins.sort_by_key(|a| a.name.to_lowercase());
         self.plugins = plugins;
         self.files = files;
     }

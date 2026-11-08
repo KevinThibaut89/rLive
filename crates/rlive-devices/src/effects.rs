@@ -257,7 +257,7 @@ impl Processor for Reverb {
             self.predelay[0].write(input);
             let x = self.predelay[0].read(pre);
             let mut out = [0f32; 2];
-            for ch in 0..2 {
+            for (ch, o) in out.iter_mut().enumerate() {
                 let mut acc = 0.0;
                 for c in self.combs[ch].iter_mut() {
                     acc += c.process(x, feedback, damp);
@@ -265,7 +265,7 @@ impl Processor for Reverb {
                 for a in self.allpasses[ch].iter_mut() {
                     acc = a.process(acc);
                 }
-                out[ch] = acc;
+                *o = acc;
             }
             let wl = out[0] * wet1 + out[1] * wet2;
             let wr = out[1] * wet1 + out[0] * wet2;

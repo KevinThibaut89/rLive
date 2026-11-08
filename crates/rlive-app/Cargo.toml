@@ -1,4 +1,28 @@
 [package]
 name = "rlive-app"
+description = "rLive: a session-oriented DAW inspired by Ableton Live and Bitwig"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+default-run = "rlive"
+
+[[bin]]
+name = "rlive"
+path = "src/main.rs"
+
+[dependencies]
+rlive-core.workspace = true
+rlive-engine.workspace = true
+rlive-devices.workspace = true
+rlive-project.workspace = true
+rlive-plugin-host.workspace = true
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui = "0.37"
+cpal = "0.18"
+midir = "0.11"
+rfd = "0.18"
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+serde.workspace = true
+serde_json.workspace = true

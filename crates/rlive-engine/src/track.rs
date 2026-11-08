@@ -1,4 +1,5 @@
 //! Tracks, device chains and the mixer stage.
+#![allow(clippy::vec_box)]
 
 use crate::clip::{BlockTime, ClipData, ClipPlayer};
 use crate::shared::{PeakMeter, TrackShared, NO_SLOT};

@@ -8,6 +8,8 @@
 //!
 //! The engine never allocates or frees memory while processing.
 
+#![allow(clippy::vec_box)] // nodes are boxed so the audio thread only moves pointers
+
 pub mod clip;
 pub mod shared;
 pub mod track;
@@ -27,6 +29,19 @@ pub const MAX_TRACKS: usize = 256;
 const COMMAND_CAPACITY: usize = 4096;
 const GARBAGE_CAPACITY: usize = 4096;
 const EVENT_CAPACITY: usize = 4096;
+const MIDI_CAPACITY: usize = 2048;
+
+/// Sends live MIDI straight to the audio thread (e.g. from a MIDI-input callback thread),
+/// bypassing the UI.
+pub struct MidiSender {
+    producer: rtrb::Producer<(TrackId, MidiMessage)>,
+}
+
+impl MidiSender {
+    pub fn send(&mut self, track: TrackId, message: MidiMessage) -> bool {
+        self.producer.push((track, message)).is_ok()
+    }
+}
 
 /// Which device chain a command targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -140,9 +155,15 @@ pub struct EngineHandle {
     pub shared: Arc<EngineShared>,
     pub sample_rate: f64,
     pub max_block: usize,
+    midi: Option<MidiSender>,
 }
 
 impl EngineHandle {
+    /// Take the (single) live-MIDI sender. Returns `None` if it was already taken.
+    pub fn take_midi_sender(&mut self) -> Option<MidiSender> {
+        self.midi.take()
+    }
+
     /// Queue a command. Returns it back if the queue is full.
     pub fn send(&mut self, cmd: EngineCommand) -> Result<(), EngineCommand> {
         self.commands
@@ -201,8 +222,8 @@ impl Metronome {
             );
             match click_at {
                 Some(off) => {
-                    let downbeat =
-                        (next_click / beat).round() as u64 % sig.numerator.max(1) as u64 == 0;
+                    let downbeat = ((next_click / beat).round() as u64)
+                        .is_multiple_of(sig.numerator.max(1) as u64);
                     self.freq = if downbeat { 1760.0 } else { 880.0 };
                     self.amp = if downbeat { 0.5 } else { 0.3 };
                     self.phase = 0.0;
@@ -257,6 +278,7 @@ pub struct Engine {
     commands: rtrb::Consumer<EngineCommand>,
     garbage: rtrb::Producer<Garbage>,
     events: rtrb::Producer<EngineEvent>,
+    midi: rtrb::Consumer<(TrackId, MidiMessage)>,
     shared: Arc<EngineShared>,
 }
 
@@ -265,6 +287,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
     let (cmd_tx, cmd_rx) = rtrb::RingBuffer::new(COMMAND_CAPACITY);
     let (gb_tx, gb_rx) = rtrb::RingBuffer::new(GARBAGE_CAPACITY);
     let (ev_tx, ev_rx) = rtrb::RingBuffer::new(EVENT_CAPACITY);
+    let (midi_tx, midi_rx) = rtrb::RingBuffer::new(MIDI_CAPACITY);
     let shared = Arc::new(EngineShared::default());
     shared.sample_rate.store(sample_rate);
     let engine = Engine {
@@ -290,6 +313,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         commands: cmd_rx,
         garbage: gb_tx,
         events: ev_tx,
+        midi: midi_rx,
         shared: shared.clone(),
     };
     let handle = EngineHandle {
@@ -299,6 +323,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         shared,
         sample_rate,
         max_block,
+        midi: Some(MidiSender { producer: midi_tx }),
     };
     (engine, handle)
 }
@@ -606,6 +631,13 @@ impl Engine {
     fn process_block(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
         while let Ok(cmd) = self.commands.pop() {
             self.handle_command(cmd);
+        }
+        while let Ok((track, message)) = self.midi.pop() {
+            if let Some(t) = self.track_mut(track) {
+                if t.live.len() < t.live.capacity() {
+                    t.live.push(MidiEvent::new(0, message));
+                }
+            }
         }
         let frames = out_l.len();
         let transport = self.transport();

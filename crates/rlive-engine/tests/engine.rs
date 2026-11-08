@@ -356,3 +356,30 @@ fn replace_all_swaps_session() {
     assert!((l[2399] - 0.5).abs() < 1e-3);
     assert_eq!(h.collect_garbage(), 2);
 }
+
+#[test]
+fn midi_sender_reaches_track() {
+    let (mut engine, mut h) = create_engine(SR, BLOCK);
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let (tid, track) = track_with(Box::new(Recorder { log: log.clone() }));
+    h.send(EngineCommand::AddTrack { index: 0, track })
+        .ok()
+        .unwrap();
+    let mut midi = h.take_midi_sender().unwrap();
+    assert!(h.take_midi_sender().is_none());
+    run(&mut engine, 256);
+    assert!(midi.send(
+        tid,
+        MidiMessage::NoteOn {
+            channel: 0,
+            key: 61,
+            velocity: 0.5
+        }
+    ));
+    run(&mut engine, 256);
+    assert!(log
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(_, m)| matches!(m, MidiMessage::NoteOn { key: 61, .. })));
+}
