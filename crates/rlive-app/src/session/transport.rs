@@ -26,6 +26,8 @@ impl Session {
     }
 
     pub fn stop(&mut self) {
+        // Stop ends Session recording along with the transport (manual p. 513).
+        self.set_session_automation_record(false);
         self.send(EngineCommand::Transport(TransportCmd::Stop));
     }
 
@@ -78,6 +80,10 @@ impl Session {
 
     /// A clip's launch button went down: at `velocity`, for one played from a key or note.
     pub fn clip_down(&mut self, track: TrackId, slot: usize, velocity: f32) {
+        // Switched off: launching it does nothing, rather than stopping what's playing.
+        if self.clip(track, slot).is_some_and(|c| !c.active) {
+            return;
+        }
         // Its sample isn't ready: the slot is empty as far as the engine knows, and launching an
         // empty slot would stop the track.
         if self.clip_waiting_for_sample(track, slot) {

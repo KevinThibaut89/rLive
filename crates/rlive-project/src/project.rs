@@ -301,6 +301,20 @@ impl Project {
         }
     }
 
+    /// Calls `f` for every clip in the project: Session slots, the timeline and take lanes.
+    pub fn for_each_clip_mut(&mut self, f: &mut impl FnMut(&mut Clip)) {
+        for t in self.tracks.iter_mut().chain(self.returns.iter_mut()) {
+            t.clips.iter_mut().flatten().for_each(&mut *f);
+            for c in t
+                .arrangement
+                .iter_mut()
+                .chain(t.take_lanes.iter_mut().flat_map(|l| &mut l.clips))
+            {
+                f(&mut c.clip);
+            }
+        }
+    }
+
     pub fn track(&self, id: TrackId) -> Option<&Track> {
         self.tracks.iter().chain(&self.returns).find(|t| t.id == id)
     }

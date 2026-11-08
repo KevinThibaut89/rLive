@@ -3,6 +3,7 @@
 mod arrangement;
 pub mod arrangement_edit;
 mod clip;
+pub mod clip_edit;
 pub mod clip_envelope;
 mod defaults;
 mod device;

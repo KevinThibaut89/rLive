@@ -636,11 +636,10 @@ fn follow_playhead(state: &mut UiState, session: &Session, lanes: Rect, tick: f6
     if !state.arr.follow.update(playing) || state.arr.drag.is_some() || state.arr.auto.dragging() {
         return;
     }
+    let scrolls = state.follow_scrolls;
     let a = &mut state.arr;
     let x = (tick / PPQ as f64) as f32 * a.px_per_beat;
-    if x > a.scroll.x + lanes.width() - 24.0 || x < a.scroll.x {
-        a.scroll.x = (x - lanes.width() * 0.1).max(0.0);
-    }
+    a.scroll.x = view::follow_scroll(a.scroll.x, x, lanes.width(), scrolls);
 }
 
 fn paint_lane_backgrounds(ui: &egui::Ui, state: &UiState, lanes: Rect, rows: &Rows) {

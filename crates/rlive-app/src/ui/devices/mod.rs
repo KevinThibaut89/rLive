@@ -13,6 +13,7 @@ mod views;
 pub(crate) use queue::{group_selected, ungroup_selected, Action, ActionQueue};
 use rack::{RackUi, RackView};
 
+use super::automation;
 use super::icons;
 use super::keymap::FocusArea;
 use super::panels::{self, PanelCtx};
@@ -83,6 +84,8 @@ pub(crate) struct DrawCx<'a> {
     /// The arrow keys are the Device View's to use this frame.
     keyboard_free: bool,
     scroll_to: Option<DeviceId>,
+    /// Device controls drawn this frame, for their automation commands afterwards.
+    zones: Vec<(Rect, ChainRef, rlive_core::param::EnvTarget)>,
 }
 
 pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
@@ -125,6 +128,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let height = area.height();
     let dt = ui.input(|i| i.stable_dt).min(0.1);
     let mut queue = ActionQueue::default();
+    let zones;
     {
         let session: &Session = session;
         let root = chain.owner();
@@ -172,6 +176,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
             mappable,
             keyboard_free,
             scroll_to: state.devices.scroll_to,
+            zones: Vec::new(),
         };
         egui::ScrollArea::horizontal()
             .id_salt("device_chain")
@@ -182,6 +187,10 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
                     draw_chain(ui, &mut cx, chain, &nodes, height, DROP_ZONE_W);
                 });
             });
+        zones = std::mem::take(&mut cx.zones);
+    }
+    for (rect, zone_chain, target) in zones {
+        automation::control_zone(&au, session, state, rect, zone_chain, target);
     }
     state.devices.scroll_to = None;
     queue.apply(session, &mut state.devices, &mut state.status);
@@ -843,16 +852,16 @@ fn param_control(
         cx.queue.push(chain, Action::ReEnable(dev.id, prm.id));
     }
     let rect = ui.max_rect();
-    rack::map_overlay(
-        ui,
-        cx,
-        chain,
-        rect,
-        ParamRef {
-            owner: ParamOwner::Device(dev.id),
-            id: ParamId(prm.id),
-        },
-    );
+    let target = ParamRef {
+        owner: ParamOwner::Device(dev.id),
+        id: ParamId(prm.id),
+    };
+    // Its own context menu is the Re-Enable one, while it applies.
+    if !cell_state.overridden() {
+        cx.zones
+            .push((rect, chain, rlive_core::param::EnvTarget::Param(target)));
+    }
+    rack::map_overlay(ui, cx, chain, rect, target);
 }
 
 /// The knob position of a parameter: its project value, the plugin's own, or its default.

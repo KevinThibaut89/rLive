@@ -2,7 +2,7 @@
 
 use super::envelopes::{ClipEnvelopes, EnvelopedClip};
 use rlive_core::warp::{WarpMap, WarpMode};
-use rlive_core::{SampleBuffer, ScaleInfo};
+use rlive_core::{ClipRegion, SampleBuffer, ScaleInfo};
 use std::sync::Arc;
 
 /// A point on an expression envelope, `time` ticks after the note starts.
@@ -48,6 +48,14 @@ impl Default for Note {
     }
 }
 
+/// The bank and program messages a MIDI clip sends as it starts. Each is optional.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ProgramChange {
+    pub bank: Option<u8>,
+    pub sub_bank: Option<u8>,
+    pub program: Option<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MidiClip {
     /// Loop length in ticks.
@@ -59,6 +67,8 @@ pub struct MidiClip {
     pub(super) max_len: u64,
     /// The clip's scale, for devices with Use Current Scale.
     pub scale: Option<ScaleInfo>,
+    /// What it sends when it starts.
+    pub program: Option<ProgramChange>,
 }
 
 impl MidiClip {
@@ -72,12 +82,19 @@ impl MidiClip {
             looped,
             max_len,
             scale: None,
+            program: None,
         }
     }
 
     /// The clip with a scale for scale-aware devices.
     pub fn with_scale(mut self, scale: Option<ScaleInfo>) -> Self {
         self.scale = scale;
+        self
+    }
+
+    /// The clip with bank and program messages to send when it starts.
+    pub fn with_program(mut self, program: Option<ProgramChange>) -> Self {
+        self.program = program;
         self
     }
 }
@@ -123,7 +140,8 @@ pub enum ClipData {
     Midi(MidiClip),
     Audio(AudioClip),
     Warped(WarpedClip),
-    /// Any of the above, with envelopes on its own content.
+    /// Any of the above, with envelopes on its own content or anything else that sets it apart
+    /// from plain playback: markers away from their defaults, an edge fade, Hi-Q.
     Enveloped(Box<EnvelopedClip>),
 }
 
@@ -151,6 +169,26 @@ impl ClipData {
             ClipData::Warped(c) => c.audio.length,
             ClipData::Enveloped(_) => 0,
         }
+    }
+
+    /// Where this clip's markers put playback.
+    pub fn region(&self) -> ClipRegion {
+        match self {
+            ClipData::Enveloped(c) => c
+                .region
+                .unwrap_or_else(|| ClipRegion::whole(c.clip.length() as f64, c.clip.looped())),
+            _ => ClipRegion::whole(self.length() as f64, self.looped()),
+        }
+    }
+
+    /// Whether this clip's cut edges get a short fade.
+    pub fn edge_fade(&self) -> bool {
+        matches!(self, ClipData::Enveloped(c) if c.edge_fade)
+    }
+
+    /// Whether this clip resamples with Hi-Q interpolation.
+    pub fn hi_q(&self) -> bool {
+        matches!(self, ClipData::Enveloped(c) if c.hi_q)
     }
 
     /// The scale devices should follow while this clip plays.

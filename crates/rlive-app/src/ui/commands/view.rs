@@ -73,6 +73,20 @@ impl RliveApp {
         if side == Detail::Clip && self.ui.selected_clip.is_none() {
             return;
         }
+        // The Clip View goes on top of a Device View that's open (manual p. 200).
+        if side == Detail::Clip
+            && self.ui.show_detail
+            && self.ui.detail == Detail::Devices
+            && !self.ui.clip_view.stacked
+        {
+            self.ui.clip_view.stacked = true;
+            return;
+        }
+        if self.ui.clip_view.stacked {
+            self.ui.clip_view.stacked = false;
+            self.ui.detail = side;
+            return;
+        }
         if self.ui.show_detail && self.ui.detail == side {
             self.toggle_detail();
         } else {

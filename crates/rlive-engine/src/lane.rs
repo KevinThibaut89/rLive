@@ -43,7 +43,7 @@ pub struct LaneClip {
 }
 
 impl LaneClip {
-    /// Song tick of clip-local 0.
+    /// Song tick the clip's run began on.
     fn origin(&self) -> f64 {
         self.start as f64 - self.offset as f64
     }
@@ -62,10 +62,11 @@ impl LaneClip {
     /// content runs out first.
     fn stop(&self) -> f64 {
         let end = self.sound_end();
-        if self.data.looped() {
+        let region = self.data.region();
+        if region.looped {
             end
         } else {
-            end.min(self.origin() + self.data.length() as f64)
+            end.min(self.origin() + region.play_length())
         }
     }
 
@@ -130,6 +131,10 @@ pub(crate) struct LanePlayer {
     voices: Voices,
     /// The playhead moved: find the clip again and chase notes on the next render.
     resync: bool,
+    /// A newer lane waiting for the Clip Update Rate, and when it takes over.
+    pub(crate) update: Option<(Arc<ArrangementLane>, f64)>,
+    /// A lane an update has replaced, until the engine has retired it.
+    pub(crate) spent: Option<Arc<ArrangementLane>>,
     /// MIDI Envelope Auto-Reset: each new clip sets controllers back first.
     pub(crate) auto_reset: bool,
     /// Whether a clip entered in the middle of a note plays that note.
@@ -143,6 +148,8 @@ impl LanePlayer {
             slots: [Slot::new(0, LANE_VOICE), Slot::new(1, LANE_CROSSFADE_VOICE)],
             voices: Voices::new(NoteSpace::Arrangement),
             resync: true,
+            update: None,
+            spent: None,
             auto_reset: false,
             chase: true,
         }
@@ -217,6 +224,36 @@ impl LanePlayer {
         old
     }
 
+    /// Whether a clip is under the playhead right now.
+    pub fn in_clip(&self) -> bool {
+        self.slots.iter().any(|s| s.current.is_some())
+    }
+
+    /// Render the lane over `[a, b)`, swapping in a waiting update where it falls. The lane it
+    /// replaces waits in [`Self::spent`] to be freed off the audio thread.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_updating(
+        &mut self,
+        time: BlockTime,
+        a: f64,
+        b: f64,
+        ev: &mut Vec<MidiEvent>,
+        l: &mut [f32],
+        r: &mut [f32],
+        stretch: &mut StretchBank,
+    ) {
+        let mut from = a;
+        if self.update.as_ref().is_some_and(|(_, at)| *at < b) {
+            if let Some((lane, at)) = self.update.take() {
+                let at = at.max(a);
+                self.render(time, from, at, ev, l, r, stretch);
+                self.spent = Some(self.swap(lane, at, ev));
+                from = at;
+            }
+        }
+        self.render(time, from, b, ev, l, r, stretch);
+    }
+
     /// Render the lane over the song-tick range `[a, b)`.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
@@ -239,6 +276,7 @@ impl LanePlayer {
             resync,
             auto_reset,
             chase,
+            ..
         } = self;
         let clips = &lane.clips;
         let seek = std::mem::take(resync);
@@ -316,6 +354,7 @@ fn render_slot(
                 if chase_notes && first_voice {
                     chase(
                         &clip.data,
+                        clip.data.region(),
                         origin,
                         enter,
                         time.event_offset(enter),
@@ -344,6 +383,7 @@ fn render_slot(
         let stop = clip.stop();
         render_range(
             &clip.data,
+            clip.data.region(),
             clip.origin(),
             t,
             b.min(stop),

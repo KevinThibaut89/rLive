@@ -2,7 +2,7 @@
 
 use super::data::{ClipData, ExprPoint, MidiClip, Note, NoteExpression};
 use super::BlockTime;
-use rlive_core::{ExprKind, MidiEvent, MidiMessage, NoteId, NoteIds, NoteSpace};
+use rlive_core::{ClipRegion, ExprKind, MidiEvent, MidiMessage, NoteId, NoteIds, NoteSpace};
 
 /// How many clip notes can sound at once. A further note simply doesn't start, so that every
 /// note which does start can always be released.
@@ -109,8 +109,24 @@ fn note_on(note: &Note, key: u8, note_id: NoteId) -> MidiMessage {
     }
 }
 
+/// The content window pass `k` of a clip plays, and the song tick its content position 0 falls on
+/// in that pass. Pass 0 is the run from the start marker to the end of the region; each later
+/// pass is one time round the loop.
+fn pass_window(region: &ClipRegion, origin: f64, k: i64) -> (f64, f64, f64) {
+    let zero = origin + region.lead();
+    let base = zero - region.loop_start + k as f64 * region.loop_len;
+    let from = if k == 0 {
+        region.start
+    } else {
+        region.loop_start
+    };
+    (base, from, region.content_end())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_midi(
     clip: &MidiClip,
+    region: ClipRegion,
     origin: f64,
     a: f64,
     seg_end: f64,
@@ -118,15 +134,21 @@ pub(super) fn render_midi(
     voices: &mut Voices,
     ev: &mut Vec<MidiEvent>,
 ) {
-    let len = clip.length as f64;
-    let k_first = (((a - origin) / len).floor() as i64 - 1).max(0);
-    let mut k_last = ((seg_end - origin) / len).floor() as i64;
-    if !clip.looped {
+    let len = region.loop_len;
+    let zero = origin + region.lead();
+    let mut k_first = (((a - zero) / len).floor() as i64 - 1).max(0);
+    let mut k_last = ((seg_end - zero) / len).floor() as i64;
+    if !region.looped {
+        k_first = 0;
         k_last = k_last.min(0);
+    }
+    // Before the first pass of the loop a clip is still in its first window, running in.
+    if region.lead() > 0.0 {
+        k_last = k_last.max(0);
     }
     let lookback = clip.max_len as f64;
     for k in k_first..=k_last {
-        let base = origin + k as f64 * len;
+        let (base, window_from, window_to) = pass_window(&region, origin, k);
         // One tick of slack keeps float error in `base` from dropping a boundary note; the
         // exact comparisons below decide what actually fires.
         let scan_from = a - base - lookback - 1.0;
@@ -134,13 +156,16 @@ pub(super) fn render_midi(
         let first = clip.notes.partition_point(|n| (n.start as f64) < scan_from);
         for (i, note) in clip.notes.iter().enumerate().skip(first) {
             let start = note.start as f64;
-            if start > scan_to || start >= len {
+            if start > scan_to || start >= window_to {
                 break;
+            }
+            if start < window_from {
+                continue;
             }
             let index = i as u32;
             let key = note.key & 127;
             let on = base + start;
-            let off = base + ((note.start + note.length.max(1)) as f64).min(len);
+            let off = base + ((note.start + note.length.max(1)) as f64).min(window_to);
             // Start before stop, or a note shorter than the block never gets its note-off.
             // Notes meeting at a boundary still come off first: the earlier one is earlier here
             // (and in event order, once the block is sorted).
@@ -169,29 +194,38 @@ pub(super) fn render_midi(
 /// Notes starting exactly at `at` are left to [`render_range`].
 pub(crate) fn chase(
     clip: &ClipData,
+    region: ClipRegion,
     origin: f64,
     at: f64,
     offset: u32,
     voices: &mut Voices,
     ev: &mut Vec<MidiEvent>,
 ) {
-    let ClipData::Midi(clip) = clip.content() else {
+    let ClipData::Midi(midi) = clip.content() else {
         return;
     };
-    let len = clip.length as f64;
+    let len = region.loop_len;
     let local = at - origin;
-    if len <= 0.0 || local < 0.0 || (!clip.looped && local >= len) {
+    if len <= 0.0 || local < 0.0 || (!region.looped && local >= region.play_length()) {
         return;
     }
-    let base = origin + (local / len).floor() * len;
-    let scan_from = at - base - clip.max_len as f64 - 1.0;
-    let first = clip.notes.partition_point(|n| (n.start as f64) < scan_from);
-    for (i, note) in clip.notes.iter().enumerate().skip(first) {
+    let k = if region.looped {
+        ((at - (origin + region.lead())) / len).floor().max(0.0) as i64
+    } else {
+        0
+    };
+    let (base, window_from, window_to) = pass_window(&region, origin, k);
+    let scan_from = at - base - midi.max_len as f64 - 1.0;
+    let first = midi.notes.partition_point(|n| (n.start as f64) < scan_from);
+    for (i, note) in midi.notes.iter().enumerate().skip(first) {
         let start = note.start as f64;
-        if base + start >= at || start >= len {
+        if base + start >= at || start >= window_to {
             break;
         }
-        let off = base + ((note.start + note.length.max(1)) as f64).min(len);
+        if start < window_from {
+            continue;
+        }
+        let off = base + ((note.start + note.length.max(1)) as f64).min(window_to);
         if off > at {
             let key = note.key & 127;
             if let Some(id) = voices.on(i as u32, key, note.release) {

@@ -42,6 +42,18 @@ impl Follow {
     }
 }
 
+/// Where a view of `width` should be scrolled to, for a playhead at `x` in the content: a new page
+/// when it leaves the view, or with `scrolls`, steadily with the playhead a third of the way in.
+pub fn follow_scroll(scroll: f32, x: f32, width: f32, scrolls: bool) -> f32 {
+    if scrolls {
+        (x - width / 3.0).max(0.0)
+    } else if x > scroll + width - 24.0 || x < scroll {
+        (x - width * 0.1).max(0.0)
+    } else {
+        scroll
+    }
+}
+
 /// The view that shows `[start, end)` filling `width`, with a little room either side.
 pub fn zoom_for(start: u64, end: u64, width: f32, min: f32, max: f32) -> (f32, f32) {
     let beats = (end.saturating_sub(start)).max(1) as f32 / rlive_core::PPQ as f32;
@@ -98,6 +110,30 @@ mod tests {
         f.pause();
         f.update(false);
         assert!(f.update(true), "stopping or restarting resumes");
+    }
+
+    #[test]
+    fn follow_scroll_pages_or_keeps_moving() {
+        assert_eq!(
+            follow_scroll(0.0, 500.0, 1000.0, false),
+            0.0,
+            "still on the page"
+        );
+        assert_eq!(
+            follow_scroll(0.0, 990.0, 1000.0, false),
+            890.0,
+            "turns the page"
+        );
+        assert_eq!(
+            follow_scroll(0.0, 900.0, 900.0, true),
+            600.0,
+            "keeps moving"
+        );
+        assert_eq!(
+            follow_scroll(50.0, 10.0, 900.0, true),
+            0.0,
+            "stops at the start"
+        );
     }
 
     #[test]

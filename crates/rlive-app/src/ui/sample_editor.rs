@@ -1,6 +1,8 @@
 //! The Sample tab of the Clip View: the waveform with its Warp Markers and transients, and the
 //! warp, pitch and gain controls.
 
+use super::clip_view::markers::{self, Axis, MARKER_H, SCRUB_H};
+use super::clip_view::{self, EditorMode};
 use super::keymap::FocusArea;
 use super::theme::*;
 use super::widgets::{self, info, rgb};
@@ -11,8 +13,7 @@ use rlive_core::warp::WarpMap;
 use rlive_core::PPQ;
 use rlive_project::warp_edit::{self, WarpFrom, WarpOp};
 use rlive_project::{BeatsLoop, BeatsPreserve, WarpMode};
-use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::path::{Path, PathBuf};
 
 const RULER_H: f32 = 16.0;
 const LANE_H: f32 = 16.0;
@@ -102,7 +103,12 @@ pub struct SampleState {
     drag: Option<Drag>,
     /// Where the context menu was opened, in seconds.
     menu_at: Option<f64>,
-    quantize_open: bool,
+    /// What part of the clip the editor shows: first tick and how many. `None` shows all of it.
+    pub view: Option<(f64, f64)>,
+    /// Views to go back to, for each zoom in.
+    pub zoom_back: Vec<Option<(f64, f64)>>,
+    /// The time ruler is being dragged, and where its zoom started.
+    ruler_zoom: Option<(f64, f64, f32, f32)>,
     quantize_grid: u64,
     /// 0 to 100.
     quantize_amount: f32,
@@ -127,7 +133,24 @@ impl SampleState {
             self.selection = None;
             self.drag = None;
             self.menu_at = None;
+            self.view = None;
+            self.zoom_back.clear();
         }
+    }
+
+    /// The selection as ticks, which `tick_of` maps seconds to.
+    pub fn selection_seconds(&self) -> Option<(f64, f64)> {
+        self.selection
+    }
+
+    /// Where new markers go, in seconds.
+    pub fn insert_seconds(&self) -> Option<f64> {
+        self.insert
+    }
+
+    /// Selects a stretch of the audio, in seconds.
+    pub fn select(&mut self, from: f64, to: f64) {
+        self.selection = Some((from, to));
     }
 
     /// Whether the Delete key has something here to act on.
@@ -160,23 +183,6 @@ impl Timing {
     }
 }
 
-/// The width of the waveform, and what part of the clip it shows.
-struct Axis {
-    left: f32,
-    width: f32,
-    end: f64,
-}
-
-impl Axis {
-    fn x(&self, tick: f64) -> f32 {
-        self.left + (tick / self.end.max(1.0)) as f32 * self.width
-    }
-
-    fn tick(&self, x: f32) -> f64 {
-        ((x - self.left) / self.width.max(1.0)) as f64 * self.end
-    }
-}
-
 fn clips_for_edit(session: &Session, state: &UiState, cref: ClipRef) -> Vec<ClipRef> {
     let selected: Vec<ClipRef> = state
         .arr
@@ -201,11 +207,65 @@ pub fn show(
     };
     state.sample.follow_clip(cref);
     let group = clips_for_edit(session, state, cref);
-    controls(ui, session, state, cref, &group, &view);
-    if state.sample.quantize_open {
-        quantize_row(ui, session, state, &group, &view);
-    }
+    details_header(ui, session, state, cref);
     waveform(ui, session, state, cref, &group, path, &view);
+}
+
+/// The samples of the clips selected, in one line (manual p. 230).
+fn details_header(ui: &mut egui::Ui, session: &Session, state: &mut UiState, cref: ClipRef) {
+    let group = clip_view::targets(session, state, cref);
+    let paths: Vec<PathBuf> = group
+        .iter()
+        .filter_map(|r| match &session.clip_at(*r)?.content {
+            rlive_project::ClipContent::Audio { file, .. } => Some(file.path.clone()),
+            rlive_project::ClipContent::Midi { .. } => None,
+        })
+        .collect();
+    let Some((name, text)) = clip_view::details_line(&mut state.clip_view, &paths) else {
+        return;
+    };
+    ui.horizontal(|ui| {
+        let r = ui.add(
+            egui::Label::new(RichText::new(name).color(pal().text).small())
+                .sense(Sense::click())
+                .truncate(),
+        );
+        if info(r, "Sample — click to find it in the browser").clicked() {
+            if let Some(path) = paths.first() {
+                clip_view::show_in_browser(state, path);
+            }
+        }
+        ui.label(RichText::new(text).small().color(pal().text_dim));
+    });
+}
+
+/// The warp settings of the Audio Utilities panel.
+pub(super) fn utilities(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    cref: ClipRef,
+) {
+    let Some(view) = session.warp_view(cref) else {
+        ui.label(RichText::new("Loading…").color(pal().text_faint));
+        return;
+    };
+    let group = clips_for_edit(session, state, cref);
+    controls(ui, session, &group, &view);
+}
+
+/// The Transform panel of an audio clip: Quantize, to a grid and by an amount.
+pub(super) fn quantize_panel(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    cref: ClipRef,
+) {
+    let Some(view) = session.warp_view(cref) else {
+        return;
+    };
+    let group = clips_for_edit(session, state, cref);
+    quantize_row(ui, session, state, &group, &view);
 }
 
 /// All there is to say about a clip whose file hasn't been read, or can't be.
@@ -222,19 +282,12 @@ fn status_only(ui: &mut egui::Ui, session: &Session, path: &Path) {
     }
 }
 
-fn controls(
-    ui: &mut egui::Ui,
-    session: &mut Session,
-    state: &mut UiState,
-    cref: ClipRef,
-    group: &[ClipRef],
-    view: &WarpView,
-) {
+fn controls(ui: &mut egui::Ui, session: &mut Session, group: &[ClipRef], view: &WarpView) {
     let warp = &view.warp;
     ui.horizontal_wrapped(|ui| {
         let r = widgets::state_button(
             ui,
-            Vec2::new(44.0, 18.0),
+            Vec2::new(44.0, 16.0),
             warp.enabled,
             pal().accent,
             "Warp",
@@ -249,7 +302,7 @@ fn controls(
         }
         let mut mode = warp.mode;
         let r = egui::ComboBox::from_id_salt("warp_mode")
-            .width(96.0)
+            .width(80.0)
             .selected_text(mode_label(warp.mode))
             .show_ui(ui, |ui| {
                 for m in MODES {
@@ -264,11 +317,7 @@ fn controls(
             session.set_warp_mode(group, mode);
         }
         mode_params(ui, session, group, view);
-        ui.add_space(8.0);
         bpm_field(ui, session, group, view);
-    });
-    ui.horizontal_wrapped(|ui| {
-        pitch_and_gain(ui, session, state, cref, group, view);
     });
 }
 
@@ -382,78 +431,6 @@ fn bpm_field(ui: &mut egui::Ui, session: &mut Session, group: &[ClipRef], view: 
     }
 }
 
-fn pitch_and_gain(
-    ui: &mut egui::Ui,
-    session: &mut Session,
-    state: &mut UiState,
-    cref: ClipRef,
-    group: &[ClipRef],
-    view: &WarpView,
-) {
-    let pitch_locked = !view.warp.enabled || view.warp.mode == WarpMode::RePitch;
-    let hint = if view.warp.mode == WarpMode::RePitch && view.warp.enabled {
-        "Re-Pitch changes the pitch with the playback speed: transposition has no effect"
-    } else {
-        "Turn Warp on to transpose"
-    };
-    let (mut semitones, mut cents) = (view.transpose, view.detune_cents);
-    ui.add_enabled_ui(!pitch_locked, |ui| {
-        ui.label(RichText::new("Transpose").color(pal().text_dim));
-        let r = ui
-            .add(
-                egui::DragValue::new(&mut semitones)
-                    .range(-48..=48)
-                    .suffix(" st"),
-            )
-            .on_disabled_hover_text(hint);
-        info(r, "Transpose — shift the clip's pitch, in semitones");
-        ui.label(RichText::new("Detune").color(pal().text_dim));
-        let r = ui
-            .add(
-                egui::DragValue::new(&mut cents)
-                    .range(-50.0..=50.0)
-                    .speed(0.5)
-                    .max_decimals(0)
-                    .suffix(" ct"),
-            )
-            .on_disabled_hover_text(hint);
-        info(r, "Detune — shift the clip's pitch, in cents");
-    });
-    if semitones != view.transpose || cents != view.detune_cents {
-        session.set_clip_pitch(group, semitones, cents);
-    }
-    let mut gain = view.gain_db;
-    ui.label(RichText::new("Gain").color(pal().text_dim));
-    let r = ui.add(
-        egui::DragValue::new(&mut gain)
-            .range(-70.0..=24.0)
-            .speed(0.1)
-            .max_decimals(1)
-            .suffix(" dB"),
-    );
-    info(r, "Clip Gain — the clip's level, in dB");
-    if gain != view.gain_db {
-        session.set_clip_gain(group, gain);
-    }
-    ui.add_space(8.0);
-    let r = info(
-        ui.small_button("Save"),
-        "Save — store this clip's settings and Warp Markers with the sample, for new clips of it",
-    );
-    if r.clicked() {
-        if let Err(reason) = session.save_clip_with_sample(cref) {
-            session.messages.push(reason);
-        }
-    }
-    let r = info(
-        ui.small_button("Quantize…"),
-        "Quantize — move the audio's transients to the grid",
-    );
-    if r.clicked() {
-        state.sample.quantize_open = !state.sample.quantize_open;
-    }
-}
-
 fn quantize_row(
     ui: &mut egui::Ui,
     session: &mut Session,
@@ -516,29 +493,55 @@ fn waveform(
     path: &Path,
     view: &WarpView,
 ) {
-    let height = (ui.available_height() - 20.0).max(64.0);
-    let (rect, resp) = ui.allocate_exact_size(
-        Vec2::new(ui.available_width(), height),
-        Sense::click_and_drag(),
-    );
     let warped = view.warp.enabled && view.warp.markers.len() >= 2;
     let timing = Timing {
         map: warped.then(|| warp_edit::seconds_map(&view.warp)).flatten(),
         ticks_per_second: session.project.tempo / 60.0 * PPQ as f64,
     };
     let clip = session.clip_at(cref).cloned();
-    let clip_len = clip.as_ref().map_or(0, |c| c.length) as f64;
+    let clip_len = clip
+        .as_ref()
+        .map_or(0, |c| c.loop_end().max(c.end_marker())) as f64;
     let color = clip.as_ref().map_or(pal().accent, |c| rgb(c.color));
-    let end_tick = timing.tick(view.seconds).max(clip_len).max(1.0);
+    let whole = timing.tick(view.seconds).max(clip_len).max(1.0);
+    if state.clip_view.show_overview {
+        let (strip, _) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 10.0), Sense::hover());
+        let (start, ticks) = state.sample.view.unwrap_or((0.0, whole));
+        if let Some(to) = markers::overview_strip(ui, strip, whole, start, ticks) {
+            state.sample.view = Some((to, ticks));
+        }
+    }
+    let height = (ui.available_height() - 18.0).max(64.0);
+    let (rect, resp) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width(), height),
+        Sense::click_and_drag(),
+    );
+    if let Some(at) = session
+        .clip_playhead(cref)
+        .filter(|_| state.clip_view.follow)
+    {
+        follow_view(&mut state.sample, at, whole, state.follow_scrolls);
+    }
+    let (start, ticks) = state.sample.view.unwrap_or((0.0, whole));
     let axis = Axis {
         left: rect.left(),
         width: rect.width(),
-        end: end_tick,
+        start,
+        ticks,
     };
 
     let ruler = Rect::from_min_size(rect.min, Vec2::new(rect.width(), RULER_H));
-    let lane = Rect::from_min_size(
+    let marker_strip = Rect::from_min_size(
         Pos2::new(rect.left(), ruler.bottom()),
+        Vec2::new(rect.width(), MARKER_H),
+    );
+    let scrub_strip = Rect::from_min_size(
+        Pos2::new(rect.left(), marker_strip.bottom()),
+        Vec2::new(rect.width(), SCRUB_H),
+    );
+    let lane = Rect::from_min_size(
+        Pos2::new(rect.left(), scrub_strip.bottom()),
         Vec2::new(rect.width(), LANE_H),
     );
     let wave = Rect::from_min_max(Pos2::new(rect.left(), lane.bottom()), rect.max);
@@ -548,9 +551,17 @@ fn waveform(
     p.rect_filled(rect, 1.0, pal().grid_bg);
     p.rect_filled(lane, 0.0, pal().panel_dark);
 
-    draw_ruler(&p, ruler, &axis, session);
+    let sig = clip
+        .as_ref()
+        .and_then(|c| c.signature)
+        .unwrap_or(session.project.time_signature);
+    draw_ruler(&p, ruler, &axis, sig);
     draw_selection(&p, wave, &axis, &timing, state.sample.selection);
-    draw_waveform(&p, wave, &axis, &timing, session, path, color, clip_len);
+    let plays = clip.as_ref().map_or((0.0, clip_len), |c| {
+        let r = rlive_project::clip_edit::crop_range(c);
+        (r.0 as f64, r.1 as f64)
+    });
+    draw_waveform(&p, wave, &axis, &timing, session, path, color, plays);
 
     let hovered_pos = resp.hover_pos();
     let pseudo = hovered_pos.and_then(|at| {
@@ -590,7 +601,7 @@ fn waveform(
             Stroke::new(1.0, pal().text),
         );
     }
-    draw_playhead(&p, wave, &axis, session, cref, clip_len);
+    markers::draw_playhead(ui, wave, session, cref, &axis);
 
     let marker_under = |x: f32| {
         view.warp
@@ -611,6 +622,10 @@ fn waveform(
     let modifiers = ui.input(|i| i.modifiers);
     let free = modifiers.command || modifiers.alt;
     let grid = state.sample.quantize_grid.max(1) as f64;
+    let snap = state.piano.grid;
+    markers::marker_strip(ui, marker_strip, session, state, cref, &axis, snap);
+    markers::scrub_strip(ui, scrub_strip, session, state, cref, &axis);
+    ruler_gesture(ui, ruler, session, state, cref, &axis, whole);
 
     if resp.secondary_clicked() {
         state.sample.menu_at = hovered_pos.map(|at| timing.seconds(axis.tick(at.x)));
@@ -660,6 +675,18 @@ fn waveform(
         }
     }
 
+    // With Permanent Scrub Areas on, the waveform's lower half is one (manual p. 227).
+    if state.clip_view.permanent_scrub {
+        let held = state.clip_view.scrubbing.is_some();
+        let on_lower = resp.is_pointer_button_down_on()
+            && !modifiers.shift
+            && ui
+                .input(|i| i.pointer.press_origin())
+                .is_some_and(|o| o.y >= upper && state.sample.drag.is_none());
+        if on_lower || held {
+            markers::scrub_gesture(&resp, session, &mut state.clip_view, cref, &axis);
+        }
+    }
     if resp.drag_started() {
         let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(rect.min);
         let sample = &mut state.sample;
@@ -688,10 +715,12 @@ fn waveform(
                     adjacent: modifiers.command,
                 }
             })
-        } else {
+        } else if origin.y < upper || !state.clip_view.permanent_scrub || modifiers.shift {
             Some(Drag::Select {
                 anchor: timing.seconds(axis.tick(origin.x)),
             })
+        } else {
+            None
         };
     }
     if resp.dragged() {
@@ -813,7 +842,7 @@ fn keyboard(
         run_quantize(session, sample, group, view);
     }
     if consume(ui, command_shift, Key::U) {
-        sample.quantize_open = !sample.quantize_open;
+        state.clip_view.mode = EditorMode::Content;
     }
     let selected = sample.selected_marker;
     let ticks: Vec<f64> = view.warp.markers.iter().map(|m| m.tick).collect();
@@ -874,6 +903,8 @@ fn context_menu(
             state.toggle_midi_auto_reset = true;
             ui.close();
         }
+        ui.separator();
+        clip_view::crop_menu(ui, session, state, group[0]);
         ui.separator();
         let at = state.sample.menu_at.or(state.sample.insert).unwrap_or(0.0);
         let selected_seconds = state.sample.selected_marker.and_then(|t| {
@@ -963,13 +994,13 @@ fn bar_label(bars: u32, suggested: bool) -> String {
     }
 }
 
-fn draw_ruler(p: &egui::Painter, ruler: Rect, axis: &Axis, session: &Session) {
-    let bar = session.project.time_signature.ticks_per_bar();
+fn draw_ruler(p: &egui::Painter, ruler: Rect, axis: &Axis, sig: rlive_core::TimeSignature) {
+    let bar = sig.ticks_per_bar();
     let mut tick = 0u64;
     let mut number = 1;
     let step_px = axis.x(bar as f64) - axis.x(0.0);
     let every = ((48.0 / step_px.max(1.0)).ceil() as u64).max(1);
-    while (tick as f64) <= axis.end {
+    while (tick as f64) <= axis.start + axis.ticks {
         let x = axis.x(tick as f64);
         if ((number - 1) as u64).is_multiple_of(every) {
             p.line_segment(
@@ -1012,7 +1043,7 @@ fn draw_waveform(
     session: &Session,
     path: &Path,
     color: egui::Color32,
-    clip_len: f64,
+    plays: (f64, f64),
 ) {
     let Some((peaks, sample_rate)) = session.samples.peaks(path) else {
         return;
@@ -1038,7 +1069,7 @@ fn draw_waveform(
             if a >= frames {
                 continue;
             }
-            let outside = left >= clip_len;
+            let outside = left < plays.0 || left >= plays.1;
             let (lo, hi) = peaks.min_max(ch, a, b);
             let cx = wave.left() + x as f32;
             p.line_segment(
@@ -1097,37 +1128,72 @@ fn draw_marker(p: &egui::Painter, lane: Rect, x: f32, color: egui::Color32, sele
     }
 }
 
-fn draw_playhead(
-    p: &egui::Painter,
-    wave: Rect,
-    axis: &Axis,
-    session: &Session,
-    cref: ClipRef,
-    clip_len: f64,
-) {
-    let position = match cref {
-        ClipRef::Slot { track, slot } => session.track_shared.get(&track).and_then(|s| {
-            (s.playing_slot.load(Ordering::Relaxed) == slot as i32).then(|| s.clip_position.load())
-        }),
-        ClipRef::Arr { track, id } => session.project.track(track).and_then(|t| {
-            let c = t.arr_clip(id)?;
-            let tick = session.engine.shared.tick.load();
-            (session.is_playing() && tick >= c.start as f64 && tick < c.end() as f64)
-                .then_some(c.offset as f64 + tick - c.start as f64)
-        }),
+/// Scrolling the view to keep the playhead on screen, a page at a time.
+fn follow_view(sample: &mut SampleState, at: f64, whole: f64, scrolls: bool) {
+    let (start, ticks) = sample.view.unwrap_or((0.0, whole));
+    let to = if scrolls {
+        at - ticks / 3.0
+    } else if at < start || at >= start + ticks {
+        at
+    } else {
+        start
     };
-    if let Some(local) = position {
-        let local = if clip_len > 0.0 {
-            local % clip_len
-        } else {
-            local
-        };
-        let x = axis.x(local);
-        p.line_segment(
-            [Pos2::new(x, wave.top()), Pos2::new(x, wave.bottom())],
-            Stroke::new(1.0, pal().text),
-        );
+    if to != start {
+        sample.view = Some((to.clamp(0.0, (whole - ticks).max(0.0)), ticks));
     }
+}
+
+/// The time ruler: Shift-click scrubs; dragging up or down zooms around the pointer, and sideways
+/// scrolls (manual p. 226).
+fn ruler_gesture(
+    ui: &mut egui::Ui,
+    ruler: Rect,
+    session: &mut Session,
+    state: &mut UiState,
+    cref: ClipRef,
+    axis: &Axis,
+    whole: f64,
+) {
+    let resp = ui.interact(
+        ruler,
+        ui.scope_id().with("sample_ruler"),
+        Sense::click_and_drag(),
+    );
+    if resp.clicked() && ui.input(|i| i.modifiers.shift) {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            session.scrub_clip(cref, axis.tick(pos.x), false);
+        }
+    }
+    if resp.drag_started() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            state.sample.ruler_zoom = Some((axis.start, axis.ticks, pos.x, pos.y));
+        }
+    }
+    if let (true, Some((start, ticks, x, y)), Some(pos)) = (
+        resp.dragged(),
+        state.sample.ruler_zoom,
+        resp.interact_pointer_pos(),
+    ) {
+        let zoom = (1.0 + (pos.y - y) as f64 * 0.01).clamp(0.02, 50.0);
+        let new_ticks = (ticks * zoom).clamp(whole / 2000.0, whole);
+        let at = Axis {
+            start,
+            ticks,
+            ..*axis
+        }
+        .tick(x);
+        let scroll = (x - pos.x) as f64 / axis.width.max(1.0) as f64 * new_ticks;
+        let share = ((x - axis.left) / axis.width.max(1.0)) as f64;
+        let new_start = (at - share * new_ticks + scroll).clamp(0.0, (whole - new_ticks).max(0.0));
+        state.sample.view = Some((new_start, new_ticks));
+    }
+    if resp.drag_stopped() {
+        state.sample.ruler_zoom = None;
+    }
+    info(
+        resp,
+        "Time Ruler — drag up or down to zoom, sideways to scroll; Shift-click to scrub",
+    );
 }
 
 #[cfg(test)]

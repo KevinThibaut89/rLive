@@ -9,7 +9,7 @@ use super::{sample_editor, session_view, widgets, RliveApp};
 use crate::audio;
 use crate::midi_input::{self, MidiInput};
 use crate::session::ShortSampleMode;
-use crate::settings::{ChannelBank, ClipColor, InputDevice, ScrollBars, Settings};
+use crate::settings::{ChannelBank, ClipColor, FollowBehavior, InputDevice, ScrollBars, Settings};
 use egui::{Color32, RichText, Sense, Stroke, StrokeKind, Vec2};
 use rlive_audio_io::{BitDepth, FileType};
 use rlive_project::clip_envelope::SessionAutomationIn;
@@ -201,7 +201,18 @@ impl RliveApp {
                 apply_scroll_bars(ui.ctx(), self.settings.scroll_bars);
             }
             ui.end_row();
-            soon(ui, "Follow Behavior", "Page", "C2");
+            label(ui, "Follow Behavior");
+            egui::ComboBox::from_id_salt("follow_behavior")
+                .selected_text(match self.settings.follow_behavior {
+                    FollowBehavior::Page => "Page",
+                    FollowBehavior::Scroll => "Scroll",
+                })
+                .show_ui(ui, |ui| {
+                    let v = &mut self.settings.follow_behavior;
+                    ui.selectable_value(v, FollowBehavior::Page, "Page");
+                    ui.selectable_value(v, FollowBehavior::Scroll, "Scroll");
+                });
+            ui.end_row();
             soon_check(ui, "Show UI Labels", true, "C19");
         });
         ui.add_space(10.0);
@@ -215,7 +226,9 @@ impl RliveApp {
         widgets::section_label(ui, "MOUSE AND PEN INPUT");
         grid(ui, "mouse", |ui| {
             soon_check(ui, "Pen Tablet Mode", false, "C19");
-            soon_check(ui, "Permanent Scrub Areas", true, "C2");
+            label(ui, "Permanent Scrub Areas");
+            ui.checkbox(&mut self.settings.permanent_scrub_areas, "");
+            ui.end_row();
             soon_check(ui, "Pitch-Locked Drawing", false, "C9");
         });
         ui.add_space(10.0);
@@ -535,7 +548,24 @@ impl RliveApp {
             label(ui, "Create Analysis Files");
             ui.checkbox(&mut samples.create_analysis_files, "");
             ui.end_row();
-            soon(ui, "Sample Editor", "None", "C13");
+            label(ui, "Sample Editor");
+            ui.horizontal(|ui| {
+                let shown = self
+                    .settings
+                    .sample_editor
+                    .as_ref()
+                    .map_or_else(|| "None".to_string(), |p| p.display().to_string());
+                ui.label(shown);
+                if ui.small_button("Browse").clicked() {
+                    if let Some(app) = rfd::FileDialog::new().pick_file() {
+                        self.settings.sample_editor = Some(app);
+                    }
+                }
+                if ui.small_button("Clear").clicked() {
+                    self.settings.sample_editor = None;
+                }
+            });
+            ui.end_row();
             label(ui, "Temporary Folder");
             ui.horizontal(|ui| {
                 let shown = self
@@ -731,6 +761,7 @@ fn link_tab(ui: &mut egui::Ui) {
 
 fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     let warp = &mut settings.warp;
+    let clip = &mut settings.clip;
     let record = &mut settings.record;
     let launch = &mut settings.launch;
     let session_automation = &mut settings.record_session_automation_in;
@@ -847,7 +878,15 @@ fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         ui.label("Select Next Scene on Launch");
         ui.checkbox(&mut launch.select_next_scene, "");
         ui.end_row();
-        soon(ui, "Clip Update Rate", "1/16", "later");
+        ui.label("Clip Update Rate");
+        egui::ComboBox::from_id_salt("clip_update_rate")
+            .selected_text(clip.update_rate.label())
+            .show_ui(ui, |ui| {
+                for rate in crate::settings::ClipUpdateRate::ALL {
+                    ui.selectable_value(&mut clip.update_rate, rate, rate.label());
+                }
+            });
+        ui.end_row();
     });
 }
 

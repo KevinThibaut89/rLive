@@ -75,7 +75,7 @@ impl Session {
             return;
         }
         let mut offset = (open.start as f64 - open.origin).max(0.0).round() as u64;
-        if open.clip.looped && open.clip.length > 0 {
+        if open.clip.looped && open.clip.length > 0 && open.clip.region().is_whole() {
             offset %= open.clip.length;
         }
         let placed = ArrangementClip {

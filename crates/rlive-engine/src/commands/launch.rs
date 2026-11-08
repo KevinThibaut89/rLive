@@ -50,6 +50,16 @@ pub enum LaunchCmd {
     StopAllClips,
     /// Put every track that launched a Session clip back on its lane.
     BackToArrangement,
+    /// Jump to `position` in the clip at the next launch point, launching it if need be. With
+    /// `repeat`, keep going back there every so many ticks until [`Self::ScrubRelease`].
+    Scrub {
+        track: TrackId,
+        slot: usize,
+        position: f64,
+        repeat: Option<f64>,
+    },
+    /// The mouse came up: let a scrubbed clip play on from where it is.
+    ScrubRelease(TrackId),
     /// Start recording into an empty slot, at the next launch point.
     RecordSlot {
         track: TrackId,
@@ -139,6 +149,23 @@ impl Engine {
             C::CloseRecording { track } => {
                 if let Some(i) = self.track_index(track) {
                     self.close_recording(i, true);
+                }
+            }
+            C::Scrub {
+                track,
+                slot,
+                position,
+                repeat,
+            } => {
+                if let Some(i) = self.tracks.iter().position(|t| t.id == track) {
+                    self.scrub(i, slot, position, repeat);
+                }
+            }
+            C::ScrubRelease(track) => {
+                if let Some(t) = self.tracks.iter_mut().find(|t| t.id == track) {
+                    if matches!(t.player.pending, Some(clip::Pending::Scrub { .. })) {
+                        t.player.pending = None;
+                    }
                 }
             }
             C::BackToArrangement => {
@@ -302,9 +329,10 @@ impl Engine {
         }
         let position = (tick - playing.start_tick).max(0.0);
         let moved = position + if forward { step } else { -step };
+        // Before the start marker there's only the loop to wrap into, if the run is in it.
         let moved = if moved >= 0.0 {
             moved
-        } else if playing.clip.looped() {
+        } else if playing.region.looped && playing.region.lead() <= 0.0 {
             moved.rem_euclid(len)
         } else {
             0.0
@@ -324,16 +352,33 @@ impl Engine {
             return;
         };
         let player = &mut track.player;
-        match player.playing.as_mut() {
-            Some(playing) => {
-                let old = std::mem::replace(&mut playing.clip, clip);
-                retire(&mut self.garbage, Garbage::Shared(old));
-                playing.slot = slot;
-                if let Some(f) = player.follow.as_mut() {
-                    f.slot = slot;
-                }
-            }
-            None => retire(&mut self.garbage, Garbage::Shared(clip)),
+        let tick = self.tick;
+        if player.playing.is_none() {
+            retire(&mut self.garbage, Garbage::Shared(clip));
+            return;
+        }
+        if let Some(old) = player.replace_playing(clip, tick) {
+            retire(&mut self.garbage, Garbage::Shared(old));
+        }
+        if let Some(playing) = player.playing.as_mut() {
+            playing.slot = slot;
+        }
+        if let Some(f) = player.follow.as_mut() {
+            f.slot = slot;
+        }
+    }
+
+    fn scrub(&mut self, track_idx: usize, slot: usize, position: f64, repeat: Option<f64>) {
+        self.start_transport();
+        let at = self.launch_point();
+        let track = &mut self.tracks[track_idx];
+        if matches!(track.slots.get(slot), Some(Some(_))) && track.launch_of(slot).active {
+            track.player.pending = Some(clip::Pending::Scrub {
+                slot,
+                at,
+                position,
+                repeat,
+            });
         }
     }
 

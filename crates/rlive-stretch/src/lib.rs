@@ -6,11 +6,13 @@
 //! stretcher is built, except [`detect_transients`], which runs off the audio thread.
 
 mod beats;
+mod hiq;
 mod interp;
 mod repitch;
 mod transients;
 
 pub use beats::Beats;
+pub use hiq::HiQ;
 pub use repitch::RePitch;
 pub use transients::{detect_transients, DETECTOR_VERSION};
 
@@ -28,6 +30,7 @@ pub fn bank(max_block: usize) -> StretchBank {
     StretchBank::with_rows(max_block, |kind| match kind {
         StretchKind::Beats => Box::new(Beats::new()) as Box<dyn Stretcher>,
         StretchKind::RePitch => Box::new(RePitch::new()),
+        StretchKind::OffHiQ => Box::new(HiQ::new()),
         _ => Box::new(Passthrough::default()),
     })
 }

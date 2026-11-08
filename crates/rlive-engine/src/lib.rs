@@ -31,7 +31,8 @@ use capture::{CaptureBlock, CaptureMode, InputSource};
 use clip::BlockTime;
 pub use clip::{
     velocity_gain, AudioClip, ClipCurve, ClipData, ClipEnvelopes, EnvCurve, EnvTiming,
-    EnvelopedClip, ExprPoint, MidiClip, Note, NoteExpression, SlotLaunch, WarpedClip,
+    EnvelopedClip, ExprPoint, MidiClip, Note, NoteExpression, ProgramChange, SlotLaunch,
+    WarpedClip,
 };
 pub use commands::{
     ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, PreviewCmd, RecordCmd, SceneInfo,
@@ -572,6 +573,8 @@ pub struct Engine {
     automation_arm: bool,
     /// MIDI Envelope Auto-Reset: a new clip sets some controllers back first.
     midi_auto_reset: bool,
+    /// Clip Update Rate: the grid edits reach a running clip on, in ticks. 0 is at once.
+    clip_update_rate: u64,
     /// Where on the timeline commands being handled now take effect.
     command_tick: f64,
     /// Backdated recorded notes never land before this tick.
@@ -653,6 +656,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         silence: vec![0.0; max_block],
         automation_arm: false,
         midi_auto_reset: false,
+        clip_update_rate: 0,
         command_tick: 0.0,
         record_floor: 0.0,
         metronome: Metronome {
@@ -779,6 +783,10 @@ impl Engine {
 
     fn launch_point(&self) -> f64 {
         self.maps.bars.next_boundary(self.tick, self.quantize)
+    }
+
+    pub(crate) fn transport_rolling(&self) -> bool {
+        self.playing
     }
 
     fn tempo_run(&self) -> TempoRun {
@@ -1126,6 +1134,11 @@ impl Engine {
             env,
             &mut retire_clip,
         );
+        for t in self.tracks.iter_mut() {
+            if let Some(lane) = t.lane.spent.take() {
+                retire(&mut self.garbage, Garbage::Shared(lane));
+            }
+        }
         if self.recording {
             self.log_session_playback();
         }

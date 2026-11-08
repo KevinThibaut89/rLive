@@ -44,6 +44,7 @@ impl Session {
         match result {
             Ok(sample) => {
                 self.record_fingerprint(&path);
+                self.external_edit_arrived(&path, &sample);
                 self.swap_in_sample(&path, &sample);
                 self.send_sample_analyses(&path, &sample);
                 for p in self.take_pending_samples(&path) {

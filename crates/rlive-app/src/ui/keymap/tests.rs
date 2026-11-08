@@ -812,6 +812,28 @@ fn arrows_act_on_what_the_arrangement_has_selected() {
 }
 
 #[test]
+fn the_arrow_keys_go_to_the_loop_brace_when_it_is_selected() {
+    use crate::ui::commands::clip::Clip as Cv;
+    let nothing = cx(FocusArea::Clip);
+    let selected = KeyContext {
+        loop_brace: true,
+        ..nothing
+    };
+    assert_ne!(
+        resolve(bare(Key::ArrowLeft), &nothing),
+        Resolution::Run(MenuCommand::Clip(Cv::NudgeLeft))
+    );
+    assert_eq!(
+        resolve(bare(Key::ArrowLeft), &selected),
+        Resolution::Run(MenuCommand::Clip(Cv::NudgeLeft))
+    );
+    assert_eq!(
+        resolve(cmd(Key::ArrowUp), &selected),
+        Resolution::Run(MenuCommand::Clip(Cv::DoubleLoop))
+    );
+}
+
+#[test]
 fn zero_deactivates_the_selection_or_the_track() {
     let plain = cx(FocusArea::Arrangement);
     assert_eq!(
@@ -825,5 +847,43 @@ fn zero_deactivates_the_selection_or_the_track() {
     assert_eq!(
         resolve(bare(Key::Num0), &selection),
         Resolution::Run(MenuCommand::Arrange(Arrange::Deactivate))
+    );
+}
+
+#[test]
+fn the_global_quantization_shortcuts_are_live() {
+    use crate::ui::commands::transport::Transport as Tr;
+    let c = cx(FocusArea::Clip);
+    for (key, want) in [
+        (Key::Num6, Tr::QuantizeSixteenth),
+        (Key::Num7, Tr::QuantizeEighth),
+        (Key::Num8, Tr::QuantizeQuarter),
+        (Key::Num9, Tr::QuantizeBar),
+        (Key::Num0, Tr::QuantizeOff),
+    ] {
+        assert_eq!(
+            resolve(cmd(key), &c),
+            Resolution::Run(MenuCommand::Transport(want))
+        );
+    }
+}
+
+#[test]
+fn the_tab_cycle_is_a_clip_view_shortcut() {
+    use crate::ui::commands::clip::Clip as Cv;
+    let c = KeyContext {
+        platform: MAC,
+        ..cx(FocusArea::Clip)
+    };
+    let alt_tab = Chord {
+        mods: Mods {
+            alt: true,
+            ..Mods::default()
+        },
+        key: Key::Tab,
+    };
+    assert_eq!(
+        resolve(alt_tab, &c),
+        Resolution::Run(MenuCommand::Clip(Cv::CycleEditorMode))
     );
 }

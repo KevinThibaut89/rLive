@@ -5,7 +5,7 @@ use super::envelopes::ClipEnvelopes;
 use super::BlockTime;
 use rlive_core::fade::EdgeFades;
 use rlive_core::warp::{StretchBank, StretchKind, StretchSpan, WarpMap, WarpMode};
-use rlive_core::PPQ;
+use rlive_core::{ClipRegion, SampleBuffer, PPQ};
 
 /// Length of the anti-click ramps applied to audio at discontinuities, in frames.
 pub(crate) const FADE_FRAMES: u32 = 64;
@@ -16,6 +16,25 @@ pub(crate) const LANE_VOICE: usize = 0;
 pub(crate) const SESSION_VOICE: usize = 1;
 /// The lane's second voice, for the clip that fades in under another during a crossfade.
 pub(crate) const LANE_CROSSFADE_VOICE: usize = 2;
+
+/// The longest edge fade, in seconds (manual p. 218).
+const EDGE_FADE_SECONDS: f64 = 0.004;
+
+/// How a clip's audio is read, past where it comes from.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub(super) struct Quality {
+    pub hi_q: bool,
+    pub edge_fade: bool,
+}
+
+/// How long the fade at an edge should be, in engine frames: as long as the signal is loud where
+/// the clip cuts it, so a cut that falls on silence costs nothing.
+fn edge_frames(sample: &SampleBuffer, src: f64, sample_rate: f64) -> u32 {
+    let i = src.max(0.0) as usize;
+    let at = |c: &[f32]| c.get(i).copied().unwrap_or(0.0).abs();
+    let level = at(&sample.left).max(at(&sample.right)).min(1.0) as f64;
+    (level * EDGE_FADE_SECONDS * sample_rate).ceil() as u32
+}
 
 /// Read position of an audio clip.
 pub(crate) struct AudioCursor {
@@ -39,6 +58,12 @@ pub(crate) struct AudioCursor {
     env_gain: Option<f32>,
     /// The clip's user fades.
     pub fades: EdgeFades,
+    /// A first render has happened, which is when a launch finds its place.
+    started: bool,
+    /// Frames of the start's edge fade still to apply, and its whole length.
+    edge_in: (u32, u32),
+    /// The length of the end's edge fade, in frames.
+    edge_out: f64,
 }
 
 impl AudioCursor {
@@ -53,7 +78,54 @@ impl AudioCursor {
             in_progress: false,
             env_gain: None,
             fades: EdgeFades::default(),
+            started: false,
+            edge_in: (0, 0),
+            edge_out: 0.0,
         }
+    }
+
+    /// Continue reading from `src` as a jump: the next render reseeds and ramps in.
+    pub fn jump(&mut self) {
+        self.next_local = f64::NEG_INFINITY;
+        self.in_progress = false;
+        self.env_gain = None;
+    }
+
+    /// Whichever end of the clip cuts through audio gets a fade sized by what it cuts.
+    fn arm_edges(
+        &mut self,
+        sample: &SampleBuffer,
+        region: &ClipRegion,
+        to_src: impl Fn(f64) -> f64,
+        sample_rate: f64,
+    ) {
+        if region.start > 0.0 {
+            let frames = edge_frames(sample, to_src(region.start), sample_rate);
+            self.edge_in = (frames, frames);
+        }
+        if !region.looped {
+            let end = to_src(region.end);
+            if end < sample.len() as f64 {
+                self.edge_out = edge_frames(sample, end, sample_rate) as f64;
+            }
+        }
+    }
+
+    /// The share of the signal the edge fades leave at `local`.
+    fn edge_gain(&mut self, region: &ClipRegion, local: f64, ticks_per_sample: f64) -> f32 {
+        let mut gain = 1.0;
+        let (left, length) = self.edge_in;
+        if left > 0 {
+            gain *= 1.0 - left as f32 / length as f32;
+            self.edge_in.0 = left - 1;
+        }
+        if self.edge_out > 0.0 {
+            let frames_left = (region.play_length() - local) / ticks_per_sample;
+            if frames_left < self.edge_out {
+                gain *= (frames_left / self.edge_out).max(0.0) as f32;
+            }
+        }
+        gain
     }
 
     /// Enter a new timeline region: the next render reseeds from the clip position.
@@ -91,6 +163,8 @@ const GAIN_SMOOTH_SECONDS: f32 = 0.001;
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_audio_env(
     clip: &AudioClip,
+    region: ClipRegion,
+    quality: Quality,
     warp: Option<&WarpedClip>,
     env: Option<&ClipEnvelopes>,
     origin: f64,
@@ -105,13 +179,12 @@ pub(super) fn render_audio_env(
     if let Some((w, map)) = warp.and_then(|w| w.map.as_ref().map(|m| (w, m))) {
         if w.mode.kind().follows_timeline() {
             render_following(
-                clip, w, map, env, origin, a, seg_end, time, audio, l, r, stretch,
+                clip, region, quality, w, map, env, origin, a, seg_end, time, audio, l, r, stretch,
             );
             return;
         }
     }
     let sample = &*clip.sample;
-    let len = clip.length as f64;
     let ticks_per_src_frame = rlive_core::time::ticks_per_sample(time.tempo, sample.sample_rate);
     let map = warp.and_then(|w| w.map.as_ref());
     let tick_to_src = |local: f64| match map {
@@ -121,33 +194,35 @@ pub(super) fn render_audio_env(
     let local_a = a - origin;
     // Continue from where the last render stopped, so a tempo change never moves the read
     // position; only a real discontinuity reseeds it from the clip position.
-    if (local_a - audio.next_local).abs() > time.ticks_per_sample * 0.5 {
-        let local = if clip.looped {
-            local_a.rem_euclid(len)
-        } else {
-            local_a.max(0.0)
-        };
-        audio.src = tick_to_src(local);
-        audio.fade_in = FADE_FRAMES;
+    let jumped = (local_a - audio.next_local).abs() > time.ticks_per_sample * 0.5;
+    if jumped || (!audio.started && region.start != 0.0) {
+        audio.src = tick_to_src(region.content_at(local_a));
+        if jumped {
+            audio.fade_in = FADE_FRAMES;
+        }
         audio.needs_seek = true;
+    }
+    if !std::mem::replace(&mut audio.started, true) && quality.edge_fade {
+        audio.arm_edges(sample, &region, tick_to_src, time.sample_rate);
     }
     audio.next_local = seg_end - origin;
 
     let from = time.offset(a);
     let to = time.offset(seg_end).min(l.len()).min(r.len());
     let ratio = sample.sample_rate / time.sample_rate;
-    let loop_start = map.map_or(0.0, |m| m.tick_to_src(0.0));
-    let loop_end = tick_to_src(len);
+    let loop_start = tick_to_src(region.loop_start);
+    let loop_end = tick_to_src(region.content_end());
     // A one-shot's content can run out before its region does.
-    let fade_end = if clip.looped || audio.region_end.is_infinite() {
+    let fade_end = if region.looped || audio.region_end.is_infinite() {
         audio.region_end
     } else {
-        audio.region_end.min(len)
+        audio.region_end.min(region.play_length())
     };
     // A warped clip with too few markers has no timeline to follow and plays like warp off, as a
     // mode with a real stretcher would otherwise be rendered through the wrong kind of span.
     let (kind, transpose, mode) = match warp {
         Some(w) if !w.mode.kind().follows_timeline() => (w.mode.kind(), w.transpose, w.mode),
+        _ if quality.hi_q => (StretchKind::OffHiQ, 0.0, WarpMode::Complex),
         _ => (StretchKind::Off, 0.0, WarpMode::Complex),
     };
     let (voice, voice_l, voice_r) = stretch.voice(kind, audio.voice);
@@ -158,7 +233,7 @@ pub(super) fn render_audio_env(
     let mut i = from;
     while i < to {
         if audio.src >= loop_end {
-            if !clip.looped {
+            if !region.looped {
                 break;
             }
             audio.src -= loop_end - loop_start;
@@ -192,6 +267,9 @@ pub(super) fn render_audio_env(
             let local = local_a + (f - from) as f64 * time.ticks_per_sample;
             if let Some(env) = env {
                 gain *= audio.envelope_gain(env, local, time.sample_rate);
+            }
+            if quality.edge_fade {
+                gain *= audio.edge_gain(&region, local, time.ticks_per_sample);
             }
             let frames_left = (fade_end - local) / time.ticks_per_sample;
             if frames_left < FADE_FRAMES as f64 {
@@ -228,6 +306,8 @@ const CONTINUOUS_FRAMES: f64 = 2.0;
 #[allow(clippy::too_many_arguments)]
 fn render_following(
     clip: &AudioClip,
+    region: ClipRegion,
+    quality: Quality,
     warp: &WarpedClip,
     map: &WarpMap,
     env: Option<&ClipEnvelopes>,
@@ -241,20 +321,24 @@ fn render_following(
     stretch: &mut StretchBank,
 ) {
     let sample = &*clip.sample;
-    let len = clip.length as f64;
+    let len = region.loop_len;
+    let lead = region.lead();
     let local_a = a - origin;
     let jumped = (local_a - audio.next_local).abs() > time.ticks_per_sample * 0.5;
     audio.next_local = seg_end - origin;
+    if !std::mem::replace(&mut audio.started, true) && quality.edge_fade {
+        audio.arm_edges(sample, &region, |t| map.tick_to_src(t), time.sample_rate);
+    }
 
     let from = time.offset(a);
     let to = time.offset(seg_end).min(l.len()).min(r.len());
     if from >= to {
         return;
     }
-    let fade_end = if clip.looped || audio.region_end.is_infinite() {
+    let fade_end = if region.looped || audio.region_end.is_infinite() {
         audio.region_end
     } else {
-        audio.region_end.min(len)
+        audio.region_end.min(region.play_length())
     };
     let (voice, voice_l, voice_r) = stretch.voice(warp.mode.kind(), audio.voice);
     if !audio.in_progress {
@@ -275,11 +359,18 @@ fn render_following(
     let mut f = from;
     while f < to {
         let local = local_at(f);
-        let (position, cycle_start) = if clip.looped {
-            let cycle = (local / len).floor();
-            (local - cycle * len, cycle * len)
+        // Before its first time round the loop, a clip reads straight on from its start marker.
+        let (position, cycle_start) = if region.looped {
+            let mut cycle = ((local - lead) / len).floor();
+            if lead > 0.0 {
+                cycle = cycle.max(0.0);
+            }
+            (
+                region.loop_start + (local - lead) - cycle * len,
+                lead + cycle * len - region.loop_start,
+            )
         } else {
-            (local.max(0.0), 0.0)
+            (region.start + local.max(0.0), 0.0 - region.start)
         };
         // The Sample Offset envelope moves where in the clip this stretch reads.
         let (read, shift) = match env
@@ -291,8 +382,8 @@ fn render_following(
                     .at(local)
                     .clamp(-SAMPLE_OFFSET_REACH, SAMPLE_OFFSET_REACH);
                 let moved = position + sixteenths * SIXTEENTH;
-                let read = if clip.looped {
-                    moved.rem_euclid(len)
+                let read = if region.looped && position >= region.loop_start {
+                    region.loop_start + (moved - region.loop_start).rem_euclid(len)
                 } else {
                     moved.max(0.0)
                 };
@@ -314,8 +405,8 @@ fn render_following(
         // How far this stretch can run at one rate, in the clip's time.
         let next_marker = markers.partition_point(|m| m.tick <= read);
         let mut boundary = markers.get(next_marker).map_or(f64::INFINITY, |m| m.tick);
-        if clip.looped && boundary > len {
-            boundary = len;
+        if region.looped && boundary > region.loop_end() {
+            boundary = region.loop_end();
         }
         // Something an envelope moves is held still for this stretch, so it can't be a long one.
         let moving = env.is_some_and(ClipEnvelopes::moves_the_read);
@@ -358,6 +449,9 @@ fn render_following(
             if let Some(env) = env {
                 gain *= audio.envelope_gain(env, at, time.sample_rate);
             }
+            if quality.edge_fade {
+                gain *= audio.edge_gain(&region, at, tps);
+            }
             let frames_left = (fade_end - at) / tps;
             if frames_left < FADE_FRAMES as f64 {
                 gain *= (frames_left / FADE_FRAMES as f64).max(0.0) as f32;
@@ -387,8 +481,21 @@ pub(super) fn render_audio(
     r: &mut [f32],
     stretch: &mut StretchBank,
 ) {
+    let region = ClipRegion::whole(clip.length as f64, clip.looped);
     render_audio_env(
-        clip, warp, None, origin, a, seg_end, time, audio, l, r, stretch,
+        clip,
+        region,
+        Quality::default(),
+        warp,
+        None,
+        origin,
+        a,
+        seg_end,
+        time,
+        audio,
+        l,
+        r,
+        stretch,
     );
 }
 

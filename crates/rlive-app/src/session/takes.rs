@@ -412,8 +412,10 @@ impl Session {
         let mut clip = self.clip_for(track, &take.path, warp, total, false);
         let id = rlive_core::ArrClipId::new();
         for (tick, from, to) in layout.passes {
+            // The brace is around this pass, so moving it back auditions the ones before.
             clip.start = from.round() as u64;
             clip.loop_start = clip.start;
+            clip.length = (to - from).round().max(1.0) as u64;
             let placed = ArrangementClip {
                 id,
                 start: tick.round().max(0.0) as u64,
@@ -543,14 +545,34 @@ impl Session {
     /// The Session Record button: end takes straight into loop playback; flip overdub if a
     /// MIDI clip is looping on an armed track; otherwise record the selected scene (or the
     /// next scene that has room) on every armed track.
+    ///
+    /// With Automation Arm on, the same button records gestures into the Session clips playing,
+    /// and the press after that stops doing so and leaves everything playing (manual p. 512).
     pub fn session_record(&mut self, scene: usize) {
+        let automation_was_on = self.session_automation_record();
         let closing = self.takes_in_slots();
         if !closing.is_empty() {
             for track in closing {
                 self.send(EngineCommand::Launch(LaunchCmd::CloseRecording { track }));
             }
+            self.set_session_automation_record(false);
             return;
         }
+        if automation_was_on {
+            self.set_session_automation_record(false);
+            let overdubbing: Vec<TrackId> = self
+                .project
+                .tracks
+                .iter()
+                .filter(|t| self.is_overdubbing(t.id))
+                .map(|t| t.id)
+                .collect();
+            for track in overdubbing {
+                self.set_overdub(track, false);
+            }
+            return;
+        }
+        let automation = self.automation_arm() && self.any_clip_takes_automation();
         let overdub: Vec<TrackId> = self
             .project
             .tracks
@@ -563,6 +585,13 @@ impl Session {
             for track in overdub {
                 self.set_overdub(track, on);
             }
+            if on && automation {
+                self.set_session_automation_record(true);
+            }
+            return;
+        }
+        if automation {
+            self.set_session_automation_record(true);
             return;
         }
         let armed: Vec<TrackId> = self
@@ -859,8 +888,7 @@ impl Session {
         }
         let sig = self.project.time_signature;
         let color = self.new_clip_color(track);
-        let mut clip = Clip::new_midi("MIDI Clip", color, 1, sig);
-        clip.launch = self.launch_defaults.settings();
+        let clip = self.new_midi_clip(color, sig);
         self.set_clip(track, slot, Some(clip));
         self.set_arm(track, true, false);
         self.launch_clip(track, slot);

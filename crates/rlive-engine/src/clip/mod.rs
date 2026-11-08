@@ -10,19 +10,23 @@ mod following_tests;
 mod launcher;
 mod midi;
 
-pub(crate) use audio::{AudioCursor, LANE_CROSSFADE_VOICE, LANE_VOICE, SESSION_VOICE};
-pub use data::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
+pub(crate) use audio::{AudioCursor, LANE_CROSSFADE_VOICE, LANE_VOICE};
+pub use data::{
+    AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, ProgramChange, WarpedClip,
+};
 pub use envelopes::{ClipCurve, ClipEnvelopes, EnvCurve, EnvTiming, EnvelopedClip};
 pub use launcher::{velocity_gain, SlotLaunch};
-pub(crate) use launcher::{ArmedFollow, ClipPlayer, LaunchEnv, Pending, Playing, Repeat};
+pub(crate) use launcher::{
+    ArmedFollow, ClipPlayer, ClipUpdate, LaunchEnv, Pending, Playing, Repeat,
+};
 pub(crate) use midi::{chase, Voices};
 
-use audio::render_audio_env;
+use audio::{render_audio_env, Quality};
 use envelopes::render_controllers;
 use midi::render_midi;
 use rlive_core::time::TempoRun;
 use rlive_core::warp::StretchBank;
-use rlive_core::MidiEvent;
+use rlive_core::{ClipRegion, MidiEvent};
 
 /// Block geometry shared by everything rendered in one block.
 #[derive(Clone, Copy)]
@@ -69,10 +73,12 @@ impl BlockTime {
 }
 
 /// Render clip content for the song-tick range `[a, b)`. MIDI clips push events, audio clips
-/// write into `l`/`r` (block-sized buffers). `origin` is the song tick of clip-local 0.
+/// write into `l`/`r` (block-sized buffers). `origin` is the song tick the clip's run began on,
+/// and `region` is how that run goes through its content.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_range(
     clip: &ClipData,
+    region: ClipRegion,
     origin: f64,
     a: f64,
     b: f64,
@@ -88,28 +94,35 @@ pub(crate) fn render_range(
     if b <= a || len <= 0.0 {
         return;
     }
-    let seg_end = if clip.looped() {
+    let seg_end = if region.looped {
         b
     } else {
-        b.min(origin + len)
+        b.min(origin + region.play_length())
     };
     if seg_end <= a {
         return;
     }
     let envelopes = clip.envelopes();
+    let quality = Quality {
+        hi_q: clip.hi_q(),
+        edge_fade: clip.edge_fade(),
+    };
     match clip.content() {
         ClipData::Midi(clip) => {
-            render_midi(clip, origin, a, seg_end, time, voices, ev);
+            render_midi(clip, region, origin, a, seg_end, time, voices, ev);
             if let Some(envelopes) = envelopes {
                 render_controllers(envelopes, origin, a, seg_end, time, ev);
             }
         }
-        ClipData::Audio(clip) => render_audio_env(
-            clip, None, envelopes, origin, a, seg_end, time, audio, l, r, stretch,
+        ClipData::Audio(audio_clip) => render_audio_env(
+            audio_clip, region, quality, None, envelopes, origin, a, seg_end, time, audio, l, r,
+            stretch,
         ),
-        ClipData::Warped(clip) => render_audio_env(
-            &clip.audio,
-            Some(clip),
+        ClipData::Warped(warped) => render_audio_env(
+            &warped.audio,
+            region,
+            quality,
+            Some(warped),
             envelopes,
             origin,
             a,
@@ -123,3 +136,6 @@ pub(crate) fn render_range(
         ClipData::Enveloped(_) => {}
     }
 }
+
+#[cfg(test)]
+mod region_tests;

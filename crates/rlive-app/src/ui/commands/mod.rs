@@ -10,6 +10,7 @@ use std::sync::LazyLock;
 
 pub mod app;
 pub mod arrange;
+pub mod clip;
 pub mod create;
 pub mod edit;
 pub mod file;
@@ -68,6 +69,7 @@ registry! {
     Rack(rack::Rack),
     Arrange(arrange::Arrange),
     Launch(launch::Launch),
+    Clip(clip::Clip),
 }
 
 static ALL: LazyLock<Vec<MenuCommand>> = LazyLock::new(build_all);
@@ -157,6 +159,7 @@ impl RliveApp {
         self.options_state(&mut s);
         self.arrange_state(&mut s);
         self.launch_state(&mut s);
+        self.clip_state(&mut s);
         s
     }
 
@@ -173,6 +176,7 @@ impl RliveApp {
             MenuCommand::Rack(c) => self.rack_command(c),
             MenuCommand::Arrange(c) => self.arrange_command(c),
             MenuCommand::Launch(c) => self.launch_command(c),
+            MenuCommand::Clip(c) => self.clip_command(c),
         }
     }
 
@@ -215,6 +219,8 @@ impl RliveApp {
             ui.menu_button("Edit", |ui| {
                 entries(ui, edit::MENU, &st, &mut fired);
                 entries(ui, arrange::EDIT_ITEMS, &st, &mut fired);
+                ui.separator();
+                entries(ui, clip::EDIT_MENU, &st, &mut fired);
             });
             ui.menu_button("Create", |ui| {
                 entries(ui, create::MENU, &st, &mut fired);
@@ -223,6 +229,8 @@ impl RliveApp {
             ui.menu_button("View", |ui| {
                 entries(ui, view::MENU, &st, &mut fired);
                 entries(ui, arrange::VIEW_ITEMS, &st, &mut fired);
+                ui.separator();
+                entries(ui, clip::VIEW_MENU, &st, &mut fired);
             });
             ui.menu_button("Options", |ui| {
                 entries(ui, &[app::PREFERENCES], &st, &mut fired);
@@ -261,7 +269,8 @@ mod tests {
             + track::Track::ALL.len()
             + rack::Rack::ALL.len()
             + arrange::Arrange::ALL.len()
-            + launch::Launch::ALL.len();
+            + launch::Launch::ALL.len()
+            + clip::Clip::ALL.len();
         assert_eq!(MenuCommand::all().len(), expected);
         let unique: std::collections::HashSet<_> = MenuCommand::all().iter().collect();
         assert_eq!(unique.len(), expected, "a command appears twice");

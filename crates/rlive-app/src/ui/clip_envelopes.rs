@@ -230,28 +230,6 @@ fn chooser_entry(
     .inner
 }
 
-/// The Sample/Notes and Envelopes tab selector, along the top of the editor area.
-pub fn tab_row(ui: &mut egui::Ui, rect: Rect, is_midi: bool, state: &mut ClipEnvState) {
-    let mut bu = ui.new_child(UiBuilder::new().max_rect(rect));
-    bu.horizontal(|ui| {
-        let content = if is_midi { "Notes" } else { "Sample" };
-        if widgets::state_button(ui, Vec2::new(58.0, 15.0), !state.open, pal().accent, content)
-            .clicked()
-        {
-            state.open = false;
-        }
-        let r = widgets::state_button(ui, Vec2::new(70.0, 15.0), state.open, pal().accent, "Envelopes");
-        if info(
-            r,
-            "Envelopes — clip envelopes: automate or modulate controls, sample settings or MIDI controllers",
-        )
-        .clicked()
-        {
-            state.open = true;
-        }
-    });
-}
-
 /// The Envelopes tab: the choosers on the left and the envelope on the right.
 pub fn show(
     ui: &mut egui::Ui,
@@ -394,19 +372,6 @@ fn choosers(
     );
     let mode = effective_mode(cref, env.mode, control.target);
     region_controls(ui, session, cref, clip, control, mode);
-    if cref.as_slot().is_some() && mode == EnvMode::Automation {
-        // Session Record's job once there is one; for now Session automation records from here.
-        let on = session.session_automation_record();
-        let r = widgets::state_button(ui, Vec2::new(78.0, 15.0), on, pal().arm_red, "Record");
-        if info(
-            r,
-            "Record Session Automation — with Automation Arm on, moves on armed tracks are recorded into the clips playing",
-        )
-        .clicked()
-        {
-            session.set_session_automation_record(!on);
-        }
-    }
 }
 
 /// A non-parameter envelope isn't one of the two kinds, and an Arrangement clip has only one.

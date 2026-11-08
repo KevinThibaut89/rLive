@@ -5,6 +5,7 @@
 
 use super::super::commands::app::App;
 use super::super::commands::arrange::Arrange as Ar;
+use super::super::commands::clip::Clip as Cv;
 use super::super::commands::create::Create;
 use super::super::commands::edit::Edit;
 use super::super::commands::file::File;
@@ -134,7 +135,7 @@ pub static BINDINGS: &[Binding] = &[
     a("42.1", All, "Toggle Session/Arrangement", k(NO, Key::Tab), L(M::View(View::ToggleMainView))),
     a("42.1", All, "Toggle Device/Clip View", k(SHIFT, Key::Tab), L(M::View(View::SwitchDetail))),
     a("42.1", All, "Toggle Device/Clip View", k(NO, Key::F12), L(M::View(View::SwitchDetail))),
-    a("42.1", All, "Show Device and Clip View together", g1("Alt click view toggle"), p!("C2")),
+    a("42.1", All, "Show Device and Clip View together", g1("Alt click view toggle"), W),
     a("42.1", All, "Toggle Hot-Swap Mode", k(NO, Key::Q), p!("C12")),
     a("42.1", Dev, "Toggle Drum Rack/last selected pad", k(NO, Key::D), p!("C12")),
     a("42.1", All, "Hide/show Info View", k(NO, Key::Questionmark), L(M::View(View::ToggleInfoView))),
@@ -161,8 +162,8 @@ pub static BINDINGS: &[Binding] = &[
     a("42.2", All, "Focus Browser", k(ALT, Key::Num5), L(M::View(View::FocusBrowser))),
     a("42.2", All, "Focus Groove Pool", k(ALT, Key::Num6), p!("A14")),
     a("42.2", All, "Focus Learn View", k(ALT, Key::Num7), p!("out")),
-    a("42.2", All, "Focus selected clip panel", k(ALT, Key::Num8), p!("C2")),
-    a("42.2", All, "Focus clip panels", k(ALT_SHIFT, Key::P), p!("C2")),
+    a("42.2", All, "Focus selected clip panel", k(ALT, Key::Num8), L(M::Clip(Cv::FocusPanels))),
+    a("42.2", All, "Focus clip panels", k(ALT_SHIFT, Key::P), L(M::Clip(Cv::FocusPanels))),
     b("42.2", All, Wh::TabFocus, "Next control", k(NO, Key::Tab), p!("C19")),
     b("42.2", All, Wh::TabFocus, "Previous control", k(SHIFT, Key::Tab), p!("C19")),
     b("42.2", All, Wh::TabFocus, "Next neighbouring control", pl(ch(ALT, Key::Tab), ch(CMD, Key::Tab)), p!("C19")),
@@ -240,12 +241,12 @@ pub static BINDINGS: &[Binding] = &[
     a("42.7", Time, "Ignore grid while dragging breakpoints", g("Cmd", "Alt"), W),
 
     // 42.8 Loop brace and start/end markers
-    a("42.8", Time, "Set start marker", k(CMD, Key::F9), p!("C2")),
-    a("42.8", Time, "Set loop start", k(CMD, Key::F10), p!("C2")),
-    a("42.8", Time, "Set loop end", k(CMD, Key::F11), p!("C2")),
-    a("42.8", Time, "Set end marker", k(CMD, Key::F12), p!("C2")),
-    b("42.8", Time, Wh::LoopBrace, "Move start marker to position", g("Cmd click", "Ctrl click"), p!("C2")),
-    b("42.8", Time, Wh::LoopBrace, "Move end marker to position", g("Cmd Shift click", "Ctrl Shift click"), p!("C2")),
+    a("42.8", Time, "Set start marker", k(CMD, Key::F9), L(M::Clip(Cv::SetStart))),
+    a("42.8", Time, "Set loop start", k(CMD, Key::F10), L(M::Clip(Cv::SetLoopStart))),
+    a("42.8", Time, "Set loop end", k(CMD, Key::F11), L(M::Clip(Cv::SetLoopEnd))),
+    a("42.8", Time, "Set end marker", k(CMD, Key::F12), L(M::Clip(Cv::SetEnd))),
+    b("42.8", Time, Wh::LoopBrace, "Move start marker to position", g("Cmd click", "Ctrl click"), W),
+    b("42.8", Time, Wh::LoopBrace, "Move end marker to position", g("Cmd Shift click", "Ctrl Shift click"), W),
     b("42.8", Time, Wh::LoopBrace, "Nudge loop brace left", k(NO, Key::ArrowLeft), L(M::Arrange(Ar::LoopNudgeLeft))),
     b("42.8", Time, Wh::LoopBrace, "Nudge loop brace right", k(NO, Key::ArrowRight), L(M::Arrange(Ar::LoopNudgeRight))),
     b("42.8", Time, Wh::LoopBrace, "Move loop by its length, up", k(NO, Key::ArrowUp), L(M::Arrange(Ar::LoopShiftUp))),
@@ -261,7 +262,7 @@ pub static BINDINGS: &[Binding] = &[
     a("42.9", All, "Zoom window out", k(CMD, Key::Minus), L(M::View(View::ZoomOut))),
     a("42.9", Arr, "Zoom time ruler in", k(NO, Key::Plus), L(M::View(View::RulerZoomIn))),
     a("42.9", Arr, "Zoom time ruler out", k(NO, Key::Minus), L(M::View(View::RulerZoomOut))),
-    a("42.9", All, "Follow playback", k(ALT_SHIFT, Key::F), p!("C2")),
+    a("42.9", All, "Follow playback", k(ALT_SHIFT, Key::F), L(M::Clip(Cv::ToggleFollow))),
     a("42.9", All, "Scroll left/right", g1("Shift scroll"), W),
     a("42.9", All, "Pan beside a selection", g("Cmd Alt", "Ctrl Alt"), W),
     a("42.9", All, "Add items to a selection", g1("Shift click or drag"), W),
@@ -269,10 +270,10 @@ pub static BINDINGS: &[Binding] = &[
     a("42.9", All, "Add separate items to a selection", g("Cmd click", "Ctrl click"), W),
 
     // 42.10 Clip View tabs
-    a("42.10", Sample, "Switch Sample/Envelopes tabs", pl(ch(ALT, Key::Tab), ch(CMD, Key::Tab)), p!("C2")),
-    a("42.10", Notes, "Switch Notes/Envelopes/MPE tabs", pl(ch(ALT, Key::Tab), ch(CMD, Key::Tab)), p!("C2")),
-    a("42.10", Clip, "Sample or Notes tab", k(ALT_SHIFT, Key::Num1), p!("C2")),
-    a("42.10", Clip, "Envelopes tab", k(ALT_SHIFT, Key::Num2), p!("C2")),
+    a("42.10", Sample, "Switch Sample/Envelopes tabs", pl(ch(ALT, Key::Tab), ch(CMD, Key::Tab)), L(M::Clip(Cv::CycleEditorMode))),
+    a("42.10", Notes, "Switch Notes/Envelopes/MPE tabs", pl(ch(ALT, Key::Tab), ch(CMD, Key::Tab)), L(M::Clip(Cv::CycleEditorMode))),
+    a("42.10", Clip, "Sample or Notes tab", k(ALT_SHIFT, Key::Num1), L(M::Clip(Cv::ContentTab))),
+    a("42.10", Clip, "Envelopes tab", k(ALT_SHIFT, Key::Num2), L(M::Clip(Cv::EnvelopeTab))),
     a("42.10", Clip, "MPE tab", k(ALT_SHIFT, Key::Num3), p!("C10")),
 
     // 42.11 Sample Editor
@@ -282,17 +283,17 @@ pub static BINDINGS: &[Binding] = &[
     b("42.11", Sample, Wh::WarpMarker, "Move Warp Marker right", k(NO, Key::ArrowRight), W),
     a("42.11", Sample, "Select previous Warp Marker", k(CMD, Key::ArrowLeft), W),
     a("42.11", Sample, "Select next Warp Marker", k(CMD, Key::ArrowRight), W),
-    a("42.11", Sample, "Follow playback", pl(ch(ALT_SHIFT, Key::F), ch(CMD_SHIFT, Key::F)), p!("C2")),
-    a("42.11", Sample, "Move clip region left with start marker", k(SHIFT, Key::ArrowLeft), p!("C2")),
-    a("42.11", Sample, "Move clip region right with start marker", k(SHIFT, Key::ArrowRight), p!("C2")),
-    a("42.11", Sample, "Zoom to clip selection", k(NO, Key::Z), p!("C2")),
-    a("42.11", Sample, "Zoom back from clip selection", k(NO, Key::X), p!("C2")),
+    a("42.11", Sample, "Follow playback", pl(ch(ALT_SHIFT, Key::F), ch(CMD_SHIFT, Key::F)), L(M::Clip(Cv::ToggleFollow))),
+    a("42.11", Sample, "Move clip region left with start marker", k(SHIFT, Key::ArrowLeft), L(M::Clip(Cv::ShiftRegionLeft))),
+    a("42.11", Sample, "Move clip region right with start marker", k(SHIFT, Key::ArrowRight), L(M::Clip(Cv::ShiftRegionRight))),
+    a("42.11", Sample, "Zoom to clip selection", k(NO, Key::Z), L(M::Clip(Cv::ZoomToSelection))),
+    a("42.11", Sample, "Zoom back from clip selection", k(NO, Key::X), L(M::Clip(Cv::ZoomBack))),
     a("42.11", Sample, "Insert Warp Marker", k(CMD, Key::I), W),
     b("42.11", Sample, Wh::WarpMarker, "Delete Warp Marker", k(NO, Key::Delete), W),
     a("42.11", Sample, "Insert transient", k(CMD_SHIFT, Key::I), W),
     a("42.11", Sample, "Delete transient", k(CMD_SHIFT, Key::Delete), W),
-    a("42.11", Sample, "Fit content to view width", k(NO, Key::W), p!("C2")),
-    a("42.11", Sample, "Fit content to view height", k(NO, Key::H), p!("C2")),
+    a("42.11", Sample, "Fit content to view width", k(NO, Key::W), L(M::Clip(Cv::FitWidth))),
+    a("42.11", Sample, "Fit content to view height", k(NO, Key::H), L(M::Clip(Cv::FitHeight))),
 
     // 42.12 MIDI Note Editor
     a("42.12", Notes, "Select all notes", k(CMD, Key::A), L(M::Edit(Edit::SelectAll))),
@@ -320,9 +321,11 @@ pub static BINDINGS: &[Binding] = &[
     a("42.12", Notes, "Select previous note", k(ALT, Key::ArrowUp), p!("C9")),
     a("42.12", Notes, "Select previous note in key track", k(ALT, Key::ArrowLeft), p!("C9")),
     a("42.12", Notes, "Select next note in key track", k(ALT, Key::ArrowRight), p!("C9")),
-    a("42.12", Notes, "Follow playback", pl(ch(ALT_SHIFT, Key::F), ch(CMD_SHIFT, Key::F)), p!("C2")),
-    a("42.12", Notes, "Move clip region left with start marker", k(SHIFT, Key::ArrowLeft), p!("C2")),
-    a("42.12", Notes, "Move clip region right with start marker", k(SHIFT, Key::ArrowRight), p!("C2")),
+    // Ctrl+Shift+F is both on Windows: last listed wins, and only one of them is built yet.
+    a("42.12", Notes, "Show/hide note filters", k(CMD_SHIFT, Key::F), p!("C9")),
+    a("42.12", Notes, "Follow playback", pl(ch(ALT_SHIFT, Key::F), ch(CMD_SHIFT, Key::F)), L(M::Clip(Cv::ToggleFollow))),
+    a("42.12", Notes, "Move clip region left with start marker", k(SHIFT, Key::ArrowLeft), L(M::Clip(Cv::ShiftRegionLeft))),
+    a("42.12", Notes, "Move clip region right with start marker", k(SHIFT, Key::ArrowRight), L(M::Clip(Cv::ShiftRegionRight))),
     a("42.12", Notes, "Zoom to clip selection", k(NO, Key::Z), p!("C9")),
     a("42.12", Notes, "Zoom back from clip selection", k(NO, Key::X), p!("C9")),
     a("42.12", Notes, "Zoom in horizontally", k(NO, Key::Plus), p!("C9")),
@@ -334,14 +337,13 @@ pub static BINDINGS: &[Binding] = &[
     a("42.12", Notes, "Lower velocity deviation", k(CMD_SHIFT, Key::ArrowDown), p!("C9")),
     a("42.12", Notes, "Raise note chance", k(CMD_ALT, Key::ArrowUp), p!("C9")),
     a("42.12", Notes, "Lower note chance", k(CMD_ALT, Key::ArrowDown), p!("C9")),
-    a("42.12", Clip, "Toggle full-size Clip View", k(CMD_ALT, Key::E), p!("C2")),
+    a("42.12", Clip, "Toggle full-size Clip View", k(CMD_ALT, Key::E), L(M::Clip(Cv::ToggleFullSize))),
     a("42.12", Notes, "Group notes (play all)", k(CMD, Key::G), p!("C9")),
     a("42.12", Notes, "Ungroup notes", k(CMD_SHIFT, Key::G), p!("C9")),
     a("42.12", Notes, "Apply MIDI Tool settings", k(CMD, Key::Enter), p!("C11")),
     a("42.12", Notes, "Invert note selection", k(CMD_SHIFT, Key::A), p!("C9")),
     a("42.12", Notes, "Highlight scale", k(NO, Key::K), p!("C9")),
     a("42.12", Arr, "Split Arrangement clip at time selection", k(CMD_SHIFT, Key::E), L(M::Arrange(Ar::Split))),
-    a("42.12", Notes, "Show/hide note filters", k(CMD_SHIFT, Key::F), p!("C9")),
 
     // 42.13 Grid snapping and drawing
     a("42.13", Time, "Toggle Draw Mode", k(NO, Key::B), W),
@@ -350,6 +352,24 @@ pub static BINDINGS: &[Binding] = &[
     a("42.13", Time, "Triplet grid", k(CMD, Key::Num3), L(M::Arrange(Ar::GridTriplet))),
     a("42.13", Time, "Snap to grid", k(CMD, Key::Num4), L(M::Arrange(Ar::GridSnap))),
     a("42.13", Time, "Fixed or zoom-adaptive grid", k(CMD, Key::Num5), L(M::Arrange(Ar::GridFixed))),
+
+    b("rlive", Clip, Wh::LoopBrace, "Nudge the Clip View's loop or marker left", k(NO, Key::ArrowLeft), L(M::Clip(Cv::NudgeLeft))),
+    b("rlive", Clip, Wh::LoopBrace, "Nudge the Clip View's loop or marker right", k(NO, Key::ArrowRight), L(M::Clip(Cv::NudgeRight))),
+    b("rlive", Clip, Wh::LoopBrace, "Move the Clip View's loop by its length, up", k(NO, Key::ArrowUp), L(M::Clip(Cv::MoveLoopUp))),
+    b("rlive", Clip, Wh::LoopBrace, "Move the Clip View's loop by its length, down", k(NO, Key::ArrowDown), L(M::Clip(Cv::MoveLoopDown))),
+    b("rlive", Clip, Wh::LoopBrace, "Double the Clip View's loop", k(CMD, Key::ArrowUp), L(M::Clip(Cv::DoubleLoop))),
+    b("rlive", Clip, Wh::LoopBrace, "Halve the Clip View's loop", k(CMD, Key::ArrowDown), L(M::Clip(Cv::HalveLoop))),
+    b("rlive", Clip, Wh::LoopBrace, "Shorten the Clip View's loop", k(CMD, Key::ArrowLeft), L(M::Clip(Cv::ShortenLoop))),
+    b("rlive", Clip, Wh::LoopBrace, "Lengthen the Clip View's loop", k(CMD, Key::ArrowRight), L(M::Clip(Cv::LengthenLoop))),
+    b("rlive", Clip, Wh::LoopBrace, "Move clip region left, as the manual's Clip View chapter has it", k(ALT, Key::ArrowLeft), L(M::Clip(Cv::ShiftRegionLeft))),
+    b("rlive", Clip, Wh::LoopBrace, "Move clip region right, as the manual's Clip View chapter has it", k(ALT, Key::ArrowRight), L(M::Clip(Cv::ShiftRegionRight))),
+    a("rlive", Clip, "Select what's in the Clip View's loop", k(CMD_SHIFT, Key::L), L(M::Clip(Cv::SelectLoopContents))),
+    a("rlive", Clip, "Narrow the Clip View's grid", k(CMD, Key::Num1), L(M::Clip(Cv::NarrowGrid))),
+    a("rlive", Clip, "Widen the Clip View's grid", k(CMD, Key::Num2), L(M::Clip(Cv::WidenGrid))),
+    a("rlive", Clip, "Triplet grid in the Clip View", k(CMD, Key::Num3), L(M::Clip(Cv::TripletGrid))),
+    a("rlive", Clip, "Snap to grid in the Clip View", k(CMD, Key::Num4), L(M::Clip(Cv::SnapGrid))),
+    a("rlive", Clip, "Fixed or zoom-adaptive grid in the Clip View", k(CMD, Key::Num5), L(M::Clip(Cv::AdaptiveGrid))),
+    a("rlive", Clip, "Hide/show the Clip View Selector", k(CMD_ALT, Key::O), L(M::Clip(Cv::ToggleOverview))),
     a("42.13", Time, "Bypass snapping while dragging", g("Cmd", "Alt"), W),
 
     // 42.14 Global quantization

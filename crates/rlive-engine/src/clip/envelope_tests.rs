@@ -80,7 +80,13 @@ fn linked_curve(range: ParamRange, points: &[(f64, f64)]) -> ClipCurve {
 }
 
 fn with(clip: ClipData, envelopes: ClipEnvelopes) -> ClipData {
-    ClipData::Enveloped(Box::new(EnvelopedClip { clip, envelopes }))
+    ClipData::Enveloped(Box::new(EnvelopedClip {
+        clip,
+        envelopes,
+        region: None,
+        edge_fade: false,
+        hi_q: false,
+    }))
 }
 
 fn time(t0: f64, frames: usize) -> BlockTime {
@@ -120,6 +126,7 @@ fn render(clip: &ClipData, frames: usize) -> Rendered {
         assert_no_alloc(|| {
             render_range(
                 clip,
+                clip.region(),
                 0.0,
                 t,
                 block.end,

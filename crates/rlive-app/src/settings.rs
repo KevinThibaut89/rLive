@@ -291,6 +291,82 @@ impl LaunchPrefs {
     }
 }
 
+/// How a view keeps the playhead in sight (the Display & Input setting).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum FollowBehavior {
+    /// Turn the page when the playhead reaches the edge.
+    #[default]
+    Page,
+    /// Keep the view moving, with the playhead in place.
+    Scroll,
+}
+
+/// How often Clip View edits reach a running clip (manual p. 232).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum ClipUpdateRate {
+    Instant,
+    ThirtySecond,
+    #[default]
+    Sixteenth,
+    Eighth,
+    Quarter,
+    Half,
+    Bar,
+}
+
+impl ClipUpdateRate {
+    pub const ALL: [ClipUpdateRate; 7] = [
+        Self::Instant,
+        Self::ThirtySecond,
+        Self::Sixteenth,
+        Self::Eighth,
+        Self::Quarter,
+        Self::Half,
+        Self::Bar,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Instant => "Instant",
+            Self::ThirtySecond => "1/32",
+            Self::Sixteenth => "1/16",
+            Self::Eighth => "1/8",
+            Self::Quarter => "1/4",
+            Self::Half => "1/2",
+            Self::Bar => "1 Bar",
+        }
+    }
+
+    /// Its grid in ticks. Instant has none.
+    pub fn ticks(self, sig: rlive_core::TimeSignature) -> u64 {
+        use rlive_core::PPQ;
+        match self {
+            Self::Instant => 0,
+            Self::ThirtySecond => PPQ / 8,
+            Self::Sixteenth => PPQ / 4,
+            Self::Eighth => PPQ / 2,
+            Self::Quarter => PPQ,
+            Self::Half => PPQ * 2,
+            Self::Bar => sig.ticks_per_bar(),
+        }
+    }
+}
+
+/// The Launch options of the Record, Warp & Launch settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClipSettings {
+    pub update_rate: ClipUpdateRate,
+}
+
+impl Default for ClipSettings {
+    fn default() -> Self {
+        Self {
+            update_rate: ClipUpdateRate::Sixteenth,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -314,6 +390,15 @@ pub struct Settings {
     pub scroll_bars: ScrollBars,
     pub samples: SampleSettings,
     pub warp: WarpDefaults,
+    /// How new clips launch, and how Clip View edits reach a running clip.
+    pub clip: ClipSettings,
+    /// How the Clip View's panels are laid out (manual p. 205).
+    pub clip_panel_layout: crate::ui::clip_view::PanelLayout,
+    /// The Display & Input option: clicks in the lower half of a waveform scrub.
+    pub permanent_scrub_areas: bool,
+    pub follow_behavior: FollowBehavior,
+    /// The program a clip's Edit button opens samples in.
+    pub sample_editor: Option<PathBuf>,
     pub record: RecordSettings,
     pub launch: LaunchPrefs,
     /// MIDI Envelope Auto-Reset: new clips set some controllers back first (manual p. 534).
@@ -345,6 +430,11 @@ impl Default for Settings {
             samples: SampleSettings::default(),
             launch: LaunchPrefs::default(),
             warp: WarpDefaults::default(),
+            clip: ClipSettings::default(),
+            clip_panel_layout: Default::default(),
+            permanent_scrub_areas: true,
+            follow_behavior: FollowBehavior::Page,
+            sample_editor: None,
             record: RecordSettings::default(),
             midi_envelope_auto_reset: false,
             record_session_automation_in: SessionAutomationIn::default(),
@@ -498,6 +588,11 @@ mod tests {
                 mode: WarpMode::RePitch,
             },
             midi_envelope_auto_reset: true,
+            clip: ClipSettings::default(),
+            clip_panel_layout: Default::default(),
+            permanent_scrub_areas: true,
+            follow_behavior: FollowBehavior::Scroll,
+            sample_editor: None,
             record_session_automation_in: SessionAutomationIn::AllTracks,
             create_fades: false,
             chase_notes: false,

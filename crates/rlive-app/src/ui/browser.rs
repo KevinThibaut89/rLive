@@ -39,12 +39,23 @@ pub fn list_samples(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// The audio clip the Clip View is showing, which a sample from the browser goes into.
+fn sample_target(session: &Session, state: &UiState) -> Option<crate::session::ClipRef> {
+    let cref = state.selected_clip?;
+    let showing = state.show_detail && state.detail == crate::ui::Detail::Clip;
+    (showing && session.clip_at(cref).is_some_and(|c| !c.is_midi())).then_some(cref)
+}
+
 fn matches(filter: &str, text: &str) -> bool {
     filter.is_empty() || text.to_lowercase().contains(&filter.to_lowercase())
 }
 
 /// Apply a browser item to the selected track (double-click action).
 pub fn apply(session: &mut Session, ui_state: &mut UiState, item: &BrowserItem) {
+    if let (BrowserItem::Sample(path), Some(cref)) = (item, sample_target(session, ui_state)) {
+        session.replace_clip_sample(cref, path);
+        return;
+    }
     let chain = ui_state.selected.unwrap_or_else(|| {
         let id = session.add_track(TrackKind::Midi, None);
         ChainRef::Track(id)
@@ -112,6 +123,11 @@ const ROW_H: f32 = 19.0;
 /// Where a row records that it was clicked, for the browser to preview it once it's drawn.
 fn clicked_row() -> Id {
     Id::unique("rlive_browser_clicked_row")
+}
+
+/// Where the browser remembers the row Enter would load.
+fn enter_row() -> Id {
+    Id::unique("rlive_browser_enter_row")
 }
 
 /// One list row: hover highlight, drag source, double-click to apply.
@@ -427,6 +443,19 @@ pub fn show(
     let clicked: Option<BrowserItem> = ui.data_mut(|d| d.remove_temp(clicked_row())).flatten();
     if let (Some(BrowserItem::Sample(path)), true) = (&clicked, state.preview_samples) {
         session.preview_file(path);
+    }
+    // Enter loads the sample last clicked, while the browser has the keyboard.
+    if let Some(item) = clicked {
+        ui.data_mut(|d| d.insert_temp(enter_row(), Some(item)));
+    }
+    let enter = state.focus == crate::ui::keymap::FocusArea::Browser
+        && !ui.ctx().egui_wants_keyboard_input()
+        && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    if enter {
+        let chosen: Option<BrowserItem> = ui.data(|d| d.get_temp(enter_row())).flatten();
+        if let Some(item) = chosen {
+            apply(session, state, &item);
+        }
     }
     if previewing && !state.preview_samples {
         session.stop_preview();

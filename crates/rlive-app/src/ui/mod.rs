@@ -4,6 +4,7 @@ mod arrangement;
 mod automation;
 mod browser;
 pub mod clip_envelopes;
+pub(crate) mod clip_view;
 pub mod commands;
 pub(crate) mod devices;
 mod icons;
@@ -93,6 +94,9 @@ pub struct UiState {
     pub piano: piano_roll::PianoState,
     pub sample: sample_editor::SampleState,
     pub env: clip_envelopes::ClipEnvState,
+    pub clip_view: clip_view::ClipViewState,
+    /// Follow Behavior is Scroll, so views keep moving with the playhead.
+    pub follow_scrolls: bool,
     /// MIDI Envelope Auto-Reset, mirrored for the Sample Editor's context menu to show.
     pub midi_auto_reset: bool,
     /// The context menu asked for MIDI Envelope Auto-Reset to be toggled.
@@ -274,6 +278,8 @@ impl RliveApp {
             piano: piano_roll::PianoState::default(),
             sample: sample_editor::SampleState::new(),
             env: clip_envelopes::ClipEnvState::default(),
+            clip_view: clip_view::ClipViewState::with_layout(settings.clip_panel_layout),
+            follow_scrolls: false,
             midi_auto_reset: false,
             toggle_midi_auto_reset: false,
             layout: session_view::SessionLayout::default(),
@@ -451,6 +457,50 @@ impl RliveApp {
         } else {
             FocusArea::Session
         };
+    }
+
+    /// The Clip View over the Device View, in one panel.
+    fn stacked_detail(&mut self, ui: &mut egui::Ui) {
+        let full = ui.max_rect();
+        ui.expand_to_include_rect(full);
+        let top = Rect::from_min_size(full.min, Vec2::new(full.width(), full.height() * 0.55));
+        let bottom = Rect::from_min_max(Pos2::new(full.left(), top.bottom() + 1.0), full.max);
+        let mut cu = ui.new_child(UiBuilder::new().max_rect(top));
+        cu.set_clip_rect(top.intersect(ui.clip_rect()));
+        launch_panel::with_launch_strip(&mut cu, &mut self.session, &mut self.ui, clip_view::show);
+        let mut du = ui.new_child(UiBuilder::new().max_rect(bottom));
+        du.set_clip_rect(bottom.intersect(ui.clip_rect()));
+        devices::show(&mut du, &mut self.session, &mut self.ui);
+    }
+
+    /// Dragging the Detail View's top border to the bottom of the window closes it.
+    fn detail_edge(&mut self, ctx: &egui::Context, rect: Rect) {
+        let (pressed, down, released, origin, pos, window) = ctx.input(|i| {
+            (
+                i.pointer.primary_pressed(),
+                i.pointer.primary_down(),
+                i.pointer.primary_released(),
+                i.pointer.press_origin(),
+                i.pointer.latest_pos(),
+                i.viewport_rect(),
+            )
+        });
+        let view = &mut self.ui.clip_view;
+        if pressed && origin.is_some_and(|o| (o.y - rect.top()).abs() < 6.0) {
+            view.resizing = true;
+        }
+        if view.resizing && down {
+            ctx.set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
+        if released {
+            let closing =
+                view.resizing && pos.is_some_and(|p| p.y >= window.bottom() - STATUS_H - 6.0);
+            view.resizing = false;
+            if closing {
+                self.ui.show_detail = false;
+                self.settings.show_detail = Some(false);
+            }
+        }
     }
 
     /// Draws the "Outline View in Focus" border.
@@ -643,7 +693,11 @@ impl RliveApp {
             time_selection: self.ui.focus == FocusArea::Arrangement
                 && self.ui.arr.has_selection()
                 && !self.ui.arr.loop_selected,
-            loop_brace: self.ui.focus == FocusArea::Arrangement && self.ui.arr.loop_selected,
+            loop_brace: match self.ui.focus {
+                FocusArea::Arrangement => self.ui.arr.loop_selected,
+                FocusArea::Clip => self.ui.clip_view.marker.is_some(),
+                _ => false,
+            },
             track_header: self.ui.focus == FocusArea::Arrangement && self.ui.arr.header_selected,
             enter_held: ctx.input(|i| i.key_down(Key::Enter)),
             lane_focused: self.ui.arr.auto.mode && self.ui.arr.auto.focus.is_some(),
@@ -982,7 +1036,9 @@ impl RliveApp {
             self.session.set_punch(a.punch_in, !a.punch_out);
         }
         cu.add_space(4.0);
-        let session_rec = self.session.any_slot_recording() || self.session.any_overdubbing();
+        let session_rec = self.session.any_slot_recording()
+            || self.session.any_overdubbing()
+            || self.session.session_automation_record();
         let r = widgets::icon_button(
             &mut cu,
             Vec2::new(26.0, h),
@@ -1338,7 +1394,10 @@ impl RliveApp {
         let avail = (u.available_width() - right_w).max(50.0);
         let (ir, _) = u.allocate_exact_size(Vec2::new(avail, 18.0), Sense::hover());
         let dropped = self.session.take_dropped();
-        let msg = if !info_text.is_empty() {
+        let job = self.session.clip_job_progress();
+        let msg = if let Some((what, done)) = job {
+            (format!("{what}… {:.0}%", done * 100.0), pal().text)
+        } else if !info_text.is_empty() {
             (info_text, pal().text)
         } else if dropped > 0 {
             (
@@ -1380,7 +1439,7 @@ impl RliveApp {
                 self.toggle_detail();
             }
             if self.ui.selected_clip.is_some() {
-                let clip_on = self.ui.detail == Detail::Clip;
+                let clip_on = self.ui.detail == Detail::Clip || self.ui.clip_view.stacked;
                 let r = widgets::state_button(
                     u,
                     Vec2::new(40.0, 16.0),
@@ -1388,8 +1447,19 @@ impl RliveApp {
                     shade(0x8a8a8a),
                     "Clip",
                 );
-                if info(r, "Clip View — edit the selected clip (Shift+Tab toggles)").clicked() {
-                    self.ui.detail = Detail::Clip;
+                if info(
+                    r,
+                    "Clip View — edit the selected clip (Shift+Tab toggles); Alt-click to show it \
+                     with the Device View",
+                )
+                .clicked()
+                {
+                    if u.input(|i| i.modifiers.alt) {
+                        self.ui.clip_view.stacked = !self.ui.clip_view.stacked;
+                    } else {
+                        self.ui.clip_view.stacked = false;
+                        self.ui.detail = Detail::Clip;
+                    }
                     self.ui.show_detail = true;
                 }
             }
@@ -1508,6 +1578,17 @@ impl eframe::App for RliveApp {
         widgets::info_begin_frame(ctx);
         self.session.colors = self.settings.colors;
         self.session.warp_defaults = self.settings.warp;
+        self.session.clip_defaults.create_fades = self.settings.create_fades;
+        self.session.set_clip_update_rate(
+            self.settings
+                .clip
+                .update_rate
+                .ticks(self.session.project.time_signature),
+        );
+        self.session.sample_editor = self.settings.sample_editor.clone();
+        self.ui.clip_view.permanent_scrub = self.settings.permanent_scrub_areas;
+        self.ui.follow_scrolls =
+            self.settings.follow_behavior == crate::settings::FollowBehavior::Scroll;
         self.session.record = self.settings.record.clone();
         self.session.launch_defaults = self.settings.launch.defaults();
         self.ui.sel.prefs = self.settings.launch;
@@ -1619,7 +1700,7 @@ impl eframe::App for RliveApp {
             rects.browser = Some(panel.response.rect);
         }
         if self.ui.show_detail {
-            let panel = egui::Panel::bottom("detail")
+            let mut detail = egui::Panel::bottom("detail")
                 .resizable(true)
                 .default_size(250.0)
                 .size_range(130.0..=700.0)
@@ -1627,20 +1708,33 @@ impl eframe::App for RliveApp {
                     egui::Frame::new()
                         .fill(pal().panel_dark)
                         .stroke(Stroke::new(1.0, pal().separator)),
-                )
-                .show(ui, |ui| match self.ui.detail {
-                    Detail::Clip if self.ui.selected_clip.is_some() => {
-                        launch_panel::with_launch_strip(
-                            ui,
-                            &mut self.session,
-                            &mut self.ui,
-                            piano_roll::show,
-                        )
+                );
+            if self.ui.clip_view.full_size && self.ui.detail == Detail::Clip {
+                detail = detail.exact_size((ui.available_height() - 40.0).max(200.0));
+            }
+            let stacked = self.ui.clip_view.stacked
+                && self.ui.selected_clip.is_some()
+                && self.ui.detail != Detail::Scene;
+            let panel = detail.show(ui, |ui| {
+                if stacked {
+                    self.stacked_detail(ui);
+                } else {
+                    match self.ui.detail {
+                        Detail::Clip if self.ui.selected_clip.is_some() => {
+                            launch_panel::with_launch_strip(
+                                ui,
+                                &mut self.session,
+                                &mut self.ui,
+                                clip_view::show,
+                            )
+                        }
+                        Detail::Scene => scene_view::show(ui, &mut self.session, &mut self.ui),
+                        _ => devices::show(ui, &mut self.session, &mut self.ui),
                     }
-                    Detail::Scene => scene_view::show(ui, &mut self.session, &mut self.ui),
-                    _ => devices::show(ui, &mut self.session, &mut self.ui),
-                });
+                }
+            });
             rects.detail = Some(panel.response.rect);
+            self.detail_edge(&ctx, panel.response.rect);
         }
         let panel = egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(pal().grid_bg))

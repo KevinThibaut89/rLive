@@ -2142,6 +2142,10 @@ pub(super) fn track_menu(
         }
         ui.close();
     }
+    if ui.button("Assign Track Color to Clips").clicked() {
+        session.assign_track_color(id, state.main_view == super::MainView::Arrangement);
+        ui.close();
+    }
     if is_group {
         if ui.button("Ungroup Tracks   ⌘⇧G").clicked() {
             session.ungroup(id);

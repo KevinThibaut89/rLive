@@ -129,6 +129,14 @@ impl Session {
         }
     }
 
+    /// A new empty MIDI clip, set up as the Launch settings say.
+    pub fn new_midi_clip(&self, color: [u8; 3], sig: rlive_core::TimeSignature) -> Clip {
+        Clip {
+            launch: self.launch_defaults.settings(),
+            ..Clip::new_midi("MIDI Clip", color, 1, sig)
+        }
+    }
+
     /// The colour for a new clip on `track`.
     pub fn new_clip_color(&self, track: TrackId) -> [u8; 3] {
         match self.colors.new_clip {
@@ -173,6 +181,9 @@ impl Session {
             launch: self.launch_defaults.settings(),
             ..Clip::default()
         };
+        if let ClipContent::Audio { edge_fade, .. } = &mut clip.content {
+            *edge_fade = self.clip_defaults.create_fades;
+        }
         self.apply_new_clip_defaults(&mut clip, path, seconds);
         Ok(clip)
     }

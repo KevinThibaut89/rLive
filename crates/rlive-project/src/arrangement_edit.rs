@@ -54,31 +54,43 @@ impl ArrangementClip {
     }
 
     pub fn fade_room(&self) -> FadeRoom {
-        let content = self.clip.length.max(1);
+        // What can sound is decided by the clip's run from its start marker.
+        let run = self.run_offset();
         if self.clip.looped {
-            let at_start = self.offset % content;
-            let at_end = match (self.offset + self.length) % content {
-                0 => content,
-                e => e,
-            };
+            let at = self.run_pass(run);
+            let end = run + self.length;
+            let last = self.run_pass(end.saturating_sub(1));
             FadeRoom {
-                fade_in: (content - at_start).min(self.length),
-                fade_out: at_end.min(self.length),
-                lead: at_start,
-                tail: content - at_end,
+                fade_in: (at.1 - run).min(self.length),
+                fade_out: (end - last.0).min(self.length),
+                lead: run - at.0,
+                tail: last.1 - end,
             }
         } else {
-            let end = self.offset + self.length;
             // A loop recording keeps earlier passes before its start marker, in the same sample,
-            // and a crossfade mustn't dig them up.
-            let floor = self.clip.start.max(self.clip.loop_start);
+            // and a crossfade mustn't dig them up: the run begins at the start marker.
+            let end = self.offset.max(self.clip.start) + self.length;
             FadeRoom {
                 fade_in: self.length,
                 fade_out: self.length,
-                lead: self.offset.saturating_sub(floor),
-                tail: content.saturating_sub(end),
+                lead: run,
+                tail: self.clip.end_marker().saturating_sub(end),
             }
         }
+    }
+
+    /// The stretch of a looped clip's run that `run` falls in, which plays without a jump: from
+    /// the start marker to the end of the loop, or one time round it after that.
+    fn run_pass(&self, run: u64) -> (u64, u64) {
+        let region = self.clip.region();
+        let length = self.clip.length.max(1);
+        // A start marker inside the loop makes the first pass short; before it, long.
+        let first_end = (region.loop_end() - region.start).round().max(1.0) as u64;
+        if run < first_end {
+            return (0, first_end);
+        }
+        let k = (run - first_end) / length;
+        (first_end + k * length, first_end + (k + 1) * length)
     }
 
     /// The most a fade in can be: within its room, and short of the fade out.
@@ -125,12 +137,21 @@ impl ArrangementClip {
     /// Moves the content under the clip's edges, later for a positive `delta`, as far as the
     /// content allows. Looped content wraps around.
     pub fn slide_content(&mut self, delta: i64) {
-        let content = self.clip.length.max(1) as i64;
+        let start = self.clip.start as i64;
         if self.clip.looped {
-            self.offset = (self.offset as i64 - delta).rem_euclid(content) as u64;
+            let content = self.clip.length.max(1) as i64;
+            // Wrapping stays inside the part of the run that repeats.
+            let lead = (self.clip.region().lead() as i64).max(0);
+            let run = self.run_offset() as i64 - delta;
+            let run = if run < lead || run >= lead + content {
+                lead + (run - lead).rem_euclid(content)
+            } else {
+                run
+            };
+            self.offset = (start + run) as u64;
         } else {
-            let max = content.saturating_sub(self.length as i64).max(0);
-            self.offset = (self.offset as i64 - delta).clamp(0, max) as u64;
+            let max = (self.clip.end_marker() as i64 - self.length as i64).max(start);
+            self.offset = (self.offset as i64 - delta).clamp(start, max) as u64;
         }
     }
 
@@ -819,7 +840,8 @@ mod tests {
 
     #[test]
     fn a_recorded_pass_cannot_lead_into_the_pass_before_it() {
-        let mut c = placed(0, 1000, 2000, 3000, false);
+        // The brace is around the pass; the sample has every pass.
+        let mut c = placed(0, 1000, 2000, 1000, false);
         c.clip.start = 2000;
         c.clip.loop_start = 2000;
         assert_eq!(c.fade_room().lead, 0);
@@ -829,6 +851,49 @@ mod tests {
         assert_eq!(l.fade_room().tail, 600, "the rest of the same pass");
         assert_eq!(r.fade_room().lead, 400, "the part split off before it");
         assert_eq!(r.fade_room().tail, 0);
+    }
+
+    #[test]
+    fn a_looped_clips_room_runs_from_its_start_marker() {
+        // Loop of beats 2-4, run in from the top: the run-in and first pass have no seam.
+        let mut c = placed(0, 500, 1000, 1000, true);
+        c.clip.loop_start = 2000;
+        assert_eq!(c.fade_room().lead, 1000, "back to the start marker");
+        assert_eq!(c.fade_room().tail, 1500, "on to the end of the loop");
+        // A start marker inside the loop: the first pass is short.
+        let mut c = placed(0, 100, 2600, 1000, true);
+        c.clip.loop_start = 2000;
+        c.clip.start = 2500;
+        assert_eq!(c.fade_room().lead, 100);
+        assert_eq!(c.fade_room().tail, 300);
+        // Past it, the same room as any other pass.
+        let mut c = placed(0, 100, 3100, 1000, true);
+        c.clip.loop_start = 2000;
+        c.clip.start = 2500;
+        assert_eq!(c.fade_room().lead, 100, "just round the loop");
+    }
+
+    #[test]
+    fn an_unlooped_clips_room_stops_at_its_markers() {
+        let mut c = placed(0, 500, 1000, 4000, false);
+        c.clip.start = 800;
+        c.clip.end = Some(2000);
+        assert_eq!(c.fade_room().lead, 200);
+        assert_eq!(c.fade_room().tail, 500);
+    }
+
+    #[test]
+    fn sliding_stays_inside_a_clips_markers() {
+        let mut c = placed(0, 500, 1000, 4000, false);
+        c.clip.start = 800;
+        c.clip.end = Some(2000);
+        c.slide_content(10_000);
+        assert_eq!(c.offset, 800, "not before the start marker");
+        c.slide_content(-10_000);
+        assert_eq!(
+            c.offset, 1500,
+            "nor so far its right edge is past the end marker"
+        );
     }
 
     #[test]

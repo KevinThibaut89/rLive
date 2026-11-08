@@ -14,8 +14,8 @@ use rlive_engine::shared::{ChainShared, TrackShared};
 use rlive_engine::{
     mix_cell, ArrangementLane, AudioClip, BusLayout, ChainNode, ClipCurve, ClipData, ClipEnvelopes,
     DeviceSlot, EnvCurve, EnvTiming, EnvelopedClip, ExprPoint, LaneClip, LaneFades, MidiClip,
-    MixSettings, Note, NoteExpression, NullProcessor, RackKind as EngineRackKind, RackNode,
-    TrackNode, WarpedClip, MAX_RACK_DEPTH, MAX_SENDS,
+    MixSettings, Note, NoteExpression, NullProcessor, ProgramChange, RackKind as EngineRackKind,
+    RackNode, TrackNode, WarpedClip, MAX_RACK_DEPTH, MAX_SENDS,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
@@ -127,7 +127,9 @@ fn tempo_points(points: &[Breakpoint]) -> Vec<TempoPoint> {
 
 /// How an envelope's time runs in its clip.
 pub(super) fn env_timing(e: &ClipEnvelope, clip: &Clip) -> EnvTiming {
+    let region = clip.region();
     match e.loop_region {
+        None if !region.is_whole() => EnvTiming::Region(region),
         None => EnvTiming::Linked {
             length: clip.length as f64,
             looped: clip.looped,
@@ -539,18 +541,25 @@ impl Builder<'_> {
         node
     }
 
-    /// Compiles a clip. `None` means its sample hasn't finished loading or won't: the clip stays
-    /// out of the engine, so it can't be played, and the failure has already been reported.
+    /// Compiles a Session clip. `None` means its sample hasn't finished loading or won't: it stays
+    /// out of the engine, so it can't be played, and any failure has already been reported.
     pub fn clip(&mut self, clip: &Clip) -> Option<Arc<ClipData>> {
+        self.compile(clip, true)
+    }
+
+    /// `session` says it's a Session clip, the only kind with edge fades (manual p. 218).
+    fn compile(&mut self, clip: &Clip, session: bool) -> Option<Arc<ClipData>> {
+        let region = clip.region();
+        let mut hi_q_needed = false;
+        let mut edge_fade_on = false;
         let data = match &clip.content {
-            ClipContent::Midi { notes, .. } => {
+            ClipContent::Midi { notes, program } => {
                 // Deactivated notes never reach the engine.
-                // Only what's inside the loop plays: a captured clip keeps earlier notes before it.
                 let notes: Vec<Note> = notes
                     .iter()
-                    .filter(|n| !n.muted && n.start >= clip.loop_start)
+                    .filter(|n| !n.muted)
                     .map(|n| Note {
-                        start: n.start - clip.loop_start,
+                        start: n.start,
                         length: n.length,
                         key: n.key,
                         velocity: n.velocity,
@@ -560,7 +569,8 @@ impl Builder<'_> {
                     .collect();
                 ClipData::Midi(
                     MidiClip::new(clip.length, notes, clip.looped)
-                        .with_scale(clip_scale(&clip.scale)),
+                        .with_scale(clip_scale(&clip.scale))
+                        .with_program(program.map(engine_program)),
                 )
             }
             ClipContent::Audio {
@@ -569,12 +579,16 @@ impl Builder<'_> {
                 transpose,
                 detune_cents,
                 warp,
+                hi_q,
+                edge_fade,
                 ..
             } => {
                 let SampleStatus::Ready(sample) = self.samples.request(&file.path) else {
                     return None;
                 };
                 let sample_rate = sample.sample_rate;
+                hi_q_needed = *hi_q && sample_rate != self.sample_rate;
+                edge_fade_on = *edge_fade && session;
                 let audio = AudioClip {
                     sample,
                     length: clip.length,
@@ -590,7 +604,7 @@ impl Builder<'_> {
                             warp,
                             map.as_ref(),
                             sample_rate,
-                            clip.length,
+                            clip.loop_end(),
                             found.as_ref().map(|f| f.as_slice()),
                         ),
                         audio,
@@ -604,14 +618,22 @@ impl Builder<'_> {
             }
         };
         let envelopes = clip_envelopes(clip);
-        Some(Arc::new(if envelopes.is_empty() {
-            data
-        } else {
-            ClipData::Enveloped(Box::new(EnvelopedClip {
-                clip: data,
-                envelopes,
-            }))
-        }))
+        // The file's own first sample isn't a cut, so a clip from its start doesn't fade in.
+        let edge_fade = edge_fade_on && (!region.is_whole() || !clip.looped);
+        let region = (!region.is_whole()).then_some(region);
+        Some(Arc::new(
+            if envelopes.is_empty() && region.is_none() && !edge_fade && !hi_q_needed {
+                data
+            } else {
+                ClipData::Enveloped(Box::new(EnvelopedClip {
+                    clip: data,
+                    envelopes,
+                    region,
+                    edge_fade,
+                    hi_q: hi_q_needed,
+                }))
+            },
+        ))
     }
 
     /// Compiles a timeline. Clips whose sample isn't there are left out.
@@ -621,7 +643,12 @@ impl Builder<'_> {
         // A clip takes the second voice while it overlaps the one before it.
         let (mut voice, mut prev_tail) = (0u8, false);
         for (c, f) in clips.iter().zip(fades) {
-            let Some(data) = c.clip.active.then(|| self.clip(&c.clip)).flatten() else {
+            let Some(data) = c
+                .clip
+                .active
+                .then(|| self.compile(&c.clip, false))
+                .flatten()
+            else {
                 prev_tail = false;
                 continue;
             };
@@ -634,7 +661,7 @@ impl Builder<'_> {
             lane.push(LaneClip {
                 start: c.start,
                 end: c.end(),
-                offset: c.offset,
+                offset: c.run_offset(),
                 data,
                 fades: LaneFades {
                     fade_in: f.fade_in,
@@ -883,6 +910,16 @@ pub fn mix_of(t: &Track) -> MixSettings {
         },
         crossfader: 0.0,
         cue_db: 0.0,
+    }
+}
+
+/// A clip's bank and program choosers as messages to send, skipping any left at "—".
+fn engine_program(p: rlive_project::MidiProgram) -> ProgramChange {
+    let set = |v: u8| (v != rlive_project::clip_edit::PROGRAM_UNSET).then_some(v);
+    ProgramChange {
+        bank: set(p.bank),
+        sub_bank: set(p.sub_bank),
+        program: set(p.program),
     }
 }
 

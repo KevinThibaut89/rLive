@@ -3,7 +3,7 @@
 
 use crate::automation::ClipRoutes;
 use crate::capture::{CaptureSink, SlotRec};
-use crate::clip::{BlockTime, ClipData, ClipPlayer, Pending};
+use crate::clip::{BlockTime, ClipData, ClipPlayer};
 use crate::delay::{offer_line, FadingDelay, StereoLine, TapLines};
 use crate::graph::{BusIn, InputGate, Tap, TrackIo};
 use crate::lane::{ArrangementLane, LanePlayer};
@@ -1213,11 +1213,11 @@ impl TrackNode {
             if self.follow && !self.lane_muted {
                 // A launch due in this block ends the lane at its launch point.
                 let launch_at = match self.player.pending {
-                    Some(Pending::Launch { at, .. }) if at < time.t1() => Some(at.max(time.t0)),
+                    Some(p) if p.starts_clip() && p.at() < time.t1() => Some(p.at().max(time.t0)),
                     _ => None,
                 };
                 let until = launch_at.unwrap_or(time.t1());
-                self.lane.render(
+                self.lane.render_updating(
                     time,
                     time.t0,
                     until,
@@ -1703,7 +1703,7 @@ impl TrackNode {
             match self.player.pending {
                 Some(crate::clip::Pending::Launch { slot, .. }) => slot as i32,
                 Some(crate::clip::Pending::Stop { .. }) => crate::shared::STOP_QUEUED,
-                None => NO_SLOT,
+                Some(crate::clip::Pending::Scrub { .. }) | None => NO_SLOT,
             },
             std::sync::atomic::Ordering::Relaxed,
         );

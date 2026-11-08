@@ -1,6 +1,6 @@
 use crate::defaults::{is_default, is_one, is_true, one, yes};
 use crate::{Breakpoint, ClipEnvelope, FileRef};
-use rlive_core::{GrooveId, Quantize, TimeSignature};
+use rlive_core::{ClipRegion, GrooveId, Quantize, TimeSignature};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -359,5 +359,29 @@ impl Clip {
 
     pub fn is_midi(&self) -> bool {
         matches!(self.content, ClipContent::Midi { .. })
+    }
+
+    /// Where the markers put playback.
+    pub fn region(&self) -> ClipRegion {
+        ClipRegion::new(
+            self.start as f64,
+            self.end.map(|e| e as f64),
+            self.loop_start as f64,
+            self.length as f64,
+            self.looped,
+        )
+    }
+
+    pub fn loop_end(&self) -> u64 {
+        self.loop_start + self.length
+    }
+
+    /// Where the end marker is, whether or not it has been set.
+    pub fn end_marker(&self) -> u64 {
+        self.end.unwrap_or(self.loop_end())
+    }
+
+    pub fn is_warped(&self) -> bool {
+        matches!(&self.content, ClipContent::Audio { warp, .. } if warp.enabled)
     }
 }

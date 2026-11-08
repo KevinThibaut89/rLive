@@ -9,7 +9,11 @@ mod automation;
 pub mod automation_edit;
 mod build;
 mod capture;
+mod clip_edit;
 mod clip_envelopes;
+mod clip_files;
+#[cfg(test)]
+mod clip_view_tests;
 mod clips;
 mod devices;
 mod export;
@@ -66,6 +70,7 @@ pub use arrange_edit::{
 pub use arrangement::{ArrMove, TrimEdge};
 pub use automation_edit::{EnvGroup, EnvParam};
 pub use build::{descriptor_for, mix_of, time_maps, Builder, DeviceRuntime, PluginWiring};
+pub use clip_edit::{ClipDefaults, MultiClip, SetMarker};
 pub use clips::ClipRef;
 pub use devices::ChainRef;
 pub use graph::compile_plan;
@@ -85,8 +90,8 @@ use crate::settings::{ColorSettings, RecordSettings};
 use rlive_core::{ChainId, DeviceId, PluginFormat, TrackId};
 use rlive_engine::shared::{ChainShared, TrackShared};
 use rlive_engine::{
-    BusLayout, CellIx, EngineCommand, EngineEvent, EngineHandle, GraphOp, ParamCmd, RecordCmd,
-    TrackRef, TransportCmd, MAX_TRACKS,
+    BusLayout, CellIx, ClipCmd, EngineCommand, EngineEvent, EngineHandle, GraphOp, ParamCmd,
+    RecordCmd, TrackRef, TransportCmd, MAX_TRACKS,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{HostNotification, PluginDescriptor};
@@ -118,6 +123,16 @@ pub struct Session {
     /// How new tracks and clips are coloured.
     pub colors: ColorSettings,
     pub warp_defaults: WarpDefaults,
+    /// How new clips launch and how edits reach a running one.
+    pub clip_defaults: ClipDefaults,
+    /// The program Edit opens a sample in.
+    pub sample_editor: Option<PathBuf>,
+    /// The file Manage Sample File asked the File Manager (C13) to show.
+    pub file_manager_target: Option<PathBuf>,
+    /// Reversing and cropping running off the audio thread, and what they've learned.
+    clip_jobs: clip_files::ClipJobs,
+    /// A held scrub on a timeline clip: the song tick to go back to and every how many ticks.
+    arr_scrub: Option<(f64, f64)>,
     /// The Record, Warp & Launch options that recording follows.
     pub record: RecordSettings,
     /// Create Fades on Clip Edges, from the settings. Off until the app says otherwise, so a
@@ -185,6 +200,11 @@ impl Session {
             history,
             colors: ColorSettings::default(),
             warp_defaults: WarpDefaults::default(),
+            clip_defaults: ClipDefaults::default(),
+            sample_editor: None,
+            file_manager_target: None,
+            clip_jobs: clip_files::ClipJobs::default(),
+            arr_scrub: None,
             record: RecordSettings::default(),
             edge_fades: false,
             recording: None,
@@ -302,7 +322,9 @@ impl Session {
             master,
         }]);
         let p = &self.project;
+        let rate = self.clip_defaults.update_rate;
         let cmds = [
+            EngineCommand::Clip(ClipCmd::SetUpdateRate(rate)),
             EngineCommand::Transport(TransportCmd::SetTimeMaps(Arc::new(build::time_maps(p)))),
             EngineCommand::Transport(TransportCmd::SetQuantize(p.quantize)),
             EngineCommand::Transport(TransportCmd::SetMetronome(p.metronome)),
@@ -392,6 +414,7 @@ impl Session {
             path.to_path_buf()
         };
         self.adopt_temp_recordings(&path);
+        self.adopt_temp_processed(&path);
         self.project.save(&path).map_err(|e| e.to_string())?;
         self.path = Some(path);
         self.commit_now();
@@ -554,6 +577,9 @@ impl Session {
             }
         }
         self.poll_disk();
+        self.poll_clip_jobs();
+        self.poll_external_edits();
+        self.poll_scrub();
         self.follow_latency();
     }
 

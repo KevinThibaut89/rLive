@@ -270,40 +270,40 @@ Overview chapter; only behaviours stated here or foundational are listed.
 **Milestones:** C2
 
 - `[ ]` Panels plus editor, resizable, auto-close at bottom, fold, opens in focused window, F12 moves between windows [M]
-- `[ ]` Panels horizontal, vertical, or automatic by height [M]
-- `[ ]` Clip Activator, multi-clip [S]
-- `[ ]` Name independent of file, colour, assign track colour to clips, group colour to children and clips, view-scoped [S]
-- `[ ]` Editor modes: Sample, Envelope, Notes, MPE, shortcut cycle [M]
-- `[ ]` Start/End and Set buttons quantized during playback; beats if warped, time if not [M]
-- `[ ]` Loop toggle (needs Warp for audio); Position, Length, on-the-fly Set buttons [M]
+- `[~]` Panels horizontal, vertical, or automatic by height [M]
+- `[x]` Clip Activator, multi-clip [S]
+- `[x]` Name independent of file, colour, assign track colour to clips, group colour to children and clips, view-scoped [S]
+- `[~]` Editor modes: Sample, Envelope, Notes, MPE, shortcut cycle [M]
+- `[x]` Start/End and Set buttons quantized during playback; beats if warped, time if not [M]
+- `[x]` Loop toggle (needs Warp for audio); Position, Length, on-the-fly Set buttons [M]
 - `[ ]` Loop controls MIDI mappable [S] → MIDI Map
-- `[ ]` Clip time signature, display only, polymeter aid [S]
+- `[x]` Clip time signature, display only, polymeter aid [S]
 - `[ ]` Clip Groove chooser, hot-swap, Commit [S] → ch. 14
 - `[ ]` Commit positive-velocity groove writes volume envelope, overwriting [S]
-- `[ ]` Clip scale on audio forwards to scale-aware devices only [S]
-- `[ ]` Extended properties, launch controls only for Session clips [S]
-- `[ ]` Bank/sub-bank/program per MIDI clip, 128 each, sent on launch [S]
-- `[ ]` Reverse creates new file, flips markers and regions, envelopes stay, cached for instant re-reverse, progress bar [M]
-- `[ ]` External destructive edit, needs playback stopped, markers kept if length same, affects other clips [M]
-- `[ ]` Session clip edge fade 0-4 ms, signal-dependent [S]
-- `[ ]` RAM Mode [S]
-- `[ ]` Hi-Q interpolation, about 19 semitones before aliasing [M]; method not disclosed, generic alternatives exist
-- `[ ]` Gain in dB, pitch semitones plus cents, range display on multi-select [S]
-- `[ ]` Pitch utilities: Transpose, Fit to Scale, Invert, Interval [S each] → ch. 10
-- `[ ]` Time utilities: Stretch, x2, /2, Duration, Humanize, Reverse, Legato [S each]
-- `[ ]` Audio Transform panel: Quantize, grid or value, Amount [S] → warp
-- `[ ]` Zoom, scroll, Follow, selector overview as in Arrangement [M]
-- `[ ]` Markers draggable or arrow keys, modifier moves region [S]
-- `[ ]` Clip scrub jumps by global quantize; hold repeats [M]
-- `[ ]` Global quantize shortcuts [S]
-- `[ ]` Loop brace keys, Duplicate Loop shifts following notes, run-in before loop [M]
-- `[ ]` Sample details header; asterisks when mixed; click reveals in browser [S]
-- `[ ]` Crop Clip Sample to region or time selection creates new file; MIDI crop has no file [M]
-- `[ ]` Replace sample by drop or Enter; markers kept only for identical length [S]
+- `[x]` Clip scale on audio forwards to scale-aware devices only [S]
+- `[~]` Extended properties, launch controls only for Session clips [S]
+- `[x]` Bank/sub-bank/program per MIDI clip, 128 each, sent on launch [S]
+- `[x]` Reverse creates new file, flips markers and regions, envelopes stay, cached for instant re-reverse, progress bar [M]
+- `[~]` External destructive edit, needs playback stopped, markers kept if length same, affects other clips [M]
+- `[x]` Session clip edge fade 0-4 ms, signal-dependent [S]
+- `[~]` RAM Mode [S]
+- `[x]` Hi-Q interpolation, about 19 semitones before aliasing [M]; method not disclosed, generic alternatives exist
+- `[x]` Gain in dB, pitch semitones plus cents, range display on multi-select [S]
+- `[x]` Pitch utilities: Transpose, Fit to Scale, Invert, Interval [S each] → ch. 10
+- `[x]` Time utilities: Stretch, x2, /2, Duration, Humanize, Reverse, Legato [S each]
+- `[~]` Audio Transform panel: Quantize, grid or value, Amount [S] → warp
+- `[~]` Zoom, scroll, Follow, selector overview as in Arrangement [M]
+- `[~]` Markers draggable or arrow keys, modifier moves region [S]
+- `[x]` Clip scrub jumps by global quantize; hold repeats [M]
+- `[x]` Global quantize shortcuts [S]
+- `[x]` Loop brace keys, Duplicate Loop shifts following notes, run-in before loop [M]
+- `[~]` Sample details header; asterisks when mixed; click reveals in browser [S]
+- `[x]` Crop Clip Sample to region or time selection creates new file; MIDI crop has no file [M]
+- `[x]` Replace sample by drop or Enter; markers kept only for identical length [S]
 - `[ ]` Show Similar Files [S ML] → Similarity
 - `[ ]` Manage Sample File opens File Manager [S]
-- `[ ]` Multi-clip properties: shared only, range sliders collapse at extremes [M]
-- `[ ]` Clip Update Rate quantizes applied edits [M]; default Launch and Warp Mode for new clips [S]
+- `[x]` Multi-clip properties: shared only, range sliders collapse at extremes [M]
+- `[x]` Clip Update Rate quantizes applied edits [M]; default Launch and Warp Mode for new clips [S]
 
 
 ## 9. Audio Clips, Tempo, and Warping (pp. 234-251)
@@ -798,8 +798,8 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[~]` Override by manual change; Re-Enable global button and per parameter; relaunching clip restores. M
 - `[~]` Clip Envelope Editor with Automation toggle and Device/Control choosers; Show Adjusted Only merges choosers. M
 - `[~]` Automation Mode (A), main lane, Add Lane; hide additional lanes; duplicates limited to two; Add Lane for Each Automated Envelope; remove with modifiers; arrow navigation. L
-- `[ ]` Show Automation and Show in New Lane from parameter context menu. S
-- `[ ]` Dashed line for unautomated control; clicking a control shows its envelope. S
+- `[~]` Show Automation and Show in New Lane from parameter context menu. S
+- `[~]` Dashed line for unautomated control; clicking a control shows its envelope. S
 - `[~]` Breakpoint creation: click line, double-click off-line, Add Value, snap bypass. M
 - `[x]` Stepped envelopes for discrete parameters. S
 - `[~]` Draw Mode (B, momentary hold), grid-width steps; Snap to Grid off for smooth. M
@@ -1342,7 +1342,6 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **C17:** Hide/show Sends; Hide/show return tracks; Toggle second window
 - `[ ]` **C18:** Hide/show video window
 - `[ ]` **C19:** Cancel value entry; Confirm value entry; Current scene from the last track; Decrement value; Delete track from title bar; Eight scenes down; Eight scenes up; First track of the scene; Focus Mixer; Increment value; Jump to highlighted track title; Last track of the scene; Move nonadjacent tracks down; Move nonadjacent tracks left; Move nonadjacent tracks right; Move nonadjacent tracks up; Next control; Next field; Next name while renaming; Next neighbouring control; Next track while renaming; Previous control; Previous neighbouring control; Return to default; Scene down; Scene up; Select all clips and slots; Select clip above; Select clip below; Select clip left; Select clip right; Type a value; Value down by an octave or fine step; Value up by an octave or fine step
-- `[ ]` **C2:** Envelopes tab; Fit content to view height; Fit content to view width; Focus clip panels; Focus selected clip panel; Follow playback; Move clip region left with start marker; Move clip region right with start marker; Move end marker to position; Move start marker to position; Sample or Notes tab; Set end marker; Set loop end; Set loop start; Set start marker; Show Device and Clip View together; Switch Notes/Envelopes/MPE tabs; Switch Sample/Envelopes tabs; Toggle full-size Clip View; Zoom back from clip selection; Zoom to clip selection
 - `[ ]` **C6:** Add take area to the main lane; Add take lane; Audition take lane; Duplicate take lane; Next take into the main clip; Previous take into the main clip; Show take lanes
 - `[ ]` **C9:** Change velocity from the note editor; Chop notes or split at time selection; Chop notes, one at a time; Chop notes, two at a time; Copy notes; Fit notes to time range; Fit notes to view height; Fit notes to view width; Group notes (play all); Highlight scale; Insert marker to beginning; Insert marker to end; Invert note selection; Join notes; Lower note chance; Lower note velocity; Lower velocity deviation; Quantize; Quantize settings; Raise note chance; Raise note velocity; Raise velocity deviation; Scroll editor down; Scroll editor down, fine; Scroll editor left; Scroll editor right; Scroll editor up; Scroll editor up, fine; Select next note; Select next note in key track; Select previous note; Select previous note in key track; Set note velocity by typing; Show/hide note filters; Split notes at an exact place; Ungroup notes; Zoom back from clip selection; Zoom in horizontally; Zoom out horizontally; Zoom to clip selection
 - `[ ]` **out:** Focus Learn View; Hide/show Learn View

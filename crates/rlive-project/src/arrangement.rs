@@ -19,15 +19,26 @@ pub struct ArrangementClip {
 }
 
 impl ArrangementClip {
-    /// Places all of `clip` at `start`.
+    /// Places all of `clip` at `start`, from its start marker.
     pub fn new(clip: Clip, start: u64) -> Self {
         Self {
             id: ArrClipId::new(),
             start,
             length: clip.length.max(1),
-            offset: 0,
+            offset: clip.start,
             clip,
         }
+    }
+
+    /// How far along its run from the start marker the clip is at `start`.
+    pub fn run_offset(&self) -> u64 {
+        self.offset.saturating_sub(self.clip.start)
+    }
+
+    /// The part of the clip's content that plays at song tick `tick`.
+    pub fn content_at(&self, tick: f64) -> f64 {
+        let run = self.run_offset() as f64 + tick - self.start as f64;
+        self.clip.region().content_at(run)
     }
 
     pub fn end(&self) -> u64 {
@@ -45,23 +56,31 @@ impl ArrangementClip {
             return;
         }
         let mut d = self.start - to;
+        let run = self.run_offset();
+        let region = self.clip.region();
         if self.clip.looped && self.clip.length > 0 {
-            // Looped content extends indefinitely in both directions.
-            self.offset +=
-                d.saturating_sub(self.offset).div_ceil(self.clip.length) * self.clip.length;
+            if region.lead() > 0.0 && run < region.lead() as u64 {
+                // Still running in: what's before it is only reachable by moving the start marker.
+                d = d.min(self.offset);
+            } else {
+                // Looped content extends indefinitely in both directions.
+                self.offset += d.saturating_sub(run).div_ceil(self.clip.length) * self.clip.length;
+            }
         } else {
             d = d.min(self.offset);
         }
         self.start -= d;
         self.length += d;
         self.offset -= d;
+        // The start marker is what plays at the left edge, so it comes along.
+        self.clip.start = self.clip.start.min(self.offset);
     }
 
     /// Moves the right edge to `to`. Unlooped clips stop at the end of their content.
     pub fn trim_right(&mut self, to: u64) {
         let mut length = to.saturating_sub(self.start).max(1);
         if !self.clip.looped {
-            length = length.min(self.clip.length.saturating_sub(self.offset).max(1));
+            length = length.min(self.clip.end_marker().saturating_sub(self.offset).max(1));
         }
         self.length = length;
     }

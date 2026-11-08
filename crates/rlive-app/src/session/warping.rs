@@ -86,6 +86,17 @@ impl Session {
         (rate > 0.0).then(|| peaks.frames() as f64 / rate)
     }
 
+    /// How long the file of an audio clip is.
+    pub(super) fn file_seconds_of(&self, clip: &Clip) -> Option<f64> {
+        self.warp_context_seconds(clip)
+    }
+
+    /// How long a file is, by asking it if nothing has loaded it yet.
+    pub(super) fn probe_seconds(&self, path: &Path) -> Option<f64> {
+        self.file_seconds(path)
+            .or_else(|| rlive_audio_io::probe(path).ok()?.duration_secs())
+    }
+
     fn warp_context_seconds(&self, clip: &Clip) -> Option<f64> {
         match &clip.content {
             ClipContent::Audio { file, .. } => self.file_seconds(&file.path),
@@ -148,7 +159,7 @@ impl Session {
 
     /// Runs `edit` on each clip's warp settings, sends the clips that changed and records one
     /// undo step for them all.
-    fn edit_warp(
+    pub(super) fn edit_warp(
         &mut self,
         targets: &[ClipRef],
         label: &'static str,

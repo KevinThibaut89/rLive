@@ -266,6 +266,9 @@ fn enveloped(value: f32, share: f64) -> Arc<ClipData> {
     .unwrap();
     let inner = (*clip(value, 96_000, 3840, false)).clone();
     Arc::new(ClipData::Enveloped(Box::new(EnvelopedClip {
+        region: None,
+        edge_fade: false,
+        hi_q: false,
         clip: inner,
         envelopes: ClipEnvelopes {
             gain: Some(ClipCurve::new(

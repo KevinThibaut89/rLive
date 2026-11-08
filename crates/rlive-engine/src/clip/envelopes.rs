@@ -4,11 +4,11 @@
 //! or a frame of audio finds its place by binary search, with nothing to fall behind at a loop or
 //! a seek, and nothing allocated.
 
-use super::data::ClipData;
+use super::data::{ClipData, ProgramChange};
 use super::midi::push_event;
 use super::BlockTime;
 use rlive_core::envelope::{value_at, EnvPoint, Interp};
-use rlive_core::{MidiEvent, MidiMessage, ParamRange};
+use rlive_core::{ClipRegion, MidiEvent, MidiMessage, ParamRange};
 
 /// A point of a compiled envelope, in knob position, which is the space segments run straight in.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -78,6 +78,8 @@ impl EnvCurve {
 pub enum EnvTiming {
     /// Linked to the clip: it reads the clip's position, looping with the clip.
     Linked { length: f64, looped: bool },
+    /// Linked to a clip whose markers have been moved: it reads what the clip is playing.
+    Region(ClipRegion),
     /// Unlinked: it has a loop or region and a start marker of its own.
     Unlinked {
         start: f64,
@@ -98,6 +100,7 @@ impl EnvTiming {
                     local.max(0.0)
                 }
             }
+            EnvTiming::Region(region) => region.content_at(local),
             EnvTiming::Unlinked {
                 start,
                 end,
@@ -170,6 +173,12 @@ pub struct EnvelopedClip {
     /// Never itself enveloped.
     pub clip: ClipData,
     pub envelopes: ClipEnvelopes,
+    /// Where its markers are, when any isn't at its default.
+    pub region: Option<ClipRegion>,
+    /// Short fades on the edges that cut through its audio (manual p. 218).
+    pub edge_fade: bool,
+    /// Resample with the better interpolation (manual p. 220).
+    pub hi_q: bool,
 }
 
 /// Spacing of controller values in the stream, in ticks: about 10 ms at 120 BPM.
@@ -241,10 +250,46 @@ pub(crate) fn enter_clip(
     if auto_reset && matches!(clip.content(), ClipData::Midi(_)) {
         reset_controllers(offset, ev);
     }
+    if let ClipData::Midi(midi) = clip.content() {
+        if let Some(program) = midi.program {
+            send_program(program, offset, ev);
+        }
+    }
     if let Some(envelopes) = clip.envelopes() {
         for (cc, curve) in envelopes.midi.iter() {
             push_cc(ev, offset, *cc, cc_value(curve, local));
         }
+    }
+}
+
+/// What a clip's bank and program choosers ask for: Bank Select, its LSB, then Program Change.
+fn send_program(program: ProgramChange, offset: u32, ev: &mut Vec<MidiEvent>) {
+    for (cc, value) in [(0, program.bank), (32, program.sub_bank)] {
+        if let Some(value) = value {
+            push_event(
+                ev,
+                MidiEvent::new(
+                    offset,
+                    MidiMessage::ControlChange {
+                        channel: 0,
+                        cc,
+                        value: value & 127,
+                    },
+                ),
+            );
+        }
+    }
+    if let Some(program) = program.program {
+        push_event(
+            ev,
+            MidiEvent::new(
+                offset,
+                MidiMessage::ProgramChange {
+                    channel: 0,
+                    program: program & 127,
+                },
+            ),
+        );
     }
 }
 

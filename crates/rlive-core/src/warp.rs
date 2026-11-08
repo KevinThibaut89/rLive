@@ -138,6 +138,8 @@ impl WarpMode {
 pub enum StretchKind {
     /// Warp off.
     Off,
+    /// Warp off, resampled with Hi-Q interpolation.
+    OffHiQ,
     Beats,
     Tones,
     Texture,
@@ -147,11 +149,12 @@ pub enum StretchKind {
 }
 
 impl StretchKind {
-    const COUNT: usize = 7;
+    const COUNT: usize = 8;
 
     /// Every kind, in the order of a [`StretchBank`]'s rows.
     pub const ALL: [StretchKind; Self::COUNT] = [
         StretchKind::Off,
+        StretchKind::OffHiQ,
         StretchKind::Beats,
         StretchKind::Tones,
         StretchKind::Texture,

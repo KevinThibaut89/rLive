@@ -712,6 +712,18 @@ impl Session {
         self.sync_session_tracks();
     }
 
+    /// Whether any track that would record Session automation has a Session clip playing.
+    pub(super) fn any_clip_takes_automation(&self) -> bool {
+        self.project.tracks.iter().any(|t| {
+            let eligible = t.arm || self.automation.session_in == SessionAutomationIn::AllTracks;
+            eligible
+                && self
+                    .track_shared
+                    .get(&t.id)
+                    .is_some_and(|s| s.playing_slot.load(Ordering::Relaxed) != NO_SLOT)
+        })
+    }
+
     /// The Record Session Automation In setting.
     pub fn set_session_automation_in(&mut self, tracks: SessionAutomationIn) {
         self.automation.session_in = tracks;

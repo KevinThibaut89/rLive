@@ -3,6 +3,7 @@
 //! Everything in here is used by both the real-time audio thread and the UI thread,
 //! so the types are small, `Copy` where possible and never allocate in the hot path.
 
+pub mod clip_region;
 pub mod crossfade;
 pub mod device;
 pub mod envelope;
@@ -19,6 +20,7 @@ pub mod time;
 pub mod view;
 pub mod warp;
 
+pub use clip_region::ClipRegion;
 pub use crossfade::CrossfadeCurve;
 pub use device::{DeviceDesc, Item, Ports, SampleSlot, ScopeKind, Section, Status};
 pub use fade::{fade_gain, EdgeFades};

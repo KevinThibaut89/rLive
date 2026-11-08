@@ -248,7 +248,7 @@ pub struct KeyContext {
     pub chain_selected: bool,
     /// Clips or a span of time are selected in the Arrangement.
     pub time_selection: bool,
-    /// The Arrangement's loop brace has the arrow keys.
+    /// The Arrangement's loop brace, or the Clip View's markers or loop brace, have the arrows.
     pub loop_brace: bool,
     /// A track header in the Arrangement has the keyboard.
     pub track_header: bool,
@@ -475,13 +475,15 @@ pub fn resolve(chord: Chord, cx: &KeyContext) -> Resolution {
 
 /// Every command that has a menu item.
 fn menu_commands() -> Vec<MenuCommand> {
-    use super::commands::{app, create, edit, file, options, view, Entry};
-    let menus: [&[Entry]; 6] = [
+    use super::commands::{app, clip, create, edit, file, options, view, Entry};
+    let menus: [&[Entry]; 8] = [
         file::MENU,
         edit::MENU,
         create::MENU,
         view::MENU,
         options::MENU,
+        clip::VIEW_MENU,
+        clip::EDIT_MENU,
         &[app::ABOUT, app::PREFERENCES, app::QUIT],
     ];
     menus
