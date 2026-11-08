@@ -4,6 +4,8 @@ use rlive_core::{GrooveId, Quantize, TimeSignature, PPQ};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub use rlive_core::warp::{BeatsLoop, BeatsPreserve};
+
 /// Release velocity of a note that never recorded one (MIDI's default of 64, rounded).
 const DEFAULT_RELEASE: f32 = 0.5;
 
@@ -167,24 +169,6 @@ pub struct WarpMarker {
     pub seconds: f64,
     /// Ticks into the clip.
     pub tick: f64,
-}
-
-/// What Beats mode keeps intact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum BeatsPreserve {
-    #[default]
-    Transients,
-    /// Slices on a grid of this many ticks.
-    Grid(u32),
-}
-
-/// How Beats mode fills the gap after a transient.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum BeatsLoop {
-    #[default]
-    Off,
-    Forward,
-    BackAndForth,
 }
 
 /// The settings of each warp mode. All are kept so switching modes doesn't lose them.

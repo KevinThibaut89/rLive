@@ -134,6 +134,7 @@ impl Engine {
             C::AddTrack { index, mut track } => {
                 if self.tracks.len() < self.tracks.capacity() {
                     bind_chain(&mut track.devices, &track.bus);
+                    track.stretch.prepare(self.sample_rate);
                     let idx = index.min(self.tracks.len());
                     self.tracks.insert(idx, track);
                     applied.tracks = true;
@@ -282,6 +283,7 @@ impl Engine {
                 }
                 for t in tracks.iter_mut() {
                     bind_chain(&mut t.devices, &t.bus);
+                    t.stretch.prepare(self.sample_rate);
                 }
                 bind_chain(&mut master.devices, &master.bus);
                 std::mem::swap(&mut self.tracks, &mut *tracks);

@@ -20,7 +20,7 @@ pub mod shared;
 pub mod track;
 
 use clip::BlockTime;
-pub use clip::{AudioClip, ClipData, MidiClip, Note};
+pub use clip::{AudioClip, ClipData, MidiClip, Note, WarpedClip};
 pub use commands::{ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, RecordCmd, TransportCmd};
 pub use graph::{
     AudioIo, BusIn, ChainAddr, ChainPath, ChainStep, RenderPlan, SidechainIn, Step, Tap, TrackRef,
@@ -33,7 +33,8 @@ pub use params::{
 };
 pub use rack::{ChainNode, RackKind, RackNode, Zones, MAX_CHAINS};
 use rlive_core::{
-    time::ticks_per_sample, DeviceId, MidiMessage, Quantize, TimeSignature, TrackId, TransportInfo,
+    time::{BarMap, TempoRun, TimeMaps},
+    DeviceId, MidiMessage, Quantize, TrackId, TransportInfo,
 };
 use shared::EngineShared;
 use std::sync::atomic::Ordering;
@@ -181,19 +182,17 @@ struct Metronome {
 }
 
 impl Metronome {
-    fn render(&mut self, time: BlockTime, sig: TimeSignature, left: &mut [f32], right: &mut [f32]) {
+    fn render(&mut self, time: BlockTime, bars: &BarMap, left: &mut [f32], right: &mut [f32]) {
         if !self.enabled {
             return;
         }
-        let beat = sig.ticks_per_beat() as f64;
         let click_len = (time.sample_rate * 0.03) as usize;
-        let first = (time.t0 / beat).ceil();
-        let mut next_click = first * beat;
+        let mut beat = bars.first_beat(time.t0);
         let t1 = time.t1();
         let mut start = 0;
         loop {
-            let click_at = if next_click < t1 {
-                Some(time.offset(next_click))
+            let click_at = if beat.tick < t1 {
+                Some(time.offset(beat.tick))
             } else {
                 None
             };
@@ -208,14 +207,12 @@ impl Metronome {
             );
             match click_at {
                 Some(off) => {
-                    let downbeat = ((next_click / beat).round() as u64)
-                        .is_multiple_of(sig.numerator.max(1) as u64);
-                    self.freq = if downbeat { 1760.0 } else { 880.0 };
-                    self.amp = if downbeat { 0.5 } else { 0.3 };
+                    self.freq = if beat.downbeat { 1760.0 } else { 880.0 };
+                    self.amp = if beat.downbeat { 0.5 } else { 0.3 };
                     self.phase = 0.0;
                     self.remaining = click_len;
                     start = off;
-                    next_click += beat;
+                    beat = bars.next_beat(beat);
                 }
                 None => break,
             }
@@ -254,8 +251,8 @@ pub struct Engine {
     plans: Plans,
 
     playing: bool,
-    tempo: f64,
-    signature: TimeSignature,
+    /// The song's tempo and meter. Swapped only between blocks.
+    maps: Arc<TimeMaps>,
     quantize: Quantize,
     tick: f64,
     sample_pos: u64,
@@ -301,8 +298,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
             },
         },
         playing: false,
-        tempo: 120.0,
-        signature: TimeSignature::default(),
+        maps: Arc::new(TimeMaps::default()),
         quantize: Quantize::Bar,
         tick: 0.0,
         sample_pos: 0,
@@ -361,14 +357,16 @@ impl Engine {
     }
 
     fn transport(&self) -> TransportInfo {
+        let bar = self.maps.bars.bar_at(self.tick);
         TransportInfo {
             playing: self.playing,
-            tempo: self.tempo,
-            time_signature: self.signature,
-            tick: self.tick,
+            tempo: self.maps.tempo.bpm_at(self.tick),
+            time_signature: bar.signature,
+            // Only ever negative by less than a frame, after a loop from the very start.
+            tick: self.tick.max(0.0),
             sample_pos: self.sample_pos,
             sample_rate: self.sample_rate,
-            bar_start: self.signature.bar_start(self.tick),
+            bar_start: bar.start,
             loop_range: self.loop_range,
         }
     }
@@ -417,15 +415,30 @@ impl Engine {
     }
 
     fn launch_point(&self) -> f64 {
-        self.quantize.next_boundary(self.tick, self.signature)
+        self.maps.bars.next_boundary(self.tick, self.quantize)
     }
 
-    fn ticks_per_sample(&self) -> f64 {
-        ticks_per_sample(self.tempo, self.sample_rate)
+    fn tempo_run(&self) -> TempoRun {
+        self.maps.tempo.run_at(self.tick, self.sample_rate)
     }
 
     fn sync_sample_pos(&mut self) {
-        self.sample_pos = (self.tick / self.ticks_per_sample()).round() as u64;
+        let samples = if self.maps.tempo.is_constant() {
+            self.tick / self.tempo_run().ticks_per_sample
+        } else {
+            self.maps.tempo.tick_to_seconds(self.tick) * self.sample_rate
+        };
+        self.sample_pos = samples.round() as u64;
+    }
+
+    /// The song position `seconds` before the playhead.
+    pub(crate) fn tick_seconds_ago(&self, seconds: f64) -> f64 {
+        let tempo = &self.maps.tempo;
+        if tempo.is_constant() {
+            self.tick - seconds * (self.tempo_run().ticks_per_sample * self.sample_rate)
+        } else {
+            tempo.seconds_to_tick(tempo.tick_to_seconds(self.tick) - seconds)
+        }
     }
 
     /// Move the playhead without disturbing Session clips or device state.
@@ -487,28 +500,67 @@ impl Engine {
 
     /// Whole frames left before `end`, tolerating float error from accumulated block lengths
     /// so a block never comes up one frame short of a loop end.
-    fn frames_until(&self, end: f64, tps: f64) -> usize {
-        (((end - self.tick) / tps) + 1e-6).floor().max(0.0) as usize
+    fn frames_until(&self, end: f64, run: &TempoRun) -> usize {
+        (run.frames_to(end - self.tick) + 1e-6).floor().max(0.0) as usize
     }
 
-    /// Wrap at the loop end if we are there, and return the loop end when the next block of
-    /// up to `n` frames runs into it.
-    fn prepare_loop(&mut self, n: usize, tps: f64) -> Option<f64> {
+    /// The loop, while the playhead is going around it.
+    fn active_loop(&self, run: &TempoRun) -> Option<(f64, f64)> {
         if !self.playing {
             return None;
         }
         let (start, end) = self.loop_range?;
         // A tick already past the end (sought there) plays on; a loop shorter than one frame
         // could never advance.
-        if end - start < tps || !(self.tick < end || self.reached_loop_end) {
+        if end - start < run.ticks_per_sample || !(self.tick < end || self.reached_loop_end) {
             return None;
         }
-        if self.frames_until(end, tps) == 0 {
-            // Subtracting the exact loop length keeps the sub-sample remainder, so loop passes
-            // do not drift against the sample grid.
-            self.jump((self.tick - (end - start)).max(0.0), JumpKind::Wrap);
+        Some((start, end))
+    }
+
+    /// Where a wrap from `(start, end)` lands. Keeping the sub-sample remainder stops loop passes
+    /// drifting against the sample grid. With one tempo that is the exact loop length in ticks;
+    /// across tempo changes it has to be kept in seconds, since it covers a different number of
+    /// ticks at each end of the loop. The playhead can land before tick 0, by less than a frame,
+    /// so a loop from the very start doesn't lose it either.
+    fn loop_wrap_target(&self, start: f64, end: f64) -> f64 {
+        let tempo = &self.maps.tempo;
+        if tempo.is_constant() {
+            (self.tick - (end - start)).max(0.0)
+        } else {
+            let remainder = tempo.tick_to_seconds(end) - tempo.tick_to_seconds(self.tick);
+            tempo.seconds_to_tick(tempo.tick_to_seconds(start) - remainder)
         }
-        (self.frames_until(end, tps) <= n).then_some(end)
+    }
+
+    /// Wrap at the loop end if we are there, re-reading the tempo at the new position.
+    fn wrap_at_loop_end(&mut self, run: &mut TempoRun) {
+        let Some((start, end)) = self.active_loop(run) else {
+            return;
+        };
+        if self.frames_until(end, run) == 0 {
+            self.jump(self.loop_wrap_target(start, end), JumpKind::Wrap);
+            *run = self.tempo_run();
+        }
+    }
+
+    /// Cut the next block short at the next tempo point, so every block runs at one tempo and
+    /// events can be placed exactly in it. When the point is inside the very next frame that
+    /// frame straddles it: one frame long, at its true, blended rate. Taken from the map, so
+    /// time is never lost at a tempo change. A constant tempo has no points to reach.
+    fn limit_to_tempo_point(&self, run: &mut TempoRun, n: usize) -> usize {
+        if !self.playing || !run.until.is_finite() {
+            return n;
+        }
+        let frames = self.frames_until(run.until, run);
+        if frames > 0 {
+            return n.min(frames);
+        }
+        let tempo = &self.maps.tempo;
+        let t1 = tempo.seconds_to_tick(tempo.tick_to_seconds(self.tick) + 1.0 / self.sample_rate);
+        run.ticks_per_sample = t1 - self.tick;
+        run.ramp = 0.0;
+        1
     }
 
     /// Render as many frames as the shortest output has. Handles any buffer size by splitting
@@ -520,13 +572,16 @@ impl Engine {
         let mut done = 0;
         while done < total {
             self.drain_input();
-            let tps = self.ticks_per_sample();
-            let mut n = (total - done).min(self.max_block);
-            let loop_end = self.prepare_loop(n, tps);
+            let mut run = self.tempo_run();
+            self.wrap_at_loop_end(&mut run);
+            let mut n = self.limit_to_tempo_point(&mut run, (total - done).min(self.max_block));
+            let loop_end = self
+                .active_loop(&run)
+                .and_then(|(_, end)| (self.frames_until(end, &run) <= n).then_some(end));
             if let Some(end) = loop_end {
-                n = self.frames_until(end, tps).max(1);
+                n = self.frames_until(end, &run).max(1);
             }
-            self.process_block(io.outputs, done, n, tps, loop_end);
+            self.process_block(io.outputs, done, n, run, loop_end);
             done += n;
         }
         if total > 0 {
@@ -550,19 +605,23 @@ impl Engine {
         outputs: &mut [&mut [f32]],
         start: usize,
         frames: usize,
-        tps: f64,
+        run: TempoRun,
         loop_end: Option<f64>,
     ) {
         let transport = self.transport();
-        let t1 = self.tick + frames as f64 * tps;
+        let t1 = self.tick + run.advance(frames as f64);
         let time = BlockTime {
             t0: self.tick,
-            ticks_per_sample: tps,
+            ticks_per_sample: run.ticks_per_sample,
+            ramp: run.ramp,
             end: loop_end.map_or(t1, |e| t1.min(e)),
             frames,
             sample_rate: self.sample_rate,
-            tempo: self.tempo,
+            tempo: transport.tempo,
         };
+        // Held for the block so the maps can be read while everything else changes. The engine
+        // keeps its own reference, so this never frees them.
+        let maps = Arc::clone(&self.maps);
 
         let garbage = &mut self.garbage;
         let mut retire_clip = |c: Arc<ClipData>| retire(garbage, Garbage::Shared(c));
@@ -573,7 +632,8 @@ impl Engine {
 
         let ctx = BlockCtx {
             transport: &transport,
-            ticks_per_sample: tps,
+            time,
+            bars: &maps.bars,
             frames,
         };
         // Taken out for the block so the plan can be read while everything else changes. Holds
@@ -583,7 +643,7 @@ impl Engine {
         for (level, steps) in plan.levels.iter().enumerate() {
             let steps = &plan.steps[steps.start as usize..steps.end as usize];
             for step in steps {
-                self.gather_inputs(step, time, &transport);
+                self.gather_inputs(step, time, &transport, &maps.bars);
             }
             self.run_control_steps(steps, level == 0, &ctx);
             self.finish_steps(steps, time, &ctx);
@@ -605,14 +665,20 @@ impl Engine {
             self.reached_loop_end = loop_end.is_some();
         }
         self.shared.playing.store(self.playing, Ordering::Relaxed);
-        self.shared.tick.store(self.tick);
+        self.shared.tick.store(self.tick.max(0.0));
         self.shared.insert_marker.store(self.insert_marker);
-        self.shared.tempo.store(self.tempo);
+        self.shared.tempo.store(self.maps.tempo.bpm_at(self.tick));
     }
 
     /// Sum what a step takes as input into its track, before its devices run. Only the Master
     /// has inputs for now, and the metronome joins it there.
-    fn gather_inputs(&mut self, step: &Step, time: BlockTime, transport: &TransportInfo) {
+    fn gather_inputs(
+        &mut self,
+        step: &Step,
+        time: BlockTime,
+        transport: &TransportInfo,
+        bars: &BarMap,
+    ) {
         if step.track != MASTER_STEP {
             return;
         }
@@ -632,7 +698,7 @@ impl Engine {
             }
         }
         if transport.playing {
-            self.metronome.render(time, self.signature, ml, mr);
+            self.metronome.render(time, bars, ml, mr);
         }
     }
 

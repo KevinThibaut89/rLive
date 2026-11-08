@@ -7,6 +7,8 @@ use crate::params::{BusLayout, ControlHooks, ControlStep, ParamBus, TrackRoutes,
 use crate::rack::RackNode;
 use crate::shared::{PeakMeter, TrackShared, NO_SLOT};
 use rlive_core::param::{mixer, ParamId};
+use rlive_core::time::BarMap;
+use rlive_core::warp::StretchBank;
 use rlive_core::{
     db_to_gain, AudioBuffer, DeviceId, EventQueue, MidiEvent, ParamOutQueue, Ports, ProcessContext,
     Processor, Resource, TrackId, TransportInfo, ViewChannel, ViewWriter,
@@ -263,7 +265,8 @@ impl GainStage {
 #[derive(Clone, Copy)]
 pub(crate) struct BlockCtx<'a> {
     pub transport: &'a TransportInfo,
-    pub ticks_per_sample: f64,
+    pub time: BlockTime,
+    pub bars: &'a BarMap,
     pub frames: usize,
 }
 
@@ -272,9 +275,11 @@ impl BlockCtx<'_> {
     fn at(&self, offset: usize) -> TransportInfo {
         let mut t = *self.transport;
         if t.playing {
-            t.tick += offset as f64 * self.ticks_per_sample;
+            t.tick = self.time.tick_at(offset).max(0.0);
             t.sample_pos += offset as u64;
-            t.bar_start = t.time_signature.bar_start(t.tick);
+            let bar = self.bars.bar_at(t.tick);
+            t.bar_start = bar.start;
+            t.time_signature = bar.signature;
         }
         t
     }
@@ -397,6 +402,7 @@ pub struct TrackNode {
     pub(crate) lane: LanePlayer,
     /// Playing the lane. A launch turns this off until `BackToArrangement`.
     pub(crate) follow: bool,
+    pub(crate) stretch: StretchBank,
     pub(crate) left: Vec<f32>,
     pub(crate) right: Vec<f32>,
     pub(crate) events: Vec<MidiEvent>,
@@ -422,6 +428,7 @@ impl TrackNode {
             player: ClipPlayer::new(),
             lane: LanePlayer::new(Arc::new(ArrangementLane::default())),
             follow: true,
+            stretch: StretchBank::new(max_block),
             left: vec![0.0; max_block],
             right: vec![0.0; max_block],
             events: Vec::with_capacity(MAX_EVENTS),
@@ -483,16 +490,30 @@ impl TrackNode {
                     _ => None,
                 };
                 let until = launch_at.unwrap_or(time.t1());
-                self.lane
-                    .render(time, time.t0, until, &mut self.events, left, right);
+                self.lane.render(
+                    time,
+                    time.t0,
+                    until,
+                    &mut self.events,
+                    left,
+                    right,
+                    &mut self.stretch,
+                );
                 if let Some(at) = launch_at {
                     self.lane
                         .release_and_resync(time.event_offset(at), &mut self.events);
                     self.follow = false;
                 }
             }
-            self.player
-                .render(time, &mut self.events, left, right, retire, &self.slots);
+            self.player.render(
+                time,
+                &mut self.events,
+                left,
+                right,
+                retire,
+                &self.slots,
+                &mut self.stretch,
+            );
         }
         self.events.sort_unstable_by_key(|e| e.sort_key());
         self.cursor = ChainCursor::default();

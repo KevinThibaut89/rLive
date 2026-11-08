@@ -148,8 +148,7 @@ impl Session {
         }]);
         let p = &self.project;
         let cmds = [
-            EngineCommand::Transport(TransportCmd::SetTempo(p.tempo)),
-            EngineCommand::Transport(TransportCmd::SetTimeSignature(p.time_signature)),
+            EngineCommand::Transport(TransportCmd::SetTimeMaps(Arc::new(build::time_maps(p)))),
             EngineCommand::Transport(TransportCmd::SetQuantize(p.quantize)),
             EngineCommand::Transport(TransportCmd::SetMetronome(p.metronome)),
         ];

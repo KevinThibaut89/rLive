@@ -1,9 +1,10 @@
 //! The per-track clip launcher.
 
-use super::audio::AudioCursor;
+use super::audio::{AudioCursor, SESSION_VOICE};
 use super::data::ClipData;
 use super::midi::Voices;
 use super::{render_range, BlockTime};
+use rlive_core::warp::StretchBank;
 use rlive_core::MidiEvent;
 use std::sync::Arc;
 
@@ -58,6 +59,7 @@ impl ClipPlayer {
 
     /// Render one block: MIDI clips push events, audio clips write into `left`/`right`.
     /// Clips that stop playing are pushed to `retired` so they are freed off the audio thread.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         time: BlockTime,
@@ -66,6 +68,7 @@ impl ClipPlayer {
         right: &mut [f32],
         retired: &mut dyn FnMut(Arc<ClipData>),
         slots: &[Option<Arc<ClipData>>],
+        stretch: &mut StretchBank,
     ) {
         let t1 = time.t1();
         let mut seg_start = time.t0;
@@ -73,7 +76,7 @@ impl ClipPlayer {
         if let Some(p) = self.pending {
             if p.at() < t1 {
                 let at = p.at().max(time.t0);
-                self.render_segment(time, seg_start, at, events, left, right, retired);
+                self.render_segment(time, seg_start, at, events, left, right, retired, stretch);
                 let off = time.event_offset(at);
                 self.release_all(off, events);
                 if let Some(old) = self.playing.take() {
@@ -85,7 +88,7 @@ impl ClipPlayer {
                             slot,
                             clip: clip.clone(),
                             start_tick: at,
-                            audio: AudioCursor::new(),
+                            audio: AudioCursor::new(SESSION_VOICE),
                         });
                     }
                 }
@@ -93,7 +96,7 @@ impl ClipPlayer {
                 seg_start = at;
             }
         }
-        self.render_segment(time, seg_start, t1, events, left, right, retired);
+        self.render_segment(time, seg_start, t1, events, left, right, retired, stretch);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -106,6 +109,7 @@ impl ClipPlayer {
         left: &mut [f32],
         right: &mut [f32],
         retired: &mut dyn FnMut(Arc<ClipData>),
+        stretch: &mut StretchBank,
     ) {
         if b <= a {
             return;
@@ -128,6 +132,7 @@ impl ClipPlayer {
             events,
             left,
             right,
+            stretch,
         );
 
         let end = playing.start_tick + len;

@@ -74,6 +74,7 @@ impl Session {
             ));
         }
         let master = b.master(p, &mut runtimes, &mut layouts, &mut errors);
+        let maps = super::build::time_maps(p);
         let mut cmds = vec![
             EngineCommand::Graph(GraphTxn::new(
                 vec![GraphOp::ReplaceAll {
@@ -82,8 +83,7 @@ impl Session {
                 }],
                 Some(compile_plan(p)),
             )),
-            EngineCommand::Transport(TransportCmd::SetTempo(p.tempo)),
-            EngineCommand::Transport(TransportCmd::SetTimeSignature(p.time_signature)),
+            EngineCommand::Transport(TransportCmd::SetTimeMaps(Arc::new(maps.clone()))),
             EngineCommand::Transport(TransportCmd::SetQuantize(Quantize::None)),
         ];
         cmds.extend(setup);
@@ -92,7 +92,11 @@ impl Session {
                 return Err("engine queue full".into());
             }
         }
-        let seconds = ticks as f64 / rlive_core::PPQ as f64 * 60.0 / p.tempo;
+        let seconds = if p.arrangement.tempo.points.is_empty() {
+            ticks as f64 / rlive_core::PPQ as f64 * 60.0 / p.tempo
+        } else {
+            maps.tempo.tick_to_seconds(ticks as f64)
+        };
         let frames = (seconds * sample_rate) as usize;
         let mut left = vec![0.0; frames];
         let mut right = vec![0.0; frames];

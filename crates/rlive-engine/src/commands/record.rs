@@ -57,8 +57,7 @@ impl Engine {
         if !(is_note && self.recording && self.playing) {
             return;
         }
-        let ticks_per_second = self.ticks_per_sample() * self.sample_rate;
-        let tick = self.tick - at.elapsed().as_secs_f64() * ticks_per_second;
+        let tick = self.tick_seconds_ago(at.elapsed().as_secs_f64());
         let _ = self.events.push(EngineEvent::RecordedMidi {
             track,
             tick: tick.max(self.record_floor),

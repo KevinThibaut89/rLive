@@ -1,5 +1,6 @@
 //! The clip content the engine plays.
 
+use rlive_core::warp::{WarpMap, WarpMode};
 use rlive_core::SampleBuffer;
 use std::sync::Arc;
 
@@ -57,10 +58,22 @@ impl PartialEq for AudioClip {
     }
 }
 
+/// An audio clip with Warp on. Plays through its mode's stretcher.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WarpedClip {
+    pub audio: AudioClip,
+    /// `None` until the clip has two usable markers: it plays at one speed, like warp off.
+    pub map: Option<WarpMap>,
+    pub mode: WarpMode,
+    /// Semitones.
+    pub transpose: f32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClipData {
     Midi(MidiClip),
     Audio(AudioClip),
+    Warped(WarpedClip),
 }
 
 impl ClipData {
@@ -68,6 +81,7 @@ impl ClipData {
         match self {
             ClipData::Midi(c) => c.length,
             ClipData::Audio(c) => c.length,
+            ClipData::Warped(c) => c.audio.length,
         }
     }
 
@@ -75,6 +89,7 @@ impl ClipData {
         match self {
             ClipData::Midi(c) => c.looped,
             ClipData::Audio(c) => c.looped,
+            ClipData::Warped(c) => c.audio.looped,
         }
     }
 }

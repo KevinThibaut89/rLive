@@ -5,13 +5,15 @@ mod data;
 mod launcher;
 mod midi;
 
-pub(crate) use audio::AudioCursor;
-pub use data::{AudioClip, ClipData, MidiClip, Note};
+pub(crate) use audio::{AudioCursor, LANE_VOICE};
+pub use data::{AudioClip, ClipData, MidiClip, Note, WarpedClip};
 pub(crate) use launcher::{ClipPlayer, Pending};
 pub(crate) use midi::{chase, Voices};
 
 use audio::render_audio;
 use midi::render_midi;
+use rlive_core::time::TempoRun;
+use rlive_core::warp::StretchBank;
 use rlive_core::MidiEvent;
 
 /// Block geometry shared by everything rendered in one block.
@@ -19,6 +21,8 @@ use rlive_core::MidiEvent;
 pub(crate) struct BlockTime {
     pub t0: f64,
     pub ticks_per_sample: f64,
+    /// How fast `ticks_per_sample` grows within the block, per tick. Zero when the tempo holds.
+    pub ramp: f64,
     /// Tick at the end of the block. Exactly `loop_end` when the block runs up to a loop end,
     /// so float error can never pull a note on the boundary into the block.
     pub end: f64,
@@ -34,8 +38,21 @@ impl BlockTime {
 
     /// Frame offset of `tick` inside the block, clamped to `0..=frames`.
     pub fn offset(&self, tick: f64) -> usize {
-        let off = ((tick - self.t0) / self.ticks_per_sample).round();
+        let off = self.run().frames_to(tick - self.t0).round();
         off.clamp(0.0, self.frames as f64) as usize
+    }
+
+    /// The song tick `offset` frames into the block.
+    pub fn tick_at(&self, offset: usize) -> f64 {
+        self.t0 + self.run().advance(offset as f64)
+    }
+
+    fn run(&self) -> TempoRun {
+        TempoRun {
+            ticks_per_sample: self.ticks_per_sample,
+            ramp: self.ramp,
+            until: f64::INFINITY,
+        }
     }
 
     pub fn event_offset(&self, tick: f64) -> u32 {
@@ -57,6 +74,7 @@ pub(crate) fn render_range(
     ev: &mut Vec<MidiEvent>,
     l: &mut [f32],
     r: &mut [f32],
+    stretch: &mut StretchBank,
 ) {
     let len = clip.length() as f64;
     if b <= a || len <= 0.0 {
@@ -72,6 +90,20 @@ pub(crate) fn render_range(
     }
     match clip {
         ClipData::Midi(clip) => render_midi(clip, origin, a, seg_end, time, voices, ev),
-        ClipData::Audio(clip) => render_audio(clip, origin, a, seg_end, time, audio, l, r),
+        ClipData::Audio(clip) => {
+            render_audio(clip, None, origin, a, seg_end, time, audio, l, r, stretch)
+        }
+        ClipData::Warped(clip) => render_audio(
+            &clip.audio,
+            Some(clip),
+            origin,
+            a,
+            seg_end,
+            time,
+            audio,
+            l,
+            r,
+            stretch,
+        ),
     }
 }

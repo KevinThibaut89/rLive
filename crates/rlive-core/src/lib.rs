@@ -11,6 +11,7 @@ pub mod processor;
 pub mod sample;
 pub mod time;
 pub mod view;
+pub mod warp;
 
 pub use device::{DeviceDesc, Item, Ports, SampleSlot, ScopeKind, Section, Status};
 pub use ids::{ArrClipId, ChainId, DeviceId, GrooveId, TrackId};
@@ -24,7 +25,9 @@ pub use processor::{
     Processor, Resource, Tail,
 };
 pub use sample::SampleBuffer;
-pub use time::{Quantize, TimeSignature, TransportInfo, PPQ};
+pub use time::{
+    BarMap, Quantize, TempoMap, TempoPoint, TimeMaps, TimeSignature, TransportInfo, PPQ,
+};
 pub use view::{ViewChannel, ViewId, ViewReader, ViewWriter};
 
 /// Third-party plugin formats rLive can host.

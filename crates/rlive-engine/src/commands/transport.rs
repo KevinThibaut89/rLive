@@ -1,13 +1,17 @@
 //! Playback position and global timing.
 
 use crate::{retire, Engine, Garbage, JumpKind};
-use rlive_core::{Quantize, TimeSignature};
+use rlive_core::{time::TimeMaps, Quantize, TimeSignature};
+use std::sync::Arc;
 
 pub enum TransportCmd {
     Play,
     Stop,
     SetTempo(f64),
     SetTimeSignature(TimeSignature),
+    /// Replace the song's tempo and meter together. The old maps go back as garbage. Keep no
+    /// other reference to them: `SetTempo` and `SetTimeSignature` edit the engine's copy in place.
+    SetTimeMaps(Arc<TimeMaps>),
     SetMetronome(bool),
     SetQuantize(Quantize),
     /// Move the playhead and the insert marker to this tick.
@@ -22,8 +26,20 @@ impl Engine {
         match cmd {
             C::Play => self.start_transport(),
             C::Stop => self.stop_transport(),
-            C::SetTempo(t) => self.tempo = t.clamp(20.0, 999.0),
-            C::SetTimeSignature(s) => self.signature = s,
+            C::SetTempo(t) => {
+                if let Some(maps) = Arc::get_mut(&mut self.maps) {
+                    maps.tempo.set_constant(t);
+                }
+            }
+            C::SetTimeSignature(s) => {
+                if let Some(maps) = Arc::get_mut(&mut self.maps) {
+                    maps.bars.set_base(s);
+                }
+            }
+            C::SetTimeMaps(maps) => {
+                let old = std::mem::replace(&mut self.maps, maps);
+                retire(&mut self.garbage, Garbage::Shared(old));
+            }
             C::SetMetronome(on) => self.metronome.enabled = on,
             C::SetQuantize(q) => self.quantize = q,
             C::Seek(to) => {

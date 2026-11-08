@@ -2,18 +2,21 @@
 
 use super::ChainRef;
 use crate::peaks::Peaks;
+use rlive_core::time::{BarMap, TempoMap, TempoPoint, TimeMaps};
+use rlive_core::warp::{self, WarpMap};
 use rlive_core::{DeviceId, ParamInfo, Ports, Processor};
 use rlive_devices::{DeviceInit, DeviceRole, SampleBuffer};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
     ArrangementLane, AudioClip, BusLayout, ChainNode, ClipData, DeviceSlot, LaneClip, MasterNode,
     MidiClip, MixSettings, Note, NullProcessor, RackKind as EngineRackKind, RackNode, TrackNode,
-    MAX_RACK_DEPTH,
+    WarpedClip, MAX_RACK_DEPTH,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
 use rlive_project::{
-    ArrangementClip, Chain, Clip, ClipContent, Device, DeviceKind, Project, RackKind, Track,
+    ArrangementClip, Chain, Clip, ClipContent, Device, DeviceKind, Project, RackKind, Track, Warp,
+    WarpMode as ProjectWarpMode,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -41,6 +44,59 @@ impl DeviceRuntime {
             .as_ref()
             .and_then(|h| h.format_value(p.id, value))
             .unwrap_or_else(|| p.format(value))
+    }
+}
+
+/// The song's tempo and meter for the engine.
+pub fn time_maps(project: &Project) -> TimeMaps {
+    let tempo = &project.arrangement.tempo.points;
+    TimeMaps {
+        tempo: if tempo.is_empty() {
+            TempoMap::constant(project.tempo)
+        } else {
+            // The curve of a segment is ignored for now: the envelope's shape belongs to A2.
+            TempoMap::new(tempo.iter().map(|p| TempoPoint::new(p.time, p.value)))
+        },
+        bars: BarMap::new(
+            project.time_signature,
+            project
+                .arrangement
+                .signatures
+                .iter()
+                .map(|m| (m.tick, m.signature)),
+        ),
+    }
+}
+
+fn warp_map(warp: &Warp, sample_rate: f64) -> Option<WarpMap> {
+    WarpMap::new(
+        warp.markers
+            .iter()
+            .map(|m| warp::WarpMarker::new(m.seconds * sample_rate, m.tick)),
+    )
+}
+
+fn warp_mode(warp: &Warp) -> warp::WarpMode {
+    let p = &warp.params;
+    match warp.mode {
+        ProjectWarpMode::Beats => warp::WarpMode::Beats {
+            preserve: p.preserve,
+            beats_loop: p.beats_loop,
+            transient_envelope: p.transient_envelope,
+        },
+        ProjectWarpMode::Tones => warp::WarpMode::Tones {
+            grain_size: p.grain_size,
+        },
+        ProjectWarpMode::Texture => warp::WarpMode::Texture {
+            grain_size: p.grain_size,
+            flux: p.flux,
+        },
+        ProjectWarpMode::RePitch => warp::WarpMode::RePitch,
+        ProjectWarpMode::Complex => warp::WarpMode::Complex,
+        ProjectWarpMode::ComplexPro => warp::WarpMode::ComplexPro {
+            formants: p.formants,
+            envelope: p.envelope,
+        },
     }
 }
 
@@ -304,14 +360,32 @@ impl Builder<'_> {
                     .collect();
                 ClipData::Midi(MidiClip::new(clip.length, notes, clip.looped))
             }
-            ClipContent::Audio { file, gain_db, .. } => {
+            ClipContent::Audio {
+                file,
+                gain_db,
+                transpose,
+                detune_cents,
+                warp,
+                ..
+            } => {
                 let sample = self.samples.get(&file.path)?;
-                ClipData::Audio(AudioClip {
+                let sample_rate = sample.sample_rate;
+                let audio = AudioClip {
                     sample,
                     length: clip.length,
                     looped: clip.looped,
                     gain: rlive_core::db_to_gain(*gain_db),
-                })
+                };
+                if warp.enabled {
+                    ClipData::Warped(WarpedClip {
+                        audio,
+                        map: warp_map(warp, sample_rate),
+                        mode: warp_mode(warp),
+                        transpose: *transpose as f32 + *detune_cents / 100.0,
+                    })
+                } else {
+                    ClipData::Audio(audio)
+                }
             }
         }))
     }
@@ -452,5 +526,144 @@ pub fn mix_of(t: &Track) -> MixSettings {
         pan: t.pan,
         mute: t.mute,
         solo: t.solo,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rlive_core::warp::{BeatsLoop, BeatsPreserve, WarpMode as CoreWarpMode};
+    use rlive_core::{TimeSignature, PPQ};
+    use rlive_project::{Breakpoint, SignatureMarker, WarpMarker as ProjectMarker, WarpParams};
+    use std::path::Path;
+
+    fn sig(numerator: u8, denominator: u8) -> TimeSignature {
+        TimeSignature {
+            numerator,
+            denominator,
+        }
+    }
+
+    #[test]
+    fn a_plain_project_has_one_tempo_and_signature() {
+        let mut p = Project::empty();
+        p.tempo = 133.0;
+        p.time_signature = sig(7, 8);
+        let maps = time_maps(&p);
+        assert!(maps.tempo.is_constant());
+        assert_eq!(maps.tempo.bpm_at(9.0), 133.0);
+        assert_eq!(maps.bars, BarMap::constant(sig(7, 8)));
+    }
+
+    #[test]
+    fn the_project_timeline_converts_to_maps() {
+        let mut p = Project::empty();
+        p.tempo = 133.0;
+        p.time_signature = sig(4, 4);
+        p.arrangement.tempo.points = vec![
+            Breakpoint::new(0.0, 100.0),
+            Breakpoint::new(1920.0, 200.0),
+            Breakpoint::new(1920.0, 60.0),
+        ];
+        p.arrangement.signatures = vec![SignatureMarker {
+            tick: 2 * 3840,
+            signature: sig(3, 4),
+        }];
+        let maps = time_maps(&p);
+        assert!(!maps.tempo.is_constant());
+        assert_eq!(maps.tempo.bpm_at(1919.999).round(), 200.0);
+        assert_eq!(maps.tempo.bpm_at(1920.0), 60.0);
+        assert_eq!(maps.bars.bar_at(2.0 * 3840.0).index, 2);
+        assert_eq!(maps.bars.signature_at(2.0 * 3840.0), sig(3, 4));
+    }
+
+    #[test]
+    fn warp_settings_convert_per_mode() {
+        let warp = Warp {
+            enabled: true,
+            mode: ProjectWarpMode::ComplexPro,
+            markers: vec![
+                ProjectMarker {
+                    seconds: 0.0,
+                    tick: 0.0,
+                },
+                ProjectMarker {
+                    seconds: 2.0,
+                    tick: 1920.0,
+                },
+            ],
+            params: WarpParams {
+                formants: 12.0,
+                envelope: 64.0,
+                preserve: BeatsPreserve::Grid(240),
+                beats_loop: BeatsLoop::Forward,
+                transient_envelope: 50.0,
+                grain_size: 40.0,
+                flux: 7.0,
+            },
+        };
+        assert_eq!(
+            warp_mode(&warp),
+            CoreWarpMode::ComplexPro {
+                formants: 12.0,
+                envelope: 64.0,
+            }
+        );
+        let beats = Warp {
+            mode: ProjectWarpMode::Beats,
+            ..warp.clone()
+        };
+        assert_eq!(
+            warp_mode(&beats),
+            CoreWarpMode::Beats {
+                preserve: BeatsPreserve::Grid(240),
+                beats_loop: BeatsLoop::Forward,
+                transient_envelope: 50.0,
+            }
+        );
+        let map = warp_map(&warp, 44_100.0).unwrap();
+        assert_eq!(map.tick_to_src(1920.0), 88_200.0);
+        let one = Warp {
+            markers: warp.markers[..1].to_vec(),
+            ..warp
+        };
+        assert!(warp_map(&one, 44_100.0).is_none());
+    }
+
+    #[test]
+    fn a_warped_clip_builds_warped_clip_data() {
+        let dir = std::env::temp_dir().join(format!("rlive-build-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path: &Path = &dir.join("loop.wav");
+        let frames = vec![0.5f32; 4800];
+        rlive_devices::write_wav(path, &frames, &frames, 48_000).unwrap();
+
+        let mut samples = SampleCache::default();
+        let plugins = PluginCache::default();
+        let mut b = Builder {
+            sample_rate: 48_000.0,
+            max_block: 256,
+            plugins: &plugins,
+            samples: &mut samples,
+        };
+        let mut clip = Clip {
+            length: 4 * PPQ,
+            content: ClipContent::audio(path, -3.0),
+            ..Clip::default()
+        };
+        // Warp off, the common case, stays the plain variant.
+        assert!(matches!(&*b.clip(&clip).unwrap(), ClipData::Audio(_)));
+        if let ClipContent::Audio { warp, .. } = &mut clip.content {
+            warp.enabled = true;
+            warp.mode = ProjectWarpMode::Complex;
+        }
+        let built = b.clip(&clip).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        let ClipData::Warped(w) = &*built else {
+            panic!("expected warped clip data");
+        };
+        assert_eq!(w.mode, CoreWarpMode::Complex);
+        assert!(w.map.is_none(), "no markers yet");
+        assert_eq!(built.length(), 4 * PPQ);
     }
 }

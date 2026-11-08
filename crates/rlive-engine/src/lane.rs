@@ -1,6 +1,7 @@
 //! Arrangement lanes: clips placed on the song timeline, played stateless from the tick.
 
-use crate::clip::{chase, render_range, AudioCursor, BlockTime, ClipData, Voices};
+use crate::clip::{chase, render_range, AudioCursor, BlockTime, ClipData, Voices, LANE_VOICE};
+use rlive_core::warp::StretchBank;
 use rlive_core::MidiEvent;
 use std::sync::Arc;
 
@@ -56,7 +57,7 @@ impl LanePlayer {
             next: 0,
             current: None,
             voices: Voices::new(),
-            audio: AudioCursor::new(),
+            audio: AudioCursor::new(LANE_VOICE),
             resync: true,
         }
     }
@@ -92,6 +93,7 @@ impl LanePlayer {
     }
 
     /// Render the lane over the song-tick range `[a, b)`.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         time: BlockTime,
@@ -100,6 +102,7 @@ impl LanePlayer {
         ev: &mut Vec<MidiEvent>,
         l: &mut [f32],
         r: &mut [f32],
+        stretch: &mut StretchBank,
     ) {
         if b <= a {
             return;
@@ -167,6 +170,7 @@ impl LanePlayer {
                 ev,
                 l,
                 r,
+                stretch,
             );
             // An end that rounds to the block's last frame boundary belongs to the next block,
             // which releases it at frame 0.
