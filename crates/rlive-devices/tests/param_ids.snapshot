@@ -37,6 +37,10 @@ rlive.eq3	4	Mid Q
 rlive.eq3	5	High
 rlive.eq3	6	High Freq
 rlive.eq3	7	Output
+rlive.eq3	8	Slope
+rlive.eq3	9	Low On
+rlive.eq3	10	Mid On
+rlive.eq3	11	High On
 rlive.compressor	0	Threshold
 rlive.compressor	1	Ratio
 rlive.compressor	2	Attack
@@ -79,6 +83,14 @@ rlive.utility	2	Width
 rlive.utility	3	Mono
 rlive.utility	4	Phase L
 rlive.utility	5	Phase R
+rlive.utility	6	Channel Mode
+rlive.utility	7	Mid/Side Mode
+rlive.utility	8	Mid/Side
+rlive.utility	9	Mute
+rlive.utility	10	DC
+rlive.utility	11	Bass Mono
+rlive.utility	12	Bass Mono Freq
+rlive.utility	13	Bass Mono Audition
 rlive.pitch	0	Pitch
 rlive.pitch	1	Step Width
 rlive.pitch	2	Step Up
@@ -463,3 +475,169 @@ rlive.drum_buss	10	Decay
 rlive.drum_buss	11	Boom Audition
 rlive.drum_buss	12	Dry/Wet
 rlive.drum_buss	13	Output Gain
+rlive.eq_eight	0	1 Filter On A
+rlive.eq_eight	1	1 Filter Type A
+rlive.eq_eight	2	1 Frequency A
+rlive.eq_eight	3	1 Gain A
+rlive.eq_eight	4	1 Resonance A
+rlive.eq_eight	5	2 Filter On A
+rlive.eq_eight	6	2 Filter Type A
+rlive.eq_eight	7	2 Frequency A
+rlive.eq_eight	8	2 Gain A
+rlive.eq_eight	9	2 Resonance A
+rlive.eq_eight	10	3 Filter On A
+rlive.eq_eight	11	3 Filter Type A
+rlive.eq_eight	12	3 Frequency A
+rlive.eq_eight	13	3 Gain A
+rlive.eq_eight	14	3 Resonance A
+rlive.eq_eight	15	4 Filter On A
+rlive.eq_eight	16	4 Filter Type A
+rlive.eq_eight	17	4 Frequency A
+rlive.eq_eight	18	4 Gain A
+rlive.eq_eight	19	4 Resonance A
+rlive.eq_eight	20	5 Filter On A
+rlive.eq_eight	21	5 Filter Type A
+rlive.eq_eight	22	5 Frequency A
+rlive.eq_eight	23	5 Gain A
+rlive.eq_eight	24	5 Resonance A
+rlive.eq_eight	25	6 Filter On A
+rlive.eq_eight	26	6 Filter Type A
+rlive.eq_eight	27	6 Frequency A
+rlive.eq_eight	28	6 Gain A
+rlive.eq_eight	29	6 Resonance A
+rlive.eq_eight	30	7 Filter On A
+rlive.eq_eight	31	7 Filter Type A
+rlive.eq_eight	32	7 Frequency A
+rlive.eq_eight	33	7 Gain A
+rlive.eq_eight	34	7 Resonance A
+rlive.eq_eight	35	8 Filter On A
+rlive.eq_eight	36	8 Filter Type A
+rlive.eq_eight	37	8 Frequency A
+rlive.eq_eight	38	8 Gain A
+rlive.eq_eight	39	8 Resonance A
+rlive.eq_eight	40	1 Filter On B
+rlive.eq_eight	41	1 Filter Type B
+rlive.eq_eight	42	1 Frequency B
+rlive.eq_eight	43	1 Gain B
+rlive.eq_eight	44	1 Resonance B
+rlive.eq_eight	45	2 Filter On B
+rlive.eq_eight	46	2 Filter Type B
+rlive.eq_eight	47	2 Frequency B
+rlive.eq_eight	48	2 Gain B
+rlive.eq_eight	49	2 Resonance B
+rlive.eq_eight	50	3 Filter On B
+rlive.eq_eight	51	3 Filter Type B
+rlive.eq_eight	52	3 Frequency B
+rlive.eq_eight	53	3 Gain B
+rlive.eq_eight	54	3 Resonance B
+rlive.eq_eight	55	4 Filter On B
+rlive.eq_eight	56	4 Filter Type B
+rlive.eq_eight	57	4 Frequency B
+rlive.eq_eight	58	4 Gain B
+rlive.eq_eight	59	4 Resonance B
+rlive.eq_eight	60	5 Filter On B
+rlive.eq_eight	61	5 Filter Type B
+rlive.eq_eight	62	5 Frequency B
+rlive.eq_eight	63	5 Gain B
+rlive.eq_eight	64	5 Resonance B
+rlive.eq_eight	65	6 Filter On B
+rlive.eq_eight	66	6 Filter Type B
+rlive.eq_eight	67	6 Frequency B
+rlive.eq_eight	68	6 Gain B
+rlive.eq_eight	69	6 Resonance B
+rlive.eq_eight	70	7 Filter On B
+rlive.eq_eight	71	7 Filter Type B
+rlive.eq_eight	72	7 Frequency B
+rlive.eq_eight	73	7 Gain B
+rlive.eq_eight	74	7 Resonance B
+rlive.eq_eight	75	8 Filter On B
+rlive.eq_eight	76	8 Filter Type B
+rlive.eq_eight	77	8 Frequency B
+rlive.eq_eight	78	8 Gain B
+rlive.eq_eight	79	8 Resonance B
+rlive.eq_eight	80	Mode
+rlive.eq_eight	81	Edit
+rlive.eq_eight	82	Adaptive Q
+rlive.eq_eight	83	Analyze
+rlive.eq_eight	84	Audition
+rlive.eq_eight	85	Audition Band
+rlive.eq_eight	86	Oversampling
+rlive.eq_eight	87	Scale
+rlive.eq_eight	88	Gain
+rlive.channel_eq	0	HP 80 Hz
+rlive.channel_eq	1	Low
+rlive.channel_eq	2	Mid
+rlive.channel_eq	3	Mid Freq
+rlive.channel_eq	4	High
+rlive.channel_eq	5	Output
+rlive.auto_filter	0	Filter Type
+rlive.auto_filter	1	Freq
+rlive.auto_filter	2	Res
+rlive.auto_filter	3	Morph
+rlive.auto_filter	4	Control
+rlive.auto_filter	5	Pitch
+rlive.auto_filter	6	Formant
+rlive.auto_filter	7	Slope
+rlive.auto_filter	8	Morph Slope
+rlive.auto_filter	9	Circuit
+rlive.auto_filter	10	Drive
+rlive.auto_filter	11	Clip
+rlive.auto_filter	12	Output
+rlive.auto_filter	13	Dry/Wet
+rlive.auto_filter	14	LFO Amt
+rlive.auto_filter	15	LFO Mode
+rlive.auto_filter	16	LFO Rate
+rlive.auto_filter	17	LFO Time
+rlive.auto_filter	18	LFO Beats
+rlive.auto_filter	19	LFO 16ths
+rlive.auto_filter	20	LFO Wave
+rlive.auto_filter	21	LFO Morph
+rlive.auto_filter	22	LFO Stereo Mode
+rlive.auto_filter	23	LFO Phase
+rlive.auto_filter	24	LFO Spin
+rlive.auto_filter	25	LFO Phase Offset
+rlive.auto_filter	26	LFO Quantization
+rlive.auto_filter	27	LFO Steps
+rlive.auto_filter	28	LFO S&H
+rlive.auto_filter	29	Envelope
+rlive.auto_filter	30	Attack
+rlive.auto_filter	31	Hold
+rlive.auto_filter	32	Release
+rlive.auto_filter	33	Envelope S&H
+rlive.auto_filter	34	Envelope S&H Rate
+rlive.auto_filter	35	External
+rlive.auto_filter	36	S/C Mix
+rlive.auto_filter	37	S/C Gain
+rlive.auto_filter	38	S/C Listen
+rlive.auto_filter	39	S/C Filter
+rlive.auto_filter	40	S/C Filter Type
+rlive.auto_filter	41	S/C Filter Freq
+rlive.auto_filter	42	S/C Filter Q
+rlive.auto_filter	43	S/C Shelf Gain
+rlive.auto_filter	44	S/C Peak Gain
+rlive.auto_filter	45	Mono Sidechain
+rlive.auto_pan_tremolo	0	Mode
+rlive.auto_pan_tremolo	1	Amount
+rlive.auto_pan_tremolo	2	Time Mode
+rlive.auto_pan_tremolo	3	Freq
+rlive.auto_pan_tremolo	4	Time
+rlive.auto_pan_tremolo	5	Rate
+rlive.auto_pan_tremolo	6	16ths
+rlive.auto_pan_tremolo	7	Attack Time
+rlive.auto_pan_tremolo	8	Dynamic Freq
+rlive.auto_pan_tremolo	9	Pan Waveform
+rlive.auto_pan_tremolo	10	Pan Stereo Mode
+rlive.auto_pan_tremolo	11	Pan Phase
+rlive.auto_pan_tremolo	12	Pan Spin
+rlive.auto_pan_tremolo	13	Pan Phase Offset
+rlive.auto_pan_tremolo	14	Pan Invert
+rlive.auto_pan_tremolo	15	Pan Shape
+rlive.auto_pan_tremolo	16	Trem Waveform
+rlive.auto_pan_tremolo	17	Trem Stereo Mode
+rlive.auto_pan_tremolo	18	Trem Phase
+rlive.auto_pan_tremolo	19	Trem Spin
+rlive.auto_pan_tremolo	20	Trem Phase Offset
+rlive.auto_pan_tremolo	21	Trem Invert
+rlive.auto_pan_tremolo	22	Trem Shape
+rlive.auto_pan_tremolo	23	Harmonic
+rlive.auto_pan_tremolo	24	Vintage

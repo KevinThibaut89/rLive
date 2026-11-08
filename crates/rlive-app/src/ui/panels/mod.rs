@@ -3,13 +3,18 @@
 //! To add one: write a file here with a [`PanelDef`] named `PANEL`, add a row to [`PANELS`], and
 //! put `Item::Panel("its name")` in the device's layout. The renderer finds it by name.
 
+mod auto_filter_display;
 mod b1_leds;
+mod channel_eq_display;
 mod clip_led;
 mod compressor_display;
+mod eq_eight_display;
+mod eq_three_leds;
 mod gain_reduction;
 mod gate_display;
 mod midi_monitor;
 mod multiband_display;
+mod plot;
 mod scale_matrix;
 mod velocity_curve;
 
@@ -104,6 +109,10 @@ pub const PANELS: &[PanelDef] = &[
     midi_monitor::PANEL,
     scale_matrix::PANEL,
     velocity_curve::PANEL,
+    eq_eight_display::PANEL,
+    eq_three_leds::PANEL,
+    channel_eq_display::PANEL,
+    auto_filter_display::PANEL,
 ];
 
 /// What a panel takes up when the table has no entry for it.

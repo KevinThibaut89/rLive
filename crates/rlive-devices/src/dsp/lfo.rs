@@ -186,6 +186,18 @@ impl Lfo {
         out
     }
 
+    /// Where the two channels are in their cycles, as `[left, right]` in `0.0..1.0`, then
+    /// `frames` samples of progress. For a device that draws its own wave shapes, with the
+    /// rate, Phase, Spin and offset still handled here.
+    pub fn advance_phases(&mut self, frames: usize) -> [f32; 2] {
+        let s = self.settings;
+        let (base_l, base_r) = self.cycle_positions();
+        let phase_l = (base_l + s.offset as f64).rem_euclid(1.0);
+        let phase_r = (base_r + (s.offset + s.phase) as f64).rem_euclid(1.0);
+        self.step(frames);
+        [phase_l as f32, phase_r as f32]
+    }
+
     #[inline]
     fn step(&mut self, frames: usize) {
         let n = frames as f64;
@@ -197,15 +209,21 @@ impl Lfo {
     }
 
     #[inline]
-    fn current(&mut self) -> [f32; 2] {
+    fn cycle_positions(&self) -> (f64, f64) {
         let s = self.settings;
-        let (base_l, base_r) = match (s.rate, self.clock.playing) {
+        match (s.rate, self.clock.playing) {
             (LfoRate::Beats(beats), true) => {
                 let cycles = self.clock.beat / beats.max(1e-6);
                 (cycles, cycles * (1.0 + s.spin.max(-1.0) as f64))
             }
             _ => (self.phase_l, self.phase_r),
-        };
+        }
+    }
+
+    #[inline]
+    fn current(&mut self) -> [f32; 2] {
+        let s = self.settings;
+        let (base_l, base_r) = self.cycle_positions();
         let phase_l = (base_l + s.offset as f64).rem_euclid(1.0);
         self.random_l.update(phase_l);
         let left = Self::value(s.shape, phase_l, &self.random_l);

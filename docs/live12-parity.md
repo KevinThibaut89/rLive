@@ -869,12 +869,12 @@ Overview chapter; only behaviours stated here or foundational are listed.
 | Effect (pages) | Modes and options | Main parameter groups | DSP needed | Effort and tags | Status |
 |---|---|---|---|---|---|
 | Amp (552-554) | 7 models; mono or Dual | Gain, Volume, tone stack, Presence | Nonlinear amp modelling, interactive EQ | XL [P] | `[ ]` |
-| Auto Filter (554-562) | 10 types; slopes 6-48 dB; circuits SVF, DFM, MS2, PRD | Filter, LFO, envelope, drive, soft clip, SC filter | ZDF filters, ladder and Sallen-Key models, vowel, resampling, comb | L [P] | `[ ]` |
-| Auto Pan-Tremolo (562-566) | Panning, Tremolo; Harmonic (600 Hz split), Vintage | LFO, shape, attack, dynamic rate | LFO amplitude, crossover, transient detect | M | `[ ]` |
+| Auto Filter (554-562) | 10 types; slopes 6-48 dB; circuits SVF, DFM, MS2, PRD | Filter, LFO, envelope, drive, soft clip, SC filter | ZDF filters, ladder and Sallen-Key models, vowel, resampling, comb | L [P] | `[~]` |
+| Auto Pan-Tremolo (562-566) | Panning, Tremolo; Harmonic (600 Hz split), Vintage | LFO, shape, attack, dynamic rate | LFO amplitude, crossover, transient detect | M | `[~]` |
 | Auto Shift (566-573) | Quantizer or MIDI; Mono or Poly to 8; Live Mode; pitch ranges | Input, correction, scale, MIDI mods, LFO, formant, vibrato | Mono pitch detection, formant-preserving shift, polyphonic voices | XL [P] | `[ ]` |
 | Beat Repeat (574-575) | Variation modes; Mix, Insert, Gate | Interval, Offset, Chance, Gate, Grid, Pitch decay, filter | Tempo-locked buffer, resampling | M | `[ ]` |
 | Cabinet (576-578) | 5 speakers; 3 mic positions; dynamic or condenser; mono or Dual | Speaker, mic | IR or filter modelling; needs own measurements | L [P] | `[ ]` |
-| Channel EQ (578-579) | HP 80 toggle | Low, Mid sweep, High | Adaptive shelf and peak, LP-combined high | S | `[ ]` |
+| Channel EQ (578-579) | HP 80 toggle | Low, Mid sweep, High | Adaptive shelf and peak, LP-combined high | S | `[~]` |
 | Chorus-Ensemble (580-583) | Chorus, Ensemble, Vibrato | Delay, taps, width, rate, feedback, warmth, HPF | Modulated delay lines, 3-phase | M | `[ ]` |
 | Compressor (584-589) | Peak, RMS, Expand; Lin, Log; lookahead 0/1/10 ms | Threshold, ratio, knee, attack, release, sidechain, 3 views | Feed-forward dynamics, lookahead | M | `[~]` |
 | Corpus (589-595) | 7 resonators; Eco to High | Decay, material, tuning, LFO, filter, MIDI sidechain | Modal and waveguide physical models | XL [P] | `[ ]` |
@@ -882,8 +882,8 @@ Overview chapter; only behaviours stated here or foundational are listed.
 | Drum Buss (599-600) | Soft, Medium, Hard | Trim, comp, drive, crunch, damp, transients, boom | Fixed comp, waveshape, transient shaper, resonant LF with note snap | L [P] | `[~]` |
 | Dynamic Tube (601-602) | Tubes A, B, C; Hi-Quality | Drive, bias, envelope, tone | Asymmetric waveshaper, oversampling | M [P] | `[ ]` |
 | Echo (602-606) | Stereo, Ping Pong, Mid/Side; sync modes; reverb pre, post, feedback | Delay, filter, modulation, gate, duck, noise, wobble | Delay, LFO and envelope, tape artefacts, small reverb, tunnel UI | L | `[ ]` |
-| EQ Eight (606-608) | Stereo, L/R, M/S; 8 responses; Adaptive Q; audition; oversampling; expanded view | 8 bands, scale, analyzer | Biquads, FFT analyzer | M | `[ ]` |
-| EQ Three (608-609) | 24 or 48 dB | 3 gains to -inf, crossovers, LEDs | Analog-style crossover with deliberate colouring | S [P] | `[ ]` |
+| EQ Eight (606-608) | Stereo, L/R, M/S; 8 responses; Adaptive Q; audition; oversampling; expanded view | 8 bands, scale, analyzer | Biquads, FFT analyzer | M | `[~]` |
+| EQ Three (608-609) | 24 or 48 dB | 3 gains to -inf, crossovers, LEDs | Analog-style crossover with deliberate colouring | S [P] | `[~]` |
 | Erosion (609-610) | Sine to noise blend; Legacy for pre-12.4 Sets | Freq, amount, width, stereo | Short delay modulated by sine and filtered noise | S | `[ ]` |
 | External Audio Effect (610-611) | ms or samples latency | Out, In, gains, invert, dry/wet | Hardware insert, manual PDC | M [H] | `[ ]` |
 | Filter Delay (612) | 3 taps; sync | Filters X-Y, time, feedback, pan, dry | Delay plus filters in feedback | S | `[ ]` |
@@ -907,7 +907,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 | Spectral Time (673-676) | Manual, Retrigger (Onsets, Sync); Crossfade, Envelope; effect order | Freezer, spectral delay tilt, spray, mask, resolution; Zero Dry Signal Latency | STFT freeze, up to 8 stacked; onset detect; per-bin delay | XL | `[ ]` |
 | Spectrum (677-678) | Linear, log, semitone; Auto, Range; expanded | Block, channel, refresh, avg, max | FFT analysis (no audio change) | S | `[ ]` |
 | Tuner (678-683) | Classic (Target, Strobe), Histogram; Hz or cents; note spelling | Reference 410-480 Hz | Mono pitch detection (no audio change) | M | `[ ]` |
-| Utility (684-685) | Channel select; Width or Mid/Side | Phase, gain, balance, mute, DC, Bass Mono with audition | M/S matrix, crossover, DC filter | S | `[ ]` |
+| Utility (684-685) | Channel select; Width or Mid/Side | Phase, gain, balance, mute, DC, Bass Mono with audition | M/S matrix, crossover, DC filter | S | `[x]` |
 | Vinyl Distortion (686-687) | Soft, Hard; stereo or mono pinch | Tracing, pinch, crackle | Even and odd harmonic shaping, noise | S [P] | `[ ]` |
 | Vocoder (687-690), not in Intro or Lite | Carrier Noise, External, Modulator, Pitch Tracking; Precise, Retro; Mono, Stereo, L/R | Bands, range, BW, gate, depth, envelope, formant, unvoiced | Filterbank, pitch tracker, unvoiced detection | L | `[ ]` |
 

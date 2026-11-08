@@ -134,6 +134,10 @@ const EXISTING: &[(&str, &str)] = &[
     ("rlive.limiter", "Limiter"),
     ("rlive.multiband_dynamics", "Multiband Dynamics"),
     ("rlive.drum_buss", "Drum Buss"),
+    ("rlive.eq_eight", "EQ Eight"),
+    ("rlive.channel_eq", "Channel EQ"),
+    ("rlive.auto_filter", "Auto Filter"),
+    ("rlive.auto_pan_tremolo", "Auto Pan-Tremolo"),
 ];
 
 #[test]

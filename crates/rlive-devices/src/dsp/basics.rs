@@ -365,6 +365,18 @@ impl Biquad {
         self.z1 = 0.0;
         self.z2 = 0.0;
     }
+
+    /// The linear gain at `hz` of the filter as last [`set`](Self::set): for drawing a curve.
+    pub fn magnitude(&self, hz: f32, sr: f32) -> f32 {
+        let w = TAU as f64 * (hz as f64) / sr as f64;
+        let (s1, c1) = w.sin_cos();
+        let (s2, c2) = (2.0 * w).sin_cos();
+        let (b0, b1, b2) = (self.b0 as f64, self.b1 as f64, self.b2 as f64);
+        let (a1, a2) = (self.a1 as f64, self.a2 as f64);
+        let (nr, ni) = (b0 + b1 * c1 + b2 * c2, b1 * s1 + b2 * s2);
+        let (dr, di) = (1.0 + a1 * c1 + a2 * c2, a1 * s1 + a2 * s2);
+        ((nr * nr + ni * ni) / (dr * dr + di * di).max(1e-30)).sqrt() as f32
+    }
 }
 
 /// Fixed-size circular delay line with fractional reads.
