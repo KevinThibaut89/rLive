@@ -78,6 +78,8 @@ pub struct TrackShared {
     pub queued_slot: AtomicI32,
     /// Playhead position within the playing clip, in ticks.
     pub clip_position: AtomicF64,
+    /// Whether the track plays its Arrangement lane rather than a launched Session clip.
+    pub follow_arrangement: AtomicBool,
 }
 
 impl Default for TrackShared {
@@ -87,6 +89,7 @@ impl Default for TrackShared {
             playing_slot: AtomicI32::new(NO_SLOT),
             queued_slot: AtomicI32::new(NO_SLOT),
             clip_position: AtomicF64::new(0.0),
+            follow_arrangement: AtomicBool::new(true),
         }
     }
 }
@@ -95,6 +98,8 @@ impl Default for TrackShared {
 pub struct EngineShared {
     pub playing: AtomicBool,
     pub tick: AtomicF64,
+    /// Where playback starts and returns to on stop, in ticks.
+    pub insert_marker: AtomicF64,
     pub tempo: AtomicF64,
     /// DSP load of the last blocks, 0..1 (1 = using the whole buffer duration).
     pub cpu_load: AtomicF32,
@@ -107,6 +112,7 @@ impl Default for EngineShared {
         Self {
             playing: AtomicBool::new(false),
             tick: AtomicF64::new(0.0),
+            insert_marker: AtomicF64::new(0.0),
             tempo: AtomicF64::new(120.0),
             cpu_load: AtomicF32::new(0.0),
             master_meter: PeakMeter::default(),

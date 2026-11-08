@@ -1,27 +1,39 @@
 //! The rLive user interface (Ableton Live–style).
 
+mod arrangement;
 mod browser;
+pub mod commands;
 mod devices;
 mod icons;
+#[cfg(target_os = "macos")]
+mod mac_menu;
 mod piano_roll;
 mod session_view;
 pub mod theme;
+mod timeline;
 pub mod widgets;
 
 use crate::audio::{self, AudioOutput};
 use crate::midi_input::{self, MidiInput, MidiRouting};
-use crate::session::{ChainRef, Session};
+use crate::session::{ChainRef, ClipRef, Session};
 use crate::settings::Settings;
+use commands::{ClipBoard, FocusArea, MenuCommand};
 use egui::{Align2, Key, Pos2, Rect, RichText, Sense, Stroke, UiBuilder, Vec2};
 use rlive_core::{MidiMessage, Quantize, TimeSignature, TrackId};
 use rlive_plugin_host::scanner::PluginCache;
-use rlive_project::{Project, TrackKind};
+use rlive_project::Project;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
 use theme::*;
 use widgets::{info, MeterState};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MainView {
+    Session,
+    Arrangement,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Detail {
@@ -44,8 +56,11 @@ enum ScanMsg {
 
 pub struct UiState {
     pub selected: Option<ChainRef>,
-    pub selected_clip: Option<(TrackId, usize)>,
+    pub selected_clip: Option<ClipRef>,
     pub detail: Detail,
+    pub main_view: MainView,
+    pub focus: FocusArea,
+    pub clipboard: Option<ClipBoard>,
     pub browser_filter: String,
     pub browser_category: browser::Category,
     pub meters: HashMap<TrackId, MeterState>,
@@ -53,6 +68,7 @@ pub struct UiState {
     pub renaming: Option<(TrackId, String)>,
     pub piano: piano_roll::PianoState,
     pub layout: session_view::SessionLayout,
+    pub arr: arrangement::ArrangementState,
     pub show_browser: bool,
     pub show_detail: bool,
     pub computer_keys: bool,
@@ -63,6 +79,7 @@ pub struct UiState {
     show_about: bool,
     export_scene: usize,
     export_bars: u32,
+    export_arrangement: bool,
     scan_rx: Option<mpsc::Receiver<ScanMsg>>,
     pub scan_status: String,
     pub status: String,
@@ -82,8 +99,13 @@ pub struct RliveApp {
     settings: Settings,
     ui: UiState,
     last_frame: std::time::Instant,
+    /// Commands queued from outside the egui pass (menus, input hook).
+    pending: Vec<MenuCommand>,
+    #[cfg(target_os = "macos")]
+    mac_menu: Option<mac_menu::MacMenu>,
 }
 
+#[cfg(not(target_os = "macos"))]
 const MENU_H: f32 = 22.0;
 const CONTROL_BAR_H: f32 = 34.0;
 const STATUS_H: f32 = 22.0;
@@ -116,6 +138,9 @@ impl RliveApp {
                 .map(|t| ChainRef::Track(t.id)),
             selected_clip: None,
             detail: Detail::Devices,
+            main_view: MainView::Session,
+            focus: FocusArea::Session,
+            clipboard: None,
             browser_filter: String::new(),
             browser_category: browser::Category::Instruments,
             meters: HashMap::new(),
@@ -123,6 +148,7 @@ impl RliveApp {
             renaming: None,
             piano: piano_roll::PianoState::default(),
             layout: session_view::SessionLayout::default(),
+            arr: arrangement::ArrangementState::default(),
             show_browser: settings.show_browser.unwrap_or(true),
             show_detail: settings.show_detail.unwrap_or(true),
             computer_keys: true,
@@ -133,6 +159,7 @@ impl RliveApp {
             show_about: false,
             export_scene: 0,
             export_bars: 4,
+            export_arrangement: false,
             scan_rx: None,
             scan_status: String::new(),
             status: audio
@@ -162,6 +189,9 @@ impl RliveApp {
             settings,
             ui,
             last_frame: std::time::Instant::now(),
+            pending: Vec::new(),
+            #[cfg(target_os = "macos")]
+            mac_menu: mac_menu::MacMenu::install(cc),
         }
     }
 
@@ -257,6 +287,39 @@ impl RliveApp {
         }
     }
 
+    /// Edit commands act on whichever area was clicked last.
+    fn track_edit_focus(&mut self, ctx: &egui::Context, detail: Option<Rect>) {
+        if !ctx.input(|i| i.pointer.primary_pressed()) {
+            return;
+        }
+        let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) else {
+            return;
+        };
+        self.ui.focus = if detail.is_some_and(|r| r.contains(pos)) && self.ui.detail == Detail::Clip
+        {
+            FocusArea::Notes
+        } else if self.ui.main_view == MainView::Arrangement {
+            FocusArea::Arrangement
+        } else {
+            FocusArea::Session
+        };
+    }
+
+    fn toggle_recording(&mut self) {
+        if self.session.is_recording() {
+            self.session.stop_recording();
+        } else if self.session.start_recording() {
+            self.ui.main_view = MainView::Arrangement;
+        } else {
+            self.ui.status = "Arm a MIDI track to record".into();
+        }
+    }
+
+    fn shutdown(&mut self) {
+        self.session.stop();
+        self.settings.save();
+    }
+
     fn set_zoom(&mut self, ctx: &egui::Context, zoom: f32) {
         let z = (zoom * 10.0).round() / 10.0;
         let z = z.clamp(0.7, 2.0);
@@ -295,103 +358,30 @@ impl RliveApp {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        struct Keys {
-            space: bool,
-            save: bool,
-            save_as: bool,
-            open: bool,
-            new: bool,
-            del: bool,
-            dup: bool,
-            new_track: bool,
-            browser: bool,
-            detail: bool,
-            switch_detail: bool,
-            zoom_in: bool,
-            zoom_out: bool,
-            zoom_reset: bool,
-        }
-        let typing = ctx.egui_wants_keyboard_input();
-        let k = ctx.input(|i| {
-            let cmd = i.modifiers.command;
-            let alt = i.modifiers.alt;
-            let shift = i.modifiers.shift;
-            Keys {
-                space: i.key_pressed(Key::Space),
-                save: cmd && !shift && i.key_pressed(Key::S),
-                save_as: cmd && shift && i.key_pressed(Key::S),
-                open: cmd && i.key_pressed(Key::O),
-                new: cmd && i.key_pressed(Key::N),
-                del: i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
-                dup: cmd && i.key_pressed(Key::D),
-                new_track: cmd && !alt && i.key_pressed(Key::T),
-                browser: cmd && alt && i.key_pressed(Key::B),
-                detail: cmd && alt && i.key_pressed(Key::L),
-                switch_detail: shift && i.key_pressed(Key::Tab),
-                zoom_in: cmd && (i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals)),
-                zoom_out: cmd && i.key_pressed(Key::Minus),
-                zoom_reset: cmd && i.key_pressed(Key::Num0),
-            }
-        });
-        if k.save {
-            self.save(false);
-        }
-        if k.save_as {
-            self.save(true);
-        }
-        if k.open {
-            self.open_dialog();
-        }
-        if k.new {
-            self.session.new_project();
-            self.ui.selected_clip = None;
-        }
-        if k.new_track {
-            let id = self.session.add_track(TrackKind::Midi, None);
-            self.ui.selected = Some(ChainRef::Track(id));
-        }
-        if k.browser {
-            self.toggle_browser();
-        }
-        if k.detail {
-            self.toggle_detail();
-        }
-        let zoom = ctx.zoom_factor();
-        if k.zoom_in {
-            self.set_zoom(ctx, zoom + 0.1);
-        }
-        if k.zoom_out {
-            self.set_zoom(ctx, zoom - 0.1);
-        }
-        if k.zoom_reset {
-            self.set_zoom(ctx, 1.0);
-        }
-        if typing {
+        #[cfg(not(target_os = "macos"))]
+        self.menu_shortcuts(ctx);
+        if ctx.egui_wants_keyboard_input() {
             return;
         }
-        if k.switch_detail {
-            self.ui.show_detail = true;
-            self.ui.detail = match self.ui.detail {
-                Detail::Devices if self.ui.selected_clip.is_some() => Detail::Clip,
-                _ => Detail::Devices,
-            };
+        let (space, delete, record) = ctx.input(|i| {
+            (
+                i.key_pressed(Key::Space),
+                i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
+                i.key_pressed(Key::F9),
+            )
+        });
+        if record {
+            self.toggle_recording();
         }
-        if k.space {
+        if space {
             if self.session.is_playing() {
                 self.session.stop();
             } else {
                 self.session.play();
             }
         }
-        if let Some((t, slot)) = self.ui.selected_clip {
-            let in_piano = self.ui.detail == Detail::Clip && self.ui.piano.has_selection();
-            if k.del && !in_piano {
-                self.session.set_clip(t, slot, None);
-                self.ui.selected_clip = None;
-            }
-            if k.dup {
-                session_view::duplicate_clip(&mut self.session, t, slot);
-            }
+        if delete {
+            self.dispatch(ctx, MenuCommand::Delete);
         }
         if self.ui.computer_keys {
             self.computer_keyboard(ctx);
@@ -458,7 +448,7 @@ impl RliveApp {
             let note = ((self.ui.octave + 2) * 12 + offset as i32).clamp(0, 127) as u8;
             self.ui.held.insert(k, note);
             for t in &target {
-                self.session.midi_in(
+                self.session.play_midi(
                     *t,
                     MidiMessage::NoteOn {
                         channel: 0,
@@ -471,7 +461,7 @@ impl RliveApp {
         for k in released {
             if let Some(note) = self.ui.held.remove(&k) {
                 for t in &target {
-                    self.session.midi_in(
+                    self.session.play_midi(
                         *t,
                         MidiMessage::NoteOff {
                             channel: 0,
@@ -518,92 +508,6 @@ impl RliveApp {
         let m = self.session.engine.shared.master_meter.take();
         self.ui.master_meter.update(m, dt);
         active || self.ui.master_meter.active()
-    }
-
-    fn menu_bar(&mut self, ui: &mut egui::Ui) {
-        egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("New Live Set        ⌘N").clicked() {
-                    self.session.new_project();
-                    self.ui.selected_clip = None;
-                    ui.close();
-                }
-                if ui.button("Open…               ⌘O").clicked() {
-                    ui.close();
-                    self.open_dialog();
-                }
-                if ui.button("Save                ⌘S").clicked() {
-                    ui.close();
-                    self.save(false);
-                }
-                if ui.button("Save As…           ⇧⌘S").clicked() {
-                    ui.close();
-                    self.save(true);
-                }
-                ui.separator();
-                if ui.button("Export Audio…").clicked() {
-                    self.ui.show_export = true;
-                    ui.close();
-                }
-            });
-            ui.menu_button("Create", |ui| {
-                if ui.button("MIDI Track          ⌘T").clicked() {
-                    let id = self.session.add_track(TrackKind::Midi, None);
-                    self.ui.selected = Some(ChainRef::Track(id));
-                    ui.close();
-                }
-                if ui.button("Audio Track").clicked() {
-                    let id = self.session.add_track(TrackKind::Audio, None);
-                    self.ui.selected = Some(ChainRef::Track(id));
-                    ui.close();
-                }
-                if ui.button("Scene").clicked() {
-                    self.session.add_scene();
-                    ui.close();
-                }
-            });
-            ui.menu_button("View", |ui| {
-                let mut b = self.ui.show_browser;
-                if ui.checkbox(&mut b, "Browser            ⌥⌘B").changed() {
-                    self.toggle_browser();
-                }
-                let mut d = self.ui.show_detail;
-                if ui.checkbox(&mut d, "Detail View        ⌥⌘L").changed() {
-                    self.toggle_detail();
-                }
-                ui.checkbox(&mut self.ui.layout.show_mixer, "Mixer");
-                ui.separator();
-                let z = ui.ctx().zoom_factor();
-                if ui.button("Zoom In             ⌘+").clicked() {
-                    self.set_zoom(&ui.ctx().clone(), z + 0.1);
-                }
-                if ui.button("Zoom Out            ⌘−").clicked() {
-                    self.set_zoom(&ui.ctx().clone(), z - 0.1);
-                }
-                if ui.button("Actual Size         ⌘0").clicked() {
-                    self.set_zoom(&ui.ctx().clone(), 1.0);
-                }
-            });
-            ui.menu_button("Options", |ui| {
-                if ui.button("Preferences…").clicked() {
-                    self.ui.show_settings = true;
-                    self.ui.audio_devices = None;
-                    self.ui.midi_ports = None;
-                    ui.close();
-                }
-                if ui.button("Rescan Plugins").clicked() {
-                    self.start_plugin_scan();
-                    ui.close();
-                }
-                ui.checkbox(&mut self.ui.computer_keys, "Computer MIDI Keyboard");
-            });
-            ui.menu_button("Help", |ui| {
-                if ui.button("About rLive").clicked() {
-                    self.ui.show_about = true;
-                    ui.close();
-                }
-            });
-        });
     }
 
     /// Live-style control bar: tempo & signature left, transport centre, status right.
@@ -680,7 +584,7 @@ impl RliveApp {
 
         // ---- centre: transport + position
         let playing = self.session.is_playing();
-        let centre = Rect::from_center_size(Pos2::new(rect.center().x, cy), Vec2::new(220.0, h));
+        let centre = Rect::from_center_size(Pos2::new(rect.center().x, cy), Vec2::new(330.0, h));
         let mut cu = ui.new_child(
             UiBuilder::new()
                 .max_rect(centre)
@@ -703,10 +607,17 @@ impl RliveApp {
         if info(r, "Stop (Space); stop twice to return to the start").clicked() {
             self.session.stop();
         }
-        let (rr, r) = cu.allocate_exact_size(Vec2::new(30.0, h), Sense::hover());
-        cu.painter().rect_filled(rr, 1.0, RAISED);
-        icons::record(cu.painter(), rr, hex(0x6a3a3a));
-        info(r, "Recording is not available yet");
+        let recording = self.session.is_recording();
+        let r = widgets::icon_button(
+            &mut cu,
+            Vec2::new(30.0, h),
+            recording,
+            ARM_RED,
+            icons::record,
+        );
+        if info(r, "Record MIDI onto armed tracks in the Arrangement (F9)").clicked() {
+            self.toggle_recording();
+        }
         cu.add_space(6.0);
         let tick = self.session.engine.shared.tick.load();
         let pos = self
@@ -725,10 +636,27 @@ impl RliveApp {
             if playing { PLAY_GREEN } else { TEXT },
         );
         info(r, "Song position (bar . beat . sixteenth)");
+        cu.add_space(6.0);
+        let a = self.session.project.arrangement.clone();
+        let r = widgets::state_button(&mut cu, Vec2::new(40.0, h), a.loop_enabled, ACCENT, "Loop");
+        if info(r, "Loop the Arrangement between the loop brace's ends").clicked() {
+            self.session
+                .set_loop(!a.loop_enabled, a.loop_start, a.loop_end);
+        }
+        let back = arrangement::overridden(&self.session);
+        let r = widgets::state_button(&mut cu, Vec2::new(44.0, h), back, ACCENT, "Back");
+        if info(
+            r,
+            "Back to Arrangement — Session clips stop, the timeline plays again",
+        )
+        .clicked()
+        {
+            self.session.back_to_arrangement();
+        }
 
         // ---- right: quantize, MIDI LED, keys, CPU
         let right = Rect::from_min_max(
-            Pos2::new(rect.center().x + 120.0, cy - h / 2.0),
+            Pos2::new(rect.center().x + 170.0, cy - h / 2.0),
             Pos2::new(rect.right() - 8.0, cy + h / 2.0),
         );
         let mut ru = ui.new_child(
@@ -800,6 +728,15 @@ impl RliveApp {
             {
                 self.ui.computer_keys = !keys;
             }
+        }
+        let arr = self.ui.main_view == MainView::Arrangement;
+        let r = widgets::state_button(&mut ru, Vec2::new(56.0, h), arr, hex(0x8a8a8a), "Arrange");
+        if info(r, "Arrangement View (Tab)").clicked() {
+            self.ui.main_view = MainView::Arrangement;
+        }
+        let r = widgets::state_button(&mut ru, Vec2::new(54.0, h), !arr, hex(0x8a8a8a), "Session");
+        if info(r, "Session View (Tab)").clicked() {
+            self.ui.main_view = MainView::Session;
         }
         let mut q = self.session.project.quantize;
         let r = egui::ComboBox::from_id_salt("quant")
@@ -1072,33 +1009,51 @@ impl RliveApp {
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.label("Renders a scene offline to a 32-bit float WAV file.");
-                let scenes = self.session.project.scenes.len();
+                ui.label("Renders offline to a 32-bit float WAV file.");
                 ui.horizontal(|ui| {
-                    ui.label("Scene");
-                    ui.add(
-                        egui::DragValue::new(&mut self.ui.export_scene)
-                            .range(0..=scenes.saturating_sub(1))
-                            .custom_formatter(|v, _| format!("{}", v as usize + 1)),
-                    );
-                    ui.label("Length");
-                    ui.add(
-                        egui::DragValue::new(&mut self.ui.export_bars)
-                            .range(1..=512)
-                            .suffix(" bars"),
-                    );
+                    ui.radio_value(&mut self.ui.export_arrangement, false, "Scene");
+                    ui.radio_value(&mut self.ui.export_arrangement, true, "Arrangement");
                 });
+                let scenes = self.session.project.scenes.len();
+                if self.ui.export_arrangement {
+                    let a = &self.session.project.arrangement;
+                    ui.label(if a.loop_enabled {
+                        "Renders the loop range."
+                    } else {
+                        "Renders from the start to the last clip."
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label("Scene");
+                        ui.add(
+                            egui::DragValue::new(&mut self.ui.export_scene)
+                                .range(0..=scenes.saturating_sub(1))
+                                .custom_formatter(|v, _| format!("{}", v as usize + 1)),
+                        );
+                        ui.label("Length");
+                        ui.add(
+                            egui::DragValue::new(&mut self.ui.export_bars)
+                                .range(1..=512)
+                                .suffix(" bars"),
+                        );
+                    });
+                }
                 if ui.button("Export…").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("WAV", &["wav"])
                         .set_file_name("Export.wav")
                         .save_file()
                     {
-                        self.ui.status = match self.session.export_scene(
-                            self.ui.export_scene,
-                            self.ui.export_bars,
-                            &path,
-                        ) {
+                        let result = if self.ui.export_arrangement {
+                            self.session.export_arrangement(&path)
+                        } else {
+                            self.session.export_scene(
+                                self.ui.export_scene,
+                                self.ui.export_bars,
+                                &path,
+                            )
+                        };
+                        self.ui.status = match result {
                             Ok(()) => format!("Exported {}", path.display()),
                             Err(e) => format!("Export failed: {e}"),
                         };
@@ -1131,7 +1086,43 @@ impl eframe::App for RliveApp {
         if let Some(ChainRef::Track(t)) = self.ui.selected {
             *self.routing.selected.lock().unwrap() = Some(t);
         }
+        for c in std::mem::take(&mut self.pending) {
+            self.dispatch(ctx, c);
+        }
         self.handle_shortcuts(ctx);
+    }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let text_focused = ctx.text_edit_focused();
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &self.mac_menu {
+            menu.drain_into(text_focused, raw, &mut self.pending);
+        }
+        // Tab switches views unless a text field has focus; left to egui it
+        // would move keyboard focus and silence Space and the computer keyboard.
+        if text_focused {
+            return;
+        }
+        let pending = &mut self.pending;
+        raw.events.retain(|e| match e {
+            egui::Event::Key {
+                key: Key::Tab,
+                pressed,
+                repeat,
+                modifiers,
+                ..
+            } => {
+                if *pressed && !*repeat {
+                    pending.push(if modifiers.shift {
+                        MenuCommand::SwitchDetail
+                    } else {
+                        MenuCommand::ToggleMainView
+                    });
+                }
+                false
+            }
+            _ => true,
+        });
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1144,6 +1135,7 @@ impl eframe::App for RliveApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
 
+        #[cfg(not(target_os = "macos"))]
         egui::Panel::top("menu")
             .exact_size(MENU_H)
             .frame(
@@ -1174,8 +1166,9 @@ impl eframe::App for RliveApp {
                     browser::show(ui, &mut self.session, &mut self.ui, &mut self.settings)
                 });
         }
+        let mut detail_rect = None;
         if self.ui.show_detail {
-            egui::Panel::bottom("detail")
+            let panel = egui::Panel::bottom("detail")
                 .resizable(true)
                 .default_size(250.0)
                 .size_range(130.0..=700.0)
@@ -1190,18 +1183,34 @@ impl eframe::App for RliveApp {
                     }
                     _ => devices::show(ui, &mut self.session, &mut self.ui),
                 });
+            detail_rect = Some(panel.response.rect);
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(GRID_BG))
-            .show(ui, |ui| {
-                session_view::show(ui, &mut self.session, &mut self.ui)
+            .show(ui, |ui| match self.ui.main_view {
+                MainView::Session => session_view::show(ui, &mut self.session, &mut self.ui),
+                MainView::Arrangement => arrangement::show(ui, &mut self.session, &mut self.ui),
             });
+        self.track_edit_focus(&ctx, detail_rect);
+        let busy = ctx.input(|i| i.pointer.any_down())
+            || ctx.text_edit_focused()
+            || self.session.is_recording();
+        self.session.commit_edits(busy);
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &self.mac_menu {
+            menu.publish(self.menu_state(&ctx));
+        }
         self.dialogs(&ctx);
     }
 
+    #[cfg(target_os = "macos")]
+    fn on_exit(&mut self) {
+        self.shutdown();
+    }
+
+    #[cfg(not(target_os = "macos"))]
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.session.stop();
-        self.settings.save();
+        self.shutdown();
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

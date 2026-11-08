@@ -7,12 +7,14 @@ pub mod ids;
 pub mod midi;
 pub mod param;
 pub mod processor;
+pub mod sample;
 pub mod time;
 
-pub use ids::{DeviceId, TrackId};
+pub use ids::{ArrClipId, DeviceId, TrackId};
 pub use midi::{MidiEvent, MidiMessage};
 pub use param::{ParamInfo, ParamKind};
 pub use processor::{AudioBuffer, ParamOutQueue, ProcessContext, Processor};
+pub use sample::SampleBuffer;
 pub use time::{Quantize, TimeSignature, TransportInfo, PPQ};
 
 /// Third-party plugin formats rLive can host.

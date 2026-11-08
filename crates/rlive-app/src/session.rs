@@ -3,19 +3,26 @@
 //! Every edit goes through [`Session`] so the project (what gets saved) and the engine (what
 //! you hear) never drift apart.
 
+use crate::peaks::Peaks;
+use crate::recording::Recording;
 use rlive_core::{
-    DeviceId, MidiMessage, ParamInfo, PluginFormat, Processor, Quantize, TimeSignature, TrackId,
+    ArrClipId, DeviceId, MidiMessage, ParamInfo, PluginFormat, Processor, Quantize, TimeSignature,
+    TrackId,
 };
 use rlive_devices::{DeviceInit, DeviceRole, SampleBuffer};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{
-    AudioClip, ChainTarget, ClipData, DeviceSlot, EngineCommand, EngineEvent, EngineHandle,
-    MasterNode, MidiClip, MixSettings, Note, NullProcessor, TrackNode, MAX_TRACKS,
+    ArrangementLane, AudioClip, ChainTarget, ClipData, DeviceSlot, EngineCommand, EngineEvent,
+    EngineHandle, LaneClip, MasterNode, MidiClip, MixSettings, Note, NullProcessor, TrackNode,
+    MAX_TRACKS,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{HostNotification, PluginDescriptor, PluginHandle};
-use rlive_project::{Clip, ClipContent, Device, DeviceKind, Project, Track, TrackKind};
-use std::collections::HashMap;
+use rlive_project::history::{History, ParkedMix, Snapshot, TrackSnap};
+use rlive_project::{
+    ArrangementClip, Clip, ClipContent, Device, DeviceKind, Project, Track, TrackKind,
+};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -40,6 +47,7 @@ impl DeviceRuntime {
 #[derive(Default)]
 pub struct SampleCache {
     samples: HashMap<PathBuf, Arc<SampleBuffer>>,
+    peaks: HashMap<PathBuf, Arc<Peaks>>,
 }
 
 impl SampleCache {
@@ -50,8 +58,16 @@ impl SampleCache {
         let s = Arc::new(
             rlive_devices::load_wav(path).map_err(|e| format!("{}: {e}", path.display()))?,
         );
+        self.peaks
+            .insert(path.to_path_buf(), Arc::new(Peaks::build(&s.left)));
         self.samples.insert(path.to_path_buf(), s.clone());
         Ok(s)
+    }
+
+    /// The waveform summary of a loaded file, with its sample rate.
+    pub fn peaks(&self, path: &Path) -> Option<(Arc<Peaks>, f64)> {
+        let sample_rate = self.samples.get(path)?.sample_rate;
+        Some((self.peaks.get(path)?.clone(), sample_rate))
     }
 }
 
@@ -164,7 +180,7 @@ impl Builder<'_> {
     pub fn clip(&mut self, clip: &Clip) -> Result<Arc<ClipData>, String> {
         Ok(Arc::new(match &clip.content {
             ClipContent::Midi { notes } => {
-                let mut notes: Vec<Note> = notes
+                let notes: Vec<Note> = notes
                     .iter()
                     .map(|n| Note {
                         start: n.start,
@@ -173,25 +189,39 @@ impl Builder<'_> {
                         velocity: n.velocity,
                     })
                     .collect();
-                notes.sort_by_key(|n| (n.start, n.key));
-                ClipData::Midi(MidiClip {
-                    length: clip.length,
-                    notes,
-                    looped: clip.looped,
-                })
+                ClipData::Midi(MidiClip::new(clip.length, notes, clip.looped))
             }
             ClipContent::Audio { path, gain_db } => {
-                let s = self.samples.get(path)?;
+                let sample = self.samples.get(path)?;
                 ClipData::Audio(AudioClip {
-                    left: s.left.clone(),
-                    right: s.right.clone(),
-                    sample_rate: s.sample_rate,
+                    sample,
                     length: clip.length,
                     looped: clip.looped,
                     gain: rlive_core::db_to_gain(*gain_db),
                 })
             }
         }))
+    }
+
+    /// Compiles a timeline. Clips that fail to load are left out and reported.
+    pub fn lane(
+        &mut self,
+        clips: &[ArrangementClip],
+        errors: &mut Vec<String>,
+    ) -> Arc<ArrangementLane> {
+        let mut lane = Vec::with_capacity(clips.len());
+        for c in clips {
+            match self.clip(&c.clip) {
+                Ok(data) => lane.push(LaneClip {
+                    start: c.start,
+                    end: c.end(),
+                    offset: c.offset,
+                    data,
+                }),
+                Err(e) => errors.push(e),
+            }
+        }
+        Arc::new(ArrangementLane { clips: lane })
     }
 
     pub fn track(
@@ -219,6 +249,7 @@ impl Builder<'_> {
                 }
             }
         }
+        node.set_lane(self.lane(&track.arrangement, errors));
         Box::new(node)
     }
 
@@ -280,6 +311,49 @@ impl From<ChainRef> for ChainTarget {
     }
 }
 
+/// One clip's destination when moving or copying on the timeline.
+#[derive(Debug, Clone, Copy)]
+pub struct ArrMove {
+    pub track: TrackId,
+    pub id: ArrClipId,
+    pub to_track: TrackId,
+    pub start: u64,
+}
+
+/// Which edge of a timeline clip to move, and where to.
+#[derive(Debug, Clone, Copy)]
+pub enum TrimEdge {
+    Left(u64),
+    Right(u64),
+}
+
+/// A clip being edited: in a Session slot or on the timeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClipRef {
+    Slot { track: TrackId, slot: usize },
+    Arr { track: TrackId, id: ArrClipId },
+}
+
+impl ClipRef {
+    pub fn slot(track: TrackId, slot: usize) -> Self {
+        Self::Slot { track, slot }
+    }
+
+    pub fn track(self) -> TrackId {
+        match self {
+            Self::Slot { track, .. } | Self::Arr { track, .. } => track,
+        }
+    }
+
+    /// The track and slot, if this clip is in a Session slot.
+    pub fn as_slot(self) -> Option<(TrackId, usize)> {
+        match self {
+            Self::Slot { track, slot } => Some((track, slot)),
+            Self::Arr { .. } => None,
+        }
+    }
+}
+
 pub struct Session {
     pub project: Project,
     pub path: Option<PathBuf>,
@@ -292,10 +366,13 @@ pub struct Session {
     pub midi_targets: Arc<Mutex<Vec<TrackId>>>,
     pub messages: Vec<String>,
     pub dirty: bool,
+    pub history: History,
+    recording: Option<Recording>,
 }
 
 impl Session {
     pub fn new(engine: EngineHandle, project: Project, plugins: PluginCache) -> Self {
+        let history = History::new(&project);
         let mut s = Self {
             project,
             path: None,
@@ -307,6 +384,8 @@ impl Session {
             midi_targets: Arc::new(Mutex::new(Vec::new())),
             messages: Vec::new(),
             dirty: false,
+            history,
+            recording: None,
         };
         s.rebuild();
         s
@@ -341,6 +420,7 @@ impl Session {
 
     /// Re-create every engine object from the project (load, new, sample-rate change).
     pub fn rebuild(&mut self) {
+        self.recording = None;
         self.capture_plugin_states();
         self.runtimes.clear();
         self.project.normalize();
@@ -372,6 +452,7 @@ impl Session {
         for c in cmds {
             self.send(c);
         }
+        self.sync_loop();
         self.update_midi_targets();
     }
 
@@ -386,6 +467,7 @@ impl Session {
 
     pub fn new_project(&mut self) {
         self.project = Project::new_default();
+        self.history = History::new(&self.project);
         self.path = None;
         self.dirty = false;
         self.rebuild();
@@ -394,6 +476,7 @@ impl Session {
     pub fn load(&mut self, path: &Path) -> Result<(), String> {
         let p = Project::load(path).map_err(|e| e.to_string())?;
         self.project = p;
+        self.history = History::new(&self.project);
         self.path = Some(path.to_path_buf());
         self.dirty = false;
         // Plugin states in the file must win over the (about to be dropped) running instances.
@@ -433,6 +516,8 @@ impl Session {
         };
         self.project.save(&path).map_err(|e| e.to_string())?;
         self.path = Some(path);
+        self.commit_edits(false);
+        self.history.mark_saved();
         self.dirty = false;
         Ok(())
     }
@@ -457,19 +542,19 @@ impl Session {
     pub fn set_tempo(&mut self, bpm: f64) {
         self.project.tempo = bpm.clamp(20.0, 999.0);
         self.send(EngineCommand::SetTempo(self.project.tempo));
-        self.dirty = true;
+        self.touch();
     }
 
     pub fn set_time_signature(&mut self, sig: TimeSignature) {
         self.project.time_signature = sig;
         self.send(EngineCommand::SetTimeSignature(sig));
-        self.dirty = true;
+        self.touch();
     }
 
     pub fn set_quantize(&mut self, q: Quantize) {
         self.project.quantize = q;
         self.send(EngineCommand::SetQuantize(q));
-        self.dirty = true;
+        self.touch();
     }
 
     pub fn set_metronome(&mut self, on: bool) {
@@ -512,11 +597,17 @@ impl Session {
         );
         t.devices.extend(device);
         let id = t.id;
-        let index = index
-            .unwrap_or(self.project.tracks.len())
-            .min(self.project.tracks.len());
+        let index = index.unwrap_or(self.project.tracks.len());
+        self.install_track(t, index);
+        self.mark_edit("Add Track");
+        id
+    }
+
+    /// Adds a fully formed track to the project and the engine.
+    fn install_track(&mut self, t: Track, index: usize) {
+        let index = index.min(self.project.tracks.len());
         let shared = Arc::new(TrackShared::default());
-        self.track_shared.insert(id, shared.clone());
+        self.track_shared.insert(t.id, shared.clone());
         let mut errors = Vec::new();
         let mut runtimes = HashMap::new();
         let (mut b, _) = self.builder();
@@ -525,20 +616,20 @@ impl Session {
         self.messages.extend(errors);
         self.project.tracks.insert(index, t);
         self.send(EngineCommand::AddTrack { index, track: node });
-        self.dirty = true;
-        id
     }
 
     pub fn delete_track(&mut self, id: TrackId) {
         if let Some(i) = self.project.track_index(id) {
-            let t = self.project.tracks.remove(i);
-            for d in &t.devices {
+            let mut t = self.project.tracks.remove(i);
+            self.history.parked_mix.insert(id, ParkedMix::of(&t));
+            for d in &mut t.devices {
+                self.park_device(d);
                 self.runtimes.remove(&d.id);
             }
             self.track_shared.remove(&id);
             self.send(EngineCommand::RemoveTrack(id));
             self.update_midi_targets();
-            self.dirty = true;
+            self.mark_edit("Delete Track");
         }
     }
 
@@ -548,7 +639,7 @@ impl Session {
             let to = to.min(self.project.tracks.len());
             self.project.tracks.insert(to, t);
             self.send(EngineCommand::MoveTrack { track: id, to });
-            self.dirty = true;
+            self.mark_edit("Move Track");
         }
     }
 
@@ -557,14 +648,14 @@ impl Session {
         if let Some(t) = self.project.track(id) {
             let mix = mix_of(t);
             self.send(EngineCommand::SetMix { track: id, mix });
-            self.dirty = true;
+            self.touch();
         }
     }
 
     pub fn set_master_volume(&mut self, db: f32) {
         self.project.master.volume_db = db;
         self.send(EngineCommand::SetMasterVolume(db));
-        self.dirty = true;
+        self.touch();
     }
 
     pub fn set_arm(&mut self, id: TrackId, arm: bool, exclusive: bool) {
@@ -594,11 +685,81 @@ impl Session {
         self.send(EngineCommand::Midi { track, message });
     }
 
+    /// MIDI the user performed: audible, and recorded while recording.
+    pub fn play_midi(&mut self, track: TrackId, message: MidiMessage) {
+        self.send(EngineCommand::PlayedMidi {
+            track,
+            message,
+            at: std::time::Instant::now(),
+        });
+    }
+
+    // ------------------------------------------------------------- recording
+
+    pub fn is_recording(&self) -> bool {
+        self.recording.is_some()
+    }
+
+    /// Starts recording MIDI onto armed tracks, starting the transport if needed.
+    /// Returns false if no MIDI track is armed.
+    pub fn start_recording(&mut self) -> bool {
+        let armed = self
+            .project
+            .tracks
+            .iter()
+            .any(|t| t.arm && t.kind == TrackKind::Midi);
+        if !armed {
+            return false;
+        }
+        let at = if self.is_playing() {
+            self.engine.shared.tick.load()
+        } else {
+            self.insert_marker()
+        };
+        self.recording = Some(Recording::new(at as u64));
+        self.send(EngineCommand::SetRecording(true));
+        self.play();
+        true
+    }
+
+    pub fn stop_recording(&mut self) {
+        self.send(EngineCommand::SetRecording(false));
+    }
+
+    /// Puts what's been recorded so far on the timeline.
+    fn flush_recording(&mut self) {
+        let Some(recording) = self.recording.as_ref() else {
+            return;
+        };
+        let placements = recording.placements(self.project.time_signature);
+        for p in placements {
+            let Some(t) = self.project.track_mut(p.track) else {
+                continue;
+            };
+            if let Some(old) = p.existing {
+                t.remove_arr_clip(old);
+            }
+            let mut clip = p.clip;
+            clip.color = t.color;
+            let mut placed = ArrangementClip::new(clip, p.start);
+            if let Some(old) = p.existing {
+                placed.id = old;
+            }
+            let id = placed.id;
+            t.place_clip(placed);
+            if let Some(r) = self.recording.as_mut() {
+                r.set_clip(p.track, id);
+            }
+            self.sync_lane(p.track);
+            self.mark_edit("Record");
+        }
+    }
+
     // ------------------------------------------------------------- scenes & clips
 
     pub fn add_scene(&mut self) {
         self.project.add_scene();
-        self.dirty = true;
+        self.mark_edit("Add Scene");
     }
 
     pub fn delete_scene(&mut self, index: usize) {
@@ -614,7 +775,7 @@ impl Session {
         self.project.normalize();
         // Slot indices shifted: resend all clips of every track.
         self.resend_all_clips();
-        self.dirty = true;
+        self.mark_edit("Delete Scene");
     }
 
     fn resend_all_clips(&mut self) {
@@ -637,7 +798,7 @@ impl Session {
         }
         t.clips[slot] = clip;
         self.sync_clip(track, slot);
-        self.dirty = true;
+        self.mark_edit("Edit Clip");
     }
 
     /// Recompile a slot's clip and send it to the engine (call after editing notes).
@@ -666,7 +827,7 @@ impl Session {
             slot,
             clip: data,
         });
-        self.dirty = true;
+        self.mark_edit("Edit Clip");
     }
 
     pub fn clip(&self, track: TrackId, slot: usize) -> Option<&Clip> {
@@ -675,6 +836,210 @@ impl Session {
 
     pub fn clip_mut(&mut self, track: TrackId, slot: usize) -> Option<&mut Clip> {
         self.project.track_mut(track)?.clips.get_mut(slot)?.as_mut()
+    }
+
+    pub fn clip_at(&self, r: ClipRef) -> Option<&Clip> {
+        match r {
+            ClipRef::Slot { track, slot } => self.clip(track, slot),
+            ClipRef::Arr { track, id } => Some(&self.project.track(track)?.arr_clip(id)?.clip),
+        }
+    }
+
+    pub fn clip_at_mut(&mut self, r: ClipRef) -> Option<&mut Clip> {
+        match r {
+            ClipRef::Slot { track, slot } => self.clip_mut(track, slot),
+            ClipRef::Arr { track, id } => {
+                Some(&mut self.project.track_mut(track)?.arr_clip_mut(id)?.clip)
+            }
+        }
+    }
+
+    /// Sends a track's timeline to the engine.
+    pub fn sync_lane(&mut self, track: TrackId) {
+        let Some(clips) = self.project.track(track).map(|t| t.arrangement.clone()) else {
+            return;
+        };
+        let mut errors = Vec::new();
+        let (mut b, _) = self.builder();
+        let lane = b.lane(&clips, &mut errors);
+        self.messages.extend(errors);
+        self.send(EngineCommand::SetLane { track, lane });
+    }
+
+    /// Sends the loop range to the engine.
+    fn sync_loop(&mut self) {
+        let a = &self.project.arrangement;
+        let range = a
+            .loop_enabled
+            .then_some((a.loop_start as f64, a.loop_end as f64));
+        self.send(EngineCommand::SetLoop(range));
+    }
+
+    /// Sends an edited clip to the engine.
+    pub fn sync_ref(&mut self, r: ClipRef) {
+        match r {
+            ClipRef::Slot { track, slot } => self.sync_clip(track, slot),
+            ClipRef::Arr { track, .. } => {
+                self.sync_lane(track);
+                self.mark_edit("Edit Clip");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------- arrangement
+
+    /// Where playback starts and returns to, in ticks.
+    pub fn insert_marker(&self) -> f64 {
+        self.engine.shared.insert_marker.load()
+    }
+
+    pub fn seek(&mut self, tick: f64) {
+        self.send(EngineCommand::Seek(tick.max(0.0)));
+    }
+
+    pub fn set_loop(&mut self, enabled: bool, start: u64, end: u64) {
+        let a = &mut self.project.arrangement;
+        if (a.loop_enabled, a.loop_start, a.loop_end) == (enabled, start, end) {
+            return;
+        }
+        a.loop_enabled = enabled;
+        a.loop_start = start;
+        a.loop_end = end;
+        self.sync_loop();
+        self.mark_edit("Change Loop");
+    }
+
+    pub fn back_to_arrangement(&mut self) {
+        self.send(EngineCommand::BackToArrangement);
+    }
+
+    fn sync_lanes(&mut self, tracks: HashSet<TrackId>, label: &'static str) {
+        for t in tracks {
+            self.sync_lane(t);
+        }
+        self.mark_edit(label);
+    }
+
+    pub fn arr_place(&mut self, track: TrackId, clip: ArrangementClip) {
+        if let Some(t) = self.project.track_mut(track) {
+            t.place_clip(clip);
+            self.sync_lane(track);
+            self.mark_edit("Add Clip");
+        }
+    }
+
+    /// Moves or copies clips; returns where they ended up.
+    pub fn arr_move(&mut self, moves: &[ArrMove], copy: bool) -> Vec<(TrackId, ArrClipId)> {
+        // Lift everything first so clips can't overwrite each other's old places.
+        let lifted: Vec<(ArrMove, ArrangementClip)> = moves
+            .iter()
+            .filter_map(|m| {
+                let t = self.project.track_mut(m.track)?;
+                let c = if copy {
+                    t.arr_clip(m.id).cloned()
+                } else {
+                    t.remove_arr_clip(m.id)
+                }?;
+                Some((*m, c))
+            })
+            .collect();
+        let mut placed = Vec::with_capacity(lifted.len());
+        let mut touched = HashSet::new();
+        for (m, mut c) in lifted {
+            c.start = m.start;
+            if copy {
+                c.id = ArrClipId::new();
+            }
+            placed.push((m.to_track, c.id));
+            touched.insert(m.track);
+            touched.insert(m.to_track);
+            if let Some(t) = self.project.track_mut(m.to_track) {
+                t.place_clip(c);
+            }
+        }
+        self.sync_lanes(touched, if copy { "Copy Clips" } else { "Move Clips" });
+        placed
+    }
+
+    pub fn arr_trim(&mut self, track: TrackId, id: ArrClipId, edge: TrimEdge) {
+        let Some(t) = self.project.track_mut(track) else {
+            return;
+        };
+        let Some(mut c) = t.remove_arr_clip(id) else {
+            return;
+        };
+        match edge {
+            TrimEdge::Left(to) => c.trim_left(to),
+            TrimEdge::Right(to) => c.trim_right(to),
+        }
+        t.place_clip(c);
+        self.sync_lane(track);
+        self.mark_edit("Trim Clip");
+    }
+
+    pub fn arr_delete(&mut self, items: &[(TrackId, ArrClipId)]) {
+        let mut touched = HashSet::new();
+        for (track, id) in items {
+            if let Some(t) = self.project.track_mut(*track) {
+                if t.remove_arr_clip(*id).is_some() {
+                    touched.insert(*track);
+                }
+            }
+        }
+        if !touched.is_empty() {
+            self.sync_lanes(touched, "Delete Clips");
+        }
+    }
+
+    /// Copies the clips just after the span they cover.
+    pub fn arr_duplicate(&mut self, items: &[(TrackId, ArrClipId)]) -> Vec<(TrackId, ArrClipId)> {
+        let clips: Vec<(TrackId, ArrangementClip)> = items
+            .iter()
+            .filter_map(|(t, id)| Some((*t, self.project.track(*t)?.arr_clip(*id)?.clone())))
+            .collect();
+        let (Some(first), Some(last)) = (
+            clips.iter().map(|(_, c)| c.start).min(),
+            clips.iter().map(|(_, c)| c.end()).max(),
+        ) else {
+            return Vec::new();
+        };
+        let moves: Vec<ArrMove> = clips
+            .iter()
+            .map(|(t, c)| ArrMove {
+                track: *t,
+                id: c.id,
+                to_track: *t,
+                start: c.start + (last - first),
+            })
+            .collect();
+        self.arr_move(&moves, true)
+    }
+
+    /// Places clipboard clips with the earliest at `at`, on their original tracks.
+    pub fn arr_paste(
+        &mut self,
+        clips: &[(TrackId, ArrangementClip)],
+        at: u64,
+    ) -> Vec<(TrackId, ArrClipId)> {
+        let mut placed = Vec::with_capacity(clips.len());
+        let mut touched = HashSet::new();
+        for (track, c) in clips {
+            let Some(t) = self.project.track_mut(*track) else {
+                continue;
+            };
+            let id = ArrClipId::new();
+            t.place_clip(ArrangementClip {
+                id,
+                start: c.start + at,
+                ..c.clone()
+            });
+            placed.push((*track, id));
+            touched.insert(*track);
+        }
+        if !touched.is_empty() {
+            self.sync_lanes(touched, "Paste Clips");
+        }
+        placed
     }
 
     /// Create an audio clip from a WAV file; its loop length follows the file length at the
@@ -734,7 +1099,7 @@ impl Session {
             index,
             device: slot,
         });
-        self.dirty = true;
+        self.mark_edit("Add Device");
     }
 
     pub fn add_builtin(&mut self, chain: ChainRef, type_id: &str) {
@@ -775,7 +1140,10 @@ impl Session {
 
     pub fn remove_device(&mut self, chain: ChainRef, id: DeviceId) {
         if let Some(devs) = self.chain_mut(chain) {
-            devs.retain(|d| d.id != id);
+            if let Some(i) = devs.iter().position(|d| d.id == id) {
+                let mut d = devs.remove(i);
+                self.park_device(&mut d);
+            }
         }
         if let Some(mut rt) = self.runtimes.remove(&id) {
             if let Some(h) = rt.plugin.as_mut() {
@@ -787,7 +1155,7 @@ impl Session {
             target: chain.into(),
             device: id,
         });
-        self.dirty = true;
+        self.mark_edit("Remove Device");
     }
 
     pub fn move_device(&mut self, chain: ChainRef, id: DeviceId, to: usize) {
@@ -805,7 +1173,7 @@ impl Session {
             device: id,
             to,
         });
-        self.dirty = true;
+        self.mark_edit("Move Device");
     }
 
     /// Fold/unfold a device in the device view (UI state stored in the project).
@@ -815,7 +1183,7 @@ impl Session {
             .and_then(|v| v.iter_mut().find(|d| d.id == id))
         {
             d.expanded = expanded;
-            self.dirty = true;
+            self.touch();
         }
     }
 
@@ -831,7 +1199,7 @@ impl Session {
             device: id,
             bypass,
         });
-        self.dirty = true;
+        self.touch();
     }
 
     pub fn param_value(&self, chain: ChainRef, id: DeviceId, param: &ParamInfo) -> f64 {
@@ -865,7 +1233,7 @@ impl Session {
             param,
             value,
         });
-        self.dirty = true;
+        self.touch();
     }
 
     /// Change the sample of a built-in sampler (re-creates the device).
@@ -896,7 +1264,7 @@ impl Session {
             index: pos,
             device: slot,
         });
-        self.dirty = true;
+        self.touch();
     }
 
     /// Re-instantiate a plugin (keeping its state), e.g. after it requested a restart.
@@ -935,6 +1303,185 @@ impl Session {
             .map(|t| ChainRef::Track(t.id))
     }
 
+    // ------------------------------------------------------------- undo
+
+    /// Records that an undoable edit happened.
+    fn mark_edit(&mut self, label: &'static str) {
+        self.dirty = true;
+        self.history.pending.get_or_insert(label);
+    }
+
+    /// Records a change that undo doesn't cover.
+    fn touch(&mut self) {
+        self.dirty = true;
+        self.history.untracked_dirty = true;
+    }
+
+    /// Keeps a removed device, with its plugin state, in case undo brings it back.
+    fn park_device(&mut self, d: &mut Device) {
+        if let DeviceKind::Plugin { state, .. } = &mut d.kind {
+            if let Some(h) = self.runtimes.get_mut(&d.id).and_then(|r| r.plugin.as_mut()) {
+                if let Some(s) = h.save_state() {
+                    *state = Some(s);
+                }
+            }
+        }
+        self.history.parked_devices.insert(d.id, d.clone());
+    }
+
+    /// Turns finished edits into an undo step; call once per frame. While
+    /// `busy` (a drag or text entry in progress) edits accumulate into one step.
+    pub fn commit_edits(&mut self, busy: bool) {
+        if busy {
+            self.history.was_busy = true;
+            return;
+        }
+        let finished = std::mem::take(&mut self.history.was_busy);
+        if self.history.pending.is_none() && !finished {
+            return;
+        }
+        let label = self.history.pending.take().unwrap_or("Edit");
+        if self.history.commit(&self.project, label) {
+            self.dirty = true;
+        }
+    }
+
+    fn after_restore(&mut self) {
+        self.history.pending = None;
+        self.history.was_busy = false;
+        self.dirty = self.history.untracked_dirty || !self.history.at_saved();
+    }
+
+    pub fn undo(&mut self) -> bool {
+        if self.is_recording() {
+            return false;
+        }
+        self.commit_edits(false);
+        let Some(target) = self.history.undo_target() else {
+            return false;
+        };
+        self.restore(&target);
+        self.after_restore();
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        if self.is_recording() {
+            return false;
+        }
+        self.commit_edits(false);
+        let Some(target) = self.history.redo_target() else {
+            return false;
+        };
+        self.restore(&target);
+        self.after_restore();
+        true
+    }
+
+    /// Brings the project to `target` by applying only what differs, so
+    /// everything else keeps playing and no unaffected plugin is touched.
+    fn restore(&mut self, target: &Snapshot) {
+        self.project.scenes = (*target.scenes).clone();
+        let keep: HashSet<TrackId> = target.tracks.iter().map(|t| t.id).collect();
+        let gone: Vec<TrackId> = self
+            .project
+            .tracks
+            .iter()
+            .map(|t| t.id)
+            .filter(|id| !keep.contains(id))
+            .collect();
+        for id in gone {
+            self.delete_track(id);
+        }
+        for (i, s) in target.tracks.iter().enumerate() {
+            if self.project.track(s.id).is_none() {
+                let t = self.track_from_snapshot(s);
+                self.install_track(t, i);
+            }
+        }
+        for (i, s) in target.tracks.iter().enumerate() {
+            if self.project.track_index(s.id) != Some(i) {
+                self.move_track(s.id, i);
+            }
+        }
+        for s in &target.tracks {
+            self.restore_track(s);
+        }
+        self.restore_chain(ChainRef::Master, &target.master_devices);
+        self.project.arrangement = target.arrangement.clone();
+        self.sync_loop();
+        self.project.normalize();
+        self.update_midi_targets();
+    }
+
+    fn track_from_snapshot(&self, s: &TrackSnap) -> Track {
+        let mut t = Track::new(&s.name, s.kind, s.color, s.clips.len());
+        t.id = s.id;
+        if let Some(m) = self.history.parked_mix.get(&s.id) {
+            t.volume_db = m.volume_db;
+            t.pan = m.pan;
+            t.mute = m.mute;
+            t.solo = m.solo;
+            t.arm = m.arm;
+        }
+        t.devices = s
+            .device_ids
+            .iter()
+            .filter_map(|id| self.history.parked_devices.get(id).cloned())
+            .collect();
+        t.clips = s.clips.iter().map(|c| c.as_deref().cloned()).collect();
+        t.arrangement = s.lane.iter().map(|c| (**c).clone()).collect();
+        t
+    }
+
+    fn restore_track(&mut self, s: &TrackSnap) {
+        let Some(t) = self.project.track_mut(s.id) else {
+            return;
+        };
+        t.name.clone_from(&s.name);
+        t.color = s.color;
+        let slots = t.clips.len().max(s.clips.len());
+        let mut changed = Vec::new();
+        for i in 0..slots {
+            let want = s.clips.get(i).and_then(|c| c.as_deref());
+            if t.clips.get(i).and_then(Option::as_ref) != want {
+                changed.push(i);
+            }
+        }
+        t.clips = s.clips.iter().map(|c| c.as_deref().cloned()).collect();
+        let lane_changed = t.arrangement.len() != s.lane.len()
+            || t.arrangement.iter().zip(&s.lane).any(|(a, b)| *a != **b);
+        if lane_changed {
+            t.arrangement = s.lane.iter().map(|c| (**c).clone()).collect();
+        }
+        self.restore_chain(ChainRef::Track(s.id), &s.device_ids);
+        for slot in changed {
+            self.sync_clip(s.id, slot);
+        }
+        if lane_changed {
+            self.sync_lane(s.id);
+        }
+    }
+
+    fn restore_chain(&mut self, chain: ChainRef, ids: &[DeviceId]) {
+        let current: Vec<DeviceId> = self.devices(chain).iter().map(|d| d.id).collect();
+        for id in current.iter().filter(|id| !ids.contains(id)) {
+            self.remove_device(chain, *id);
+        }
+        for (i, id) in ids.iter().enumerate() {
+            if !current.contains(id) {
+                if let Some(d) = self.history.parked_devices.get(id).cloned() {
+                    self.add_device(chain, Some(i), d);
+                }
+            }
+        }
+        for (i, id) in ids.iter().enumerate() {
+            if self.devices(chain).get(i).map(|d| d.id) != Some(*id) {
+                self.move_device(chain, *id, i);
+            }
+        }
+    }
+
     // ------------------------------------------------------------- housekeeping
 
     /// Call every UI frame: frees engine garbage and services plugin callbacks.
@@ -958,6 +1505,32 @@ impl Session {
                     {
                         d.params.insert(param, value);
                     }
+                }
+                EngineEvent::RecordedMidi {
+                    track,
+                    tick,
+                    message,
+                } => {
+                    let armed = self
+                        .project
+                        .track(track)
+                        .is_some_and(|t| t.arm && t.kind == TrackKind::Midi);
+                    if let (true, Some(r)) = (armed, self.recording.as_mut()) {
+                        r.message(track, tick, message);
+                    }
+                }
+                EngineEvent::Jumped { from, to } => {
+                    if let Some(r) = self.recording.as_mut() {
+                        r.jumped(from, to);
+                    }
+                    self.flush_recording();
+                }
+                EngineEvent::RecordingStopped { tick } => {
+                    if let Some(r) = self.recording.as_mut() {
+                        r.finish(tick);
+                    }
+                    self.flush_recording();
+                    self.recording = None;
                 }
             }
         }
@@ -991,7 +1564,7 @@ impl Session {
                         param,
                         value,
                     });
-                    self.dirty = true;
+                    self.touch();
                 }
                 HostNotification::RestartRequested => self.reload_device(chain, id),
                 _ => {}
@@ -1004,6 +1577,37 @@ impl Session {
     /// Render `bars` bars of `scene` offline into a WAV file at the engine's sample rate.
     /// Plugins are instantiated afresh (with their current state) for the render.
     pub fn export_scene(&mut self, scene: usize, bars: u32, path: &Path) -> Result<(), String> {
+        let ticks = bars as u64 * self.project.time_signature.ticks_per_bar();
+        self.render_offline(vec![EngineCommand::LaunchScene(scene)], ticks, path)
+    }
+
+    /// Render the Arrangement to a WAV file: the loop range if looping, otherwise
+    /// from the start to the end of the last clip.
+    pub fn export_arrangement(&mut self, path: &Path) -> Result<(), String> {
+        let a = &self.project.arrangement;
+        let (start, end) = if a.loop_enabled {
+            (a.loop_start, a.loop_end)
+        } else {
+            (0, self.project.arrangement_end())
+        };
+        if end <= start {
+            return Err("the Arrangement is empty".into());
+        }
+        let setup = vec![
+            EngineCommand::SetLoop(None),
+            EngineCommand::Seek(start as f64),
+            EngineCommand::Play,
+        ];
+        self.render_offline(setup, end - start, path)
+    }
+
+    /// Renders `ticks` of the project on a private engine, after `setup` commands.
+    fn render_offline(
+        &mut self,
+        setup: Vec<EngineCommand>,
+        ticks: u64,
+        path: &Path,
+    ) -> Result<(), String> {
         self.capture_plugin_states();
         let sample_rate = self.engine.sample_rate;
         let max_block = 512;
@@ -1027,7 +1631,7 @@ impl Session {
             ));
         }
         let master = b.master(p, &mut runtimes, &mut errors);
-        let cmds = vec![
+        let mut cmds = vec![
             EngineCommand::ReplaceAll {
                 tracks: Box::new(tracks),
                 master,
@@ -1035,16 +1639,14 @@ impl Session {
             EngineCommand::SetTempo(p.tempo),
             EngineCommand::SetTimeSignature(p.time_signature),
             EngineCommand::SetQuantize(Quantize::None),
-            EngineCommand::LaunchScene(scene),
         ];
+        cmds.extend(setup);
         for c in cmds {
             if handle.send(c).is_err() {
                 return Err("engine queue full".into());
             }
         }
-        let seconds =
-            bars as f64 * p.time_signature.ticks_per_bar() as f64 / rlive_core::PPQ as f64 * 60.0
-                / p.tempo;
+        let seconds = ticks as f64 / rlive_core::PPQ as f64 * 60.0 / p.tempo;
         let frames = (seconds * sample_rate) as usize;
         let mut left = vec![0.0; frames];
         let mut right = vec![0.0; frames];
@@ -1093,6 +1695,311 @@ mod tests {
             done += 512;
         }
         out
+    }
+
+    fn commit(s: &mut Session) {
+        s.commit_edits(false);
+    }
+
+    fn poly_param(s: &Session, t: TrackId) -> (DeviceId, u32) {
+        let d = s.devices(ChainRef::Track(t))[0].id;
+        (d, s.runtimes[&d].params[0].id)
+    }
+
+    #[test]
+    fn undo_restores_an_edited_clip_and_leaves_others_playing() {
+        let (mut engine, mut s) = session();
+        let (playing, other) = (s.project.tracks[0].id, s.project.tracks[1].id);
+        s.launch_clip(playing, 0);
+        render(&mut engine, &mut s, 4_800);
+        let shared = s.track_shared[&playing].clone();
+        let clip = Clip::new_midi("new", [1, 2, 3], 1, s.project.time_signature);
+        s.set_clip(other, 1, Some(clip));
+        commit(&mut s);
+        assert!(s.undo());
+        assert!(s.clip(other, 1).is_none());
+        assert!(
+            Arc::ptr_eq(&shared, &s.track_shared[&playing]),
+            "no rebuild"
+        );
+        render(&mut engine, &mut s, 4_800);
+        assert_eq!(
+            shared
+                .playing_slot
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert!(s.redo());
+        assert_eq!(s.clip(other, 1).unwrap().name, "new");
+    }
+
+    #[test]
+    fn knob_moves_make_no_step_and_survive_undo() {
+        let (_engine, mut s) = session();
+        let t = s.project.tracks[0].id;
+        let clip = Clip::new_midi("x", [1, 2, 3], 1, s.project.time_signature);
+        s.set_clip(t, 2, Some(clip));
+        commit(&mut s);
+        let (dev, param) = poly_param(&s, t);
+        s.set_param(ChainRef::Track(t), dev, param, 0.25);
+        commit(&mut s);
+        assert_eq!(s.history.undo_label(), Some("Edit Clip"));
+        assert!(s.undo());
+        assert_eq!(s.project.tracks[0].devices[0].params[&param], 0.25);
+        assert!(!s.undo(), "the knob move must not be a step");
+    }
+
+    #[test]
+    fn deleting_a_track_is_undoable_with_its_devices() {
+        let (_engine, mut s) = session();
+        let (t, survivor) = (s.project.tracks[1].id, s.project.tracks[0].id);
+        let shared = s.track_shared[&survivor].clone();
+        let (dev, param) = poly_param(&s, t);
+        s.set_param(ChainRef::Track(t), dev, param, 0.75);
+        s.project.track_mut(t).unwrap().volume_db = -9.0;
+        let ids: Vec<DeviceId> = s.devices(ChainRef::Track(t)).iter().map(|d| d.id).collect();
+        s.delete_track(t);
+        commit(&mut s);
+        assert!(s.project.track(t).is_none());
+        assert!(s.undo());
+        let restored = s.project.track(t).expect("track is back");
+        assert_eq!(
+            restored.devices.iter().map(|d| d.id).collect::<Vec<_>>(),
+            ids
+        );
+        assert_eq!(restored.devices[0].params[&param], 0.75);
+        assert_eq!(restored.volume_db, -9.0);
+        assert_eq!(s.project.track_index(t), Some(1));
+        assert!(s.runtimes.contains_key(&dev));
+        assert!(
+            Arc::ptr_eq(&shared, &s.track_shared[&survivor]),
+            "no rebuild"
+        );
+    }
+
+    #[test]
+    fn removing_a_device_is_undoable_in_place() {
+        let (_engine, mut s) = session();
+        let t = s.project.tracks[1].id;
+        let chain = ChainRef::Track(t);
+        let ids: Vec<DeviceId> = s.devices(chain).iter().map(|d| d.id).collect();
+        s.remove_device(chain, ids[0]);
+        commit(&mut s);
+        assert_eq!(s.devices(chain).len(), ids.len() - 1);
+        assert!(s.undo());
+        let now: Vec<DeviceId> = s.devices(chain).iter().map(|d| d.id).collect();
+        assert_eq!(now, ids);
+    }
+
+    #[test]
+    fn a_drag_of_direct_edits_is_one_step() {
+        let (_engine, mut s) = session();
+        let t = s.project.tracks[0].id;
+        for name in ["a", "ab", "abc"] {
+            s.project.track_mut(t).unwrap().name = name.into();
+            s.commit_edits(true);
+        }
+        s.commit_edits(false);
+        assert_eq!(s.history.undo_label(), Some("Edit"));
+        s.undo();
+        assert_eq!(s.project.track(t).unwrap().name, "1 Poly");
+        assert!(!s.undo());
+    }
+
+    #[test]
+    fn dirty_clears_at_the_saved_state_unless_a_knob_moved() {
+        let (_engine, mut s) = session();
+        let t = s.project.tracks[0].id;
+        let clip = Clip::new_midi("x", [1, 2, 3], 1, s.project.time_signature);
+        s.set_clip(t, 2, Some(clip.clone()));
+        commit(&mut s);
+        assert!(s.dirty);
+        s.undo();
+        assert!(!s.dirty, "back at the state the session started from");
+
+        s.set_clip(t, 2, Some(clip));
+        commit(&mut s);
+        let (dev, param) = poly_param(&s, t);
+        s.set_param(ChainRef::Track(t), dev, param, 0.5);
+        s.undo();
+        assert!(s.dirty, "the knob move still needs saving");
+    }
+
+    fn on(key: u8) -> MidiMessage {
+        MidiMessage::NoteOn {
+            channel: 0,
+            key,
+            velocity: 0.8,
+        }
+    }
+
+    fn off(key: u8) -> MidiMessage {
+        MidiMessage::NoteOff {
+            channel: 0,
+            key,
+            velocity: 0.5,
+        }
+    }
+
+    fn silent_project(s: &mut Session) -> TrackId {
+        for i in 0..s.project.tracks.len() {
+            s.project.tracks[i].clips.iter_mut().for_each(|c| *c = None);
+        }
+        s.project.tracks[0].id
+    }
+
+    #[test]
+    fn a_timeline_clip_is_audible_from_the_marker() {
+        let (mut engine, mut s) = session();
+        let t = silent_project(&mut s);
+        let mut clip = Clip::new_midi("x", [1, 2, 3], 1, s.project.time_signature);
+        clip.notes_mut().unwrap().push(rlive_project::NoteData {
+            start: 0,
+            length: 3000,
+            key: 60,
+            velocity: 1.0,
+        });
+        s.arr_place(t, ArrangementClip::new(clip, 3840));
+        s.seek(3840.0);
+        render(&mut engine, &mut s, 1024);
+        s.play();
+        let out = render(&mut engine, &mut s, 24_000);
+        assert!(out.iter().any(|x| x.abs() > 0.01), "the clip should sound");
+    }
+
+    #[test]
+    fn trims_moves_and_deletes_are_one_undo_step_each() {
+        let (_engine, mut s) = session();
+        let t = silent_project(&mut s);
+        let clip = Clip::new_midi("x", [1, 2, 3], 2, s.project.time_signature);
+        let placed = ArrangementClip::new(clip, 0);
+        let id = placed.id;
+        s.arr_place(t, placed);
+        commit(&mut s);
+        s.arr_trim(t, id, TrimEdge::Right(1920));
+        commit(&mut s);
+        assert_eq!(
+            s.project.track(t).unwrap().arr_clip(id).unwrap().length,
+            1920
+        );
+        s.undo();
+        assert_eq!(
+            s.project.track(t).unwrap().arr_clip(id).unwrap().length,
+            7680
+        );
+        s.arr_delete(&[(t, id)]);
+        commit(&mut s);
+        assert!(s.project.track(t).unwrap().arrangement.is_empty());
+        s.undo();
+        assert!(s.project.track(t).unwrap().arr_clip(id).is_some());
+    }
+
+    #[test]
+    fn duplicating_lands_right_after_the_selection() {
+        let (_engine, mut s) = session();
+        let t = silent_project(&mut s);
+        let clip = Clip::new_midi("x", [1, 2, 3], 1, s.project.time_signature);
+        let placed = ArrangementClip::new(clip, 960);
+        let id = placed.id;
+        s.arr_place(t, placed);
+        let new = s.arr_duplicate(&[(t, id)]);
+        let c = s.project.track(t).unwrap().arr_clip(new[0].1).unwrap();
+        assert_eq!(c.start, 960 + 3840);
+    }
+
+    #[test]
+    fn exporting_the_arrangement_covers_its_extent_or_loop() {
+        let (mut engine, mut s) = session();
+        let t = silent_project(&mut s);
+        let clip = Clip::new_midi("x", [1, 2, 3], 2, s.project.time_signature);
+        s.arr_place(t, ArrangementClip::new(clip, 0));
+        render(&mut engine, &mut s, 1024);
+        let dir = std::env::temp_dir().join(format!("rlive-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.wav");
+
+        s.export_arrangement(&path).unwrap();
+        let whole = rlive_devices::load_wav(&path).unwrap();
+        assert_eq!(whole.len(), 192_000, "two bars at 120 BPM and 48 kHz");
+
+        s.set_loop(true, 0, 1920);
+        s.export_arrangement(&path).unwrap();
+        let part = rlive_devices::load_wav(&path).unwrap();
+        assert_eq!(part.len(), 48_000, "one beat-pair at 120 BPM");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn an_empty_arrangement_does_not_export() {
+        let (_engine, mut s) = session();
+        let path = std::env::temp_dir().join("rlive-never-written.wav");
+        assert!(s.export_arrangement(&path).is_err());
+    }
+
+    #[test]
+    fn recording_needs_an_armed_midi_track() {
+        let (_engine, mut s) = session();
+        assert!(!s.start_recording());
+        assert!(!s.is_recording());
+    }
+
+    #[test]
+    fn a_recorded_take_lands_on_the_armed_track_as_one_undo_step() {
+        let (mut engine, mut s) = session();
+        let t = silent_project(&mut s);
+        let unarmed = s.project.tracks[1].id;
+        s.set_arm(t, true, true);
+        assert!(s.start_recording());
+        render(&mut engine, &mut s, 4_096);
+        s.play_midi(t, on(60));
+        s.play_midi(unarmed, on(72));
+        s.midi_in(t, on(64)); // a piano-roll preview, which must not be recorded
+        s.commit_edits(s.is_recording());
+        render(&mut engine, &mut s, 12_000);
+        s.play_midi(t, off(60));
+        s.play_midi(unarmed, off(72));
+        s.midi_in(t, off(64));
+        render(&mut engine, &mut s, 4_096);
+        s.stop();
+        render(&mut engine, &mut s, 1_024);
+        assert!(!s.is_recording());
+        commit(&mut s);
+
+        let lane = &s.project.track(t).unwrap().arrangement;
+        assert_eq!(lane.len(), 1);
+        assert_eq!(lane[0].clip.notes().len(), 1);
+        assert_eq!(lane[0].clip.notes()[0].key, 60);
+        assert!(s.project.track(unarmed).unwrap().arrangement.is_empty());
+
+        assert_eq!(s.history.undo_label(), Some("Record"));
+        assert!(s.undo());
+        assert!(s.project.track(t).unwrap().arrangement.is_empty());
+        assert!(!s.undo(), "the take is a single step");
+    }
+
+    #[test]
+    fn loop_recording_overdubs_into_one_clip() {
+        let (mut engine, mut s) = session();
+        let t = silent_project(&mut s);
+        s.set_arm(t, true, true);
+        s.set_loop(true, 0, 3840); // two seconds at 120 BPM
+        commit(&mut s);
+        assert!(s.start_recording());
+        render(&mut engine, &mut s, 4_096);
+        s.play_midi(t, on(60));
+        render(&mut engine, &mut s, 4_096);
+        s.play_midi(t, off(60));
+        render(&mut engine, &mut s, 96_000); // past the wrap
+        s.play_midi(t, on(62));
+        render(&mut engine, &mut s, 4_096);
+        s.play_midi(t, off(62));
+        render(&mut engine, &mut s, 4_096);
+        s.stop();
+        render(&mut engine, &mut s, 1_024);
+        let lane = &s.project.track(t).unwrap().arrangement;
+        assert_eq!(lane.len(), 1);
+        let keys: Vec<u8> = lane[0].clip.notes().iter().map(|n| n.key).collect();
+        assert!(keys.contains(&60) && keys.contains(&62), "got {keys:?}");
     }
 
     #[test]

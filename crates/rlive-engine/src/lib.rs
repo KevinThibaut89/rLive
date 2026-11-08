@@ -11,11 +11,13 @@
 #![allow(clippy::vec_box)] // nodes are boxed so the audio thread only moves pointers
 
 pub mod clip;
+pub mod lane;
 pub mod shared;
 pub mod track;
 
 use clip::BlockTime;
 pub use clip::{AudioClip, ClipData, MidiClip, Note};
+pub use lane::{ArrangementLane, LaneClip};
 use rlive_core::{
     time::ticks_per_sample, DeviceId, MidiEvent, MidiMessage, Quantize, TimeSignature, TrackId,
     TransportInfo,
@@ -23,23 +25,25 @@ use rlive_core::{
 use shared::EngineShared;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 pub use track::{DeviceSlot, MasterNode, MixSettings, TrackNode};
 
 pub const MAX_TRACKS: usize = 256;
 const COMMAND_CAPACITY: usize = 4096;
 const GARBAGE_CAPACITY: usize = 4096;
-const EVENT_CAPACITY: usize = 4096;
+const EVENT_CAPACITY: usize = 8192;
 const MIDI_CAPACITY: usize = 2048;
 
 /// Sends live MIDI straight to the audio thread (e.g. from a MIDI-input callback thread),
-/// bypassing the UI.
+/// bypassing the UI. Messages are timestamped here, so recording can place them where they
+/// were played rather than where the audio thread picked them up.
 pub struct MidiSender {
-    producer: rtrb::Producer<(TrackId, MidiMessage)>,
+    producer: rtrb::Producer<(TrackId, MidiMessage, Instant)>,
 }
 
 impl MidiSender {
     pub fn send(&mut self, track: TrackId, message: MidiMessage) -> bool {
-        self.producer.push((track, message)).is_ok()
+        self.producer.push((track, message, Instant::now())).is_ok()
     }
 }
 
@@ -58,6 +62,10 @@ pub enum EngineCommand {
     SetTimeSignature(TimeSignature),
     SetMetronome(bool),
     SetQuantize(Quantize),
+    /// Move the playhead and the insert marker to this tick.
+    Seek(f64),
+    /// Loop playback over `(start, end)` in ticks, or stop looping.
+    SetLoop(Option<(f64, f64)>),
 
     LaunchClip {
         track: TrackId,
@@ -71,6 +79,13 @@ pub enum EngineCommand {
         slot: usize,
         clip: Option<Arc<ClipData>>,
     },
+    /// Replace a track's Arrangement lane.
+    SetLane {
+        track: TrackId,
+        lane: Arc<ArrangementLane>,
+    },
+    /// Put every track that launched a Session clip back on its lane.
+    BackToArrangement,
 
     AddTrack {
         index: usize,
@@ -113,10 +128,19 @@ pub enum EngineCommand {
         value: f64,
     },
 
-    /// Live MIDI (keyboard input) for a track.
+    /// Arm or disarm recording of played MIDI.
+    SetRecording(bool),
+
+    /// Live MIDI (keyboard input) for a track. Never recorded, e.g. piano-roll previews.
     Midi {
         track: TrackId,
         message: MidiMessage,
+    },
+    /// MIDI performed by the user at time `at`. Audible, and recorded while recording.
+    PlayedMidi {
+        track: TrackId,
+        message: MidiMessage,
+        at: Instant,
     },
 
     /// Replace the whole session (project load / sample-rate change).
@@ -133,6 +157,7 @@ pub enum Garbage {
     Master(Box<MasterNode>),
     Device(Box<DeviceSlot>),
     Clip(Arc<ClipData>),
+    Lane(Arc<ArrangementLane>),
 }
 
 /// Notifications from the audio thread.
@@ -145,6 +170,16 @@ pub enum EngineEvent {
         param: u32,
         value: f64,
     },
+    /// A note was played while recording. `tick` is where it was played on the timeline.
+    RecordedMidi {
+        track: TrackId,
+        tick: f64,
+        message: MidiMessage,
+    },
+    /// The playhead jumped while recording (a loop wrap or a seek).
+    Jumped { from: f64, to: f64 },
+    /// Recording ended with the playhead at `tick`. Follows every note it recorded.
+    RecordingStopped { tick: f64 },
 }
 
 /// UI-side handle to a running engine.
@@ -272,13 +307,21 @@ pub struct Engine {
     quantize: Quantize,
     tick: f64,
     sample_pos: u64,
+    insert_marker: f64,
+    loop_range: Option<(f64, f64)>,
+    /// The last block played up to `loop_end`. Tells that apart from being sought onto it,
+    /// since only the former wraps.
+    reached_loop_end: bool,
+    recording: bool,
+    /// Backdated recorded notes never land before this tick.
+    record_floor: f64,
     metronome: Metronome,
     smooth_coeff: f32,
 
     commands: rtrb::Consumer<EngineCommand>,
     garbage: rtrb::Producer<Garbage>,
     events: rtrb::Producer<EngineEvent>,
-    midi: rtrb::Consumer<(TrackId, MidiMessage)>,
+    midi: rtrb::Consumer<(TrackId, MidiMessage, Instant)>,
     shared: Arc<EngineShared>,
 }
 
@@ -301,6 +344,11 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         quantize: Quantize::Bar,
         tick: 0.0,
         sample_pos: 0,
+        insert_marker: 0.0,
+        loop_range: None,
+        reached_loop_end: false,
+        recording: false,
+        record_floor: 0.0,
         metronome: Metronome {
             enabled: false,
             phase: 0.0,
@@ -373,11 +421,83 @@ impl Engine {
         self.quantize.next_boundary(self.tick, self.signature)
     }
 
+    fn ticks_per_sample(&self) -> f64 {
+        ticks_per_sample(self.tempo, self.sample_rate)
+    }
+
+    fn sync_sample_pos(&mut self) {
+        self.sample_pos = (self.tick / self.ticks_per_sample()).round() as u64;
+    }
+
     fn start_transport(&mut self) {
         if !self.playing {
             self.playing = true;
-            self.tick = 0.0;
-            self.sample_pos = 0;
+            self.record_floor = self.tick;
+            self.sync_sample_pos();
+        }
+    }
+
+    /// Tell the UI that recording ended, at the current playhead.
+    fn finish_recording(&mut self) {
+        if self.recording && self.playing {
+            let tick = self.tick;
+            let _ = self.events.push(EngineEvent::RecordingStopped { tick });
+        }
+        self.recording = false;
+    }
+
+    /// Report a played message if it is a note and we are recording, placing it where the
+    /// user played it rather than where this block happens to be.
+    fn record_midi(&mut self, track: TrackId, message: MidiMessage, at: Instant) {
+        let is_note = matches!(
+            message,
+            MidiMessage::NoteOn { .. } | MidiMessage::NoteOff { .. }
+        );
+        if !(is_note && self.recording && self.playing) {
+            return;
+        }
+        let ticks_per_second = self.ticks_per_sample() * self.sample_rate;
+        let tick = self.tick - at.elapsed().as_secs_f64() * ticks_per_second;
+        let _ = self.events.push(EngineEvent::RecordedMidi {
+            track,
+            tick: tick.max(self.record_floor),
+            message,
+        });
+    }
+
+    /// Route played MIDI to its track and the recorder.
+    fn play_midi(&mut self, track: TrackId, message: MidiMessage, at: Instant) {
+        self.record_midi(track, message, at);
+        if let Some(t) = self.track_mut(track) {
+            if t.live.len() < t.live.capacity() {
+                t.live.push(MidiEvent::new(0, message));
+            }
+        }
+    }
+
+    /// Move the playhead without disturbing Session clips or device state.
+    fn jump(&mut self, to: f64, kind: JumpKind) {
+        if self.recording && self.playing {
+            let from = self.tick;
+            let _ = self.events.push(EngineEvent::Jumped { from, to });
+        }
+        let delta = to - self.tick;
+        self.tick = to;
+        self.record_floor = to;
+        self.reached_loop_end = false;
+        self.sync_sample_pos();
+        let launch_at = self.launch_point();
+        for t in self.tracks.iter_mut() {
+            if let Some(p) = t.player.playing.as_mut() {
+                p.start_tick += delta;
+            }
+            if let Some(p) = t.player.pending.as_mut() {
+                p.set_at(match kind {
+                    JumpKind::Wrap => p.at() + delta,
+                    JumpKind::Seek => launch_at,
+                });
+            }
+            t.lane.release_and_resync(0, &mut t.live);
         }
     }
 
@@ -402,12 +522,20 @@ impl Engine {
     }
 
     fn stop_transport(&mut self) {
+        if self.playing {
+            // Before the tick resets, so the UI sees every recorded note first.
+            self.finish_recording();
+        } else {
+            self.insert_marker = 0.0;
+        }
         self.playing = false;
-        self.tick = 0.0;
-        self.sample_pos = 0;
+        self.tick = self.insert_marker;
+        self.reached_loop_end = false;
+        self.sync_sample_pos();
         for t in self.tracks.iter_mut() {
             t.player.pending = None;
             t.player.release_all(0, &mut t.live);
+            t.lane.release_and_resync(0, &mut t.live);
             if let Some(p) = t.player.playing.take() {
                 retire(&mut self.garbage, Garbage::Clip(p.clip));
             }
@@ -429,6 +557,19 @@ impl Engine {
             C::SetTimeSignature(s) => self.signature = s,
             C::SetMetronome(on) => self.metronome.enabled = on,
             C::SetQuantize(q) => self.quantize = q,
+            C::SetRecording(true) => self.recording = true,
+            C::SetRecording(false) => self.finish_recording(),
+            C::Seek(to) => {
+                if to.is_finite() {
+                    let to = to.max(0.0);
+                    self.insert_marker = to;
+                    self.jump(to, JumpKind::Seek);
+                }
+            }
+            C::SetLoop(range) => {
+                self.loop_range = range.filter(|&(s, e)| s >= 0.0 && e > s && e.is_finite());
+                self.reached_loop_end = false;
+            }
             C::LaunchClip { track, slot } => {
                 if let Some(i) = self.tracks.iter().position(|t| t.id == track) {
                     self.launch(i, slot);
@@ -485,6 +626,27 @@ impl Engine {
                 }
                 if let Some(old) = std::mem::replace(entry, clip) {
                     retire(&mut self.garbage, Garbage::Clip(old));
+                }
+            }
+            C::SetLane { track, lane } => {
+                let tick = self.tick;
+                let old = match self.tracks.iter_mut().find(|t| t.id == track) {
+                    Some(t) => t.lane.swap(lane, tick, &mut t.live),
+                    None => lane,
+                };
+                retire(&mut self.garbage, Garbage::Lane(old));
+            }
+            C::BackToArrangement => {
+                for t in self.tracks.iter_mut() {
+                    t.player.pending = None;
+                    if !t.follow {
+                        t.player.release_all(0, &mut t.live);
+                        if let Some(p) = t.player.playing.take() {
+                            retire(&mut self.garbage, Garbage::Clip(p.clip));
+                        }
+                        t.follow = true;
+                        t.lane.release_and_resync(0, &mut t.live);
+                    }
                 }
             }
             C::AddTrack { index, track } => {
@@ -583,6 +745,7 @@ impl Engine {
                     }
                 }
             }
+            C::PlayedMidi { track, message, at } => self.play_midi(track, message, at),
             C::ReplaceAll {
                 mut tracks,
                 mut master,
@@ -605,19 +768,70 @@ impl Engine {
                 self.playing = false;
                 self.tick = 0.0;
                 self.sample_pos = 0;
+                self.insert_marker = 0.0;
+                self.loop_range = None;
+                self.reached_loop_end = false;
+                self.recording = false;
             }
         }
     }
 
+    fn drain_input(&mut self) {
+        // MIDI first: a note played just before a stop or seek belongs before it.
+        while let Ok((track, message, at)) = self.midi.pop() {
+            self.play_midi(track, message, at);
+        }
+        while let Ok(cmd) = self.commands.pop() {
+            self.handle_command(cmd);
+        }
+    }
+
+    /// Whole frames left before `end`, tolerating float error from accumulated block lengths
+    /// so a block never comes up one frame short of a loop end.
+    fn frames_until(&self, end: f64, tps: f64) -> usize {
+        (((end - self.tick) / tps) + 1e-6).floor().max(0.0) as usize
+    }
+
+    /// Wrap at the loop end if we are there, and return the loop end when the next block of
+    /// up to `n` frames runs into it.
+    fn prepare_loop(&mut self, n: usize, tps: f64) -> Option<f64> {
+        if !self.playing {
+            return None;
+        }
+        let (start, end) = self.loop_range?;
+        // A tick already past the end (sought there) plays on; a loop shorter than one frame
+        // could never advance.
+        if end - start < tps || !(self.tick < end || self.reached_loop_end) {
+            return None;
+        }
+        if self.frames_until(end, tps) == 0 {
+            // Subtracting the exact loop length keeps the sub-sample remainder, so loop passes
+            // do not drift against the sample grid.
+            self.jump((self.tick - (end - start)).max(0.0), JumpKind::Wrap);
+        }
+        (self.frames_until(end, tps) <= n).then_some(end)
+    }
+
     /// Render `left.len()` frames of output. Handles any buffer size by splitting into
-    /// `max_block` chunks.
+    /// `max_block` chunks, and at the loop end.
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         let started = std::time::Instant::now();
         let total = left.len().min(right.len());
         let mut done = 0;
         while done < total {
-            let n = (total - done).min(self.max_block);
-            self.process_block(&mut left[done..done + n], &mut right[done..done + n]);
+            self.drain_input();
+            let tps = self.ticks_per_sample();
+            let mut n = (total - done).min(self.max_block);
+            let loop_end = self.prepare_loop(n, tps);
+            if let Some(end) = loop_end {
+                n = self.frames_until(end, tps).max(1);
+            }
+            self.process_block(
+                &mut left[done..done + n],
+                &mut right[done..done + n],
+                tps,
+                loop_end,
+            );
             done += n;
         }
         if total > 0 {
@@ -628,22 +842,20 @@ impl Engine {
         }
     }
 
-    fn process_block(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
-        while let Ok(cmd) = self.commands.pop() {
-            self.handle_command(cmd);
-        }
-        while let Ok((track, message)) = self.midi.pop() {
-            if let Some(t) = self.track_mut(track) {
-                if t.live.len() < t.live.capacity() {
-                    t.live.push(MidiEvent::new(0, message));
-                }
-            }
-        }
+    fn process_block(
+        &mut self,
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+        tps: f64,
+        loop_end: Option<f64>,
+    ) {
         let frames = out_l.len();
         let transport = self.transport();
+        let t1 = self.tick + frames as f64 * tps;
         let time = BlockTime {
             t0: self.tick,
-            ticks_per_sample: ticks_per_sample(self.tempo, self.sample_rate),
+            ticks_per_sample: tps,
+            end: loop_end.map_or(t1, |e| t1.min(e)),
             frames,
             sample_rate: self.sample_rate,
             tempo: self.tempo,
@@ -702,11 +914,21 @@ impl Engine {
         if self.playing {
             self.tick = time.t1();
             self.sample_pos += frames as u64;
+            self.reached_loop_end = loop_end.is_some();
         }
         self.shared.playing.store(self.playing, Ordering::Relaxed);
         self.shared.tick.store(self.tick);
+        self.shared.insert_marker.store(self.insert_marker);
         self.shared.tempo.store(self.tempo);
     }
+}
+
+#[derive(Clone, Copy)]
+enum JumpKind {
+    /// The loop came around: everything in flight keeps its distance to the playhead.
+    Wrap,
+    /// The user moved the playhead: queued launches pick a new launch point.
+    Seek,
 }
 
 /// Does nothing. Used as a placeholder when moving device slots in and out of boxes.

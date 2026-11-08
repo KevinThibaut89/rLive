@@ -14,13 +14,13 @@ use super::icons;
 use super::theme::{self, *};
 use super::widgets::{self, info, rgb};
 use super::{BrowserItem, Detail, UiState};
-use crate::session::{ChainRef, Session};
+use crate::session::{ChainRef, ClipRef, Session};
 use egui::{
     Align2, Color32, Layout, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
 };
 use rlive_core::TrackId;
 use rlive_engine::shared::{NO_SLOT, STOP_QUEUED};
-use rlive_project::{Clip, TrackKind, PALETTE};
+use rlive_project::{ArrangementClip, Clip, TrackKind, PALETTE};
 use std::sync::atomic::Ordering;
 
 const HEADER_H: f32 = 22.0;
@@ -49,19 +49,23 @@ impl Default for SessionLayout {
     }
 }
 
-pub fn duplicate_clip(session: &mut Session, track: TrackId, slot: usize) {
-    let Some(clip) = session.clip(track, slot).cloned() else {
-        return;
-    };
+/// The first empty slot after `slot`, adding a scene if there's none.
+pub fn next_free_slot(session: &mut Session, track: TrackId, slot: usize) -> usize {
     let scenes = session.project.scenes.len();
-    let target = (slot + 1..scenes).find(|s| session.clip(track, *s).is_none());
-    let target = match target {
+    match (slot + 1..scenes).find(|s| session.clip(track, *s).is_none()) {
         Some(t) => t,
         None => {
             session.add_scene();
             session.project.scenes.len() - 1
         }
+    }
+}
+
+pub fn duplicate_clip(session: &mut Session, track: TrackId, slot: usize) {
+    let Some(clip) = session.clip(track, slot).cloned() else {
+        return;
     };
+    let target = next_free_slot(session, track, slot);
     session.set_clip(track, target, Some(clip));
 }
 
@@ -89,7 +93,7 @@ impl Geo {
     }
 }
 
-fn child(ui: &mut egui::Ui, clip: Rect, rect: Rect, layout: Layout) -> egui::Ui {
+pub(super) fn child(ui: &mut egui::Ui, clip: Rect, rect: Rect, layout: Layout) -> egui::Ui {
     let mut c = ui.new_child(UiBuilder::new().max_rect(rect).layout(layout));
     c.set_clip_rect(clip.intersect(ui.clip_rect()));
     c
@@ -360,7 +364,7 @@ fn track_column(
         );
         let resp = cu.allocate_rect(rect, Sense::click_and_drag());
         let p = cu.painter().clone();
-        let is_sel = state.selected_clip == Some((id, slot));
+        let is_sel = state.selected_clip == Some(ClipRef::slot(id, slot));
         let launch = Rect::from_min_size(rect.min, Vec2::new(g.slot_h.min(22.0), rect.height()));
         let over_launch = resp.hover_pos().is_some_and(|pos| launch.contains(pos));
         let is_playing = playing_slot == slot as i32;
@@ -461,7 +465,7 @@ fn track_column(
                     session.stop_track(id);
                 }
             } else {
-                state.selected_clip = Some((id, slot));
+                state.selected_clip = Some(ClipRef::slot(id, slot));
                 state.detail = if clip_info.is_some() {
                     Detail::Clip
                 } else {
@@ -474,7 +478,7 @@ fn track_column(
             if clip_info.is_none() && kind == TrackKind::Midi {
                 let c = Clip::new_midi("MIDI Clip", color, 1, session.project.time_signature);
                 session.set_clip(id, slot, Some(c));
-                state.selected_clip = Some((id, slot));
+                state.selected_clip = Some(ClipRef::slot(id, slot));
                 state.detail = Detail::Clip;
                 state.show_detail = true;
                 state.piano.reset_view = true;
@@ -497,7 +501,7 @@ fn track_column(
                     if !copy {
                         session.set_clip(src.track, src.slot, None);
                     }
-                    state.selected_clip = Some((id, slot));
+                    state.selected_clip = Some(ClipRef::slot(id, slot));
                 }
             }
         }
@@ -685,19 +689,7 @@ fn mixer_strip(
         new_mix.3 = !solo;
         // Like Live: solo is exclusive unless Cmd is held.
         if !solo && !bu.input(|i| i.modifiers.command) {
-            let others: Vec<TrackId> = session
-                .project
-                .tracks
-                .iter()
-                .filter(|t| t.id != id && t.solo)
-                .map(|t| t.id)
-                .collect();
-            for o in others {
-                if let Some(t) = session.project.track_mut(o) {
-                    t.solo = false;
-                }
-                session.sync_mix(o);
-            }
+            clear_other_solos(session, id);
         }
     }
     let r = widgets::icon_button(
@@ -726,6 +718,33 @@ fn mixer_strip(
         }
         session.sync_mix(id);
     }
+}
+
+fn clear_other_solos(session: &mut Session, id: TrackId) {
+    let others: Vec<TrackId> = session
+        .project
+        .tracks
+        .iter()
+        .filter(|t| t.id != id && t.solo)
+        .map(|t| t.id)
+        .collect();
+    for o in others {
+        if let Some(t) = session.project.track_mut(o) {
+            t.solo = false;
+        }
+        session.sync_mix(o);
+    }
+}
+
+/// Live-style solo: exclusive unless `additive`.
+pub(super) fn toggle_solo(session: &mut Session, id: TrackId, solo: bool, additive: bool) {
+    if !solo && !additive {
+        clear_other_solos(session, id);
+    }
+    if let Some(t) = session.project.track_mut(id) {
+        t.solo = !solo;
+    }
+    session.sync_mix(id);
 }
 
 fn master_column(
@@ -1049,9 +1068,9 @@ fn scrollbars(
 }
 
 #[derive(Clone, Copy)]
-struct ClipDrag {
-    track: TrackId,
-    slot: usize,
+pub(super) struct ClipDrag {
+    pub track: TrackId,
+    pub slot: usize,
 }
 
 fn color_picker(ui: &mut egui::Ui) -> Option<[u8; 3]> {
@@ -1081,7 +1100,7 @@ fn color_picker(ui: &mut egui::Ui) -> Option<[u8; 3]> {
     picked
 }
 
-fn track_menu(
+pub(super) fn track_menu(
     ui: &mut egui::Ui,
     session: &mut Session,
     state: &mut UiState,
@@ -1130,7 +1149,7 @@ fn track_menu(
         if state.selected == Some(ChainRef::Track(id)) {
             state.selected = None;
         }
-        if matches!(state.selected_clip, Some((t, _)) if t == id) {
+        if state.selected_clip.is_some_and(|c| c.track() == id) {
             state.selected_clip = None;
         }
         ui.close();
@@ -1155,7 +1174,7 @@ fn clip_menu(
                 .unwrap_or(PALETTE[0]);
             let c = Clip::new_midi("MIDI Clip", color, 1, session.project.time_signature);
             session.set_clip(id, slot, Some(c));
-            state.selected_clip = Some((id, slot));
+            state.selected_clip = Some(ClipRef::slot(id, slot));
             state.detail = Detail::Clip;
             ui.close();
         }
@@ -1177,8 +1196,15 @@ fn clip_menu(
         session.launch_clip(id, slot);
         ui.close();
     }
+    if ui.button("Add to Arrangement at Marker").clicked() {
+        if let Some(c) = session.clip(id, slot).cloned() {
+            let at = session.insert_marker() as u64;
+            session.arr_place(id, ArrangementClip::new(c, at));
+        }
+        ui.close();
+    }
     if ui.button("Edit").clicked() {
-        state.selected_clip = Some((id, slot));
+        state.selected_clip = Some(ClipRef::slot(id, slot));
         state.detail = Detail::Clip;
         state.show_detail = true;
         ui.close();
@@ -1212,14 +1238,14 @@ fn clip_menu(
     ui.separator();
     if ui.button(RichText::new("Delete").color(ARM_RED)).clicked() {
         session.set_clip(id, slot, None);
-        if state.selected_clip == Some((id, slot)) {
+        if state.selected_clip == Some(ClipRef::slot(id, slot)) {
             state.selected_clip = None;
         }
         ui.close();
     }
 }
 
-fn drop_on_track(
+pub(super) fn drop_on_track(
     session: &mut Session,
     state: &mut UiState,
     id: TrackId,
@@ -1251,7 +1277,7 @@ fn drop_on_track(
                         })
                         .unwrap_or(0);
                     session.set_clip(id, slot, Some(c));
-                    state.selected_clip = Some((id, slot));
+                    state.selected_clip = Some(ClipRef::slot(id, slot));
                 }
                 Err(e) => state.status = e,
             }
@@ -1260,7 +1286,12 @@ fn drop_on_track(
     state.selected = Some(ChainRef::Track(id));
 }
 
-fn new_track_zone(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, rect: Rect) {
+pub(super) fn new_track_zone(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    rect: Rect,
+) {
     let zone = ui.allocate_rect(rect, Sense::hover());
     let hovering = zone.dnd_hover_payload::<BrowserItem>().is_some();
     if hovering {

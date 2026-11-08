@@ -2,13 +2,14 @@
 //! (ruler with loop brace, piano keys, note grid, velocity lane) on the right.
 
 use super::theme::{self, *};
+use super::timeline::snap;
 use super::widgets::{self, info, rgb};
 use super::UiState;
-use crate::session::Session;
+use crate::session::{ClipRef, Session};
 use egui::{
     Align2, Color32, CursorIcon, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
 };
-use rlive_core::{MidiMessage, TrackId, PPQ};
+use rlive_core::{MidiMessage, PPQ};
 use rlive_project::{ClipContent, NoteData};
 use std::sync::atomic::Ordering;
 
@@ -38,6 +39,8 @@ pub struct PianoState {
     pub grid: u64,
     pub reset_view: bool,
     pub selected: Vec<usize>,
+    /// Where Paste puts notes: the last clicked grid position.
+    pub insert_tick: Option<u64>,
     pub new_velocity: f32,
     pub scroll: Vec2,
     last_length: u64,
@@ -57,6 +60,7 @@ impl Default for PianoState {
             grid: PPQ / 4,
             reset_view: true,
             selected: Vec::new(),
+            insert_tick: None,
             new_velocity: 0.8,
             scroll: Vec2::ZERO,
             last_length: PPQ / 4,
@@ -74,15 +78,122 @@ impl PianoState {
     }
 }
 
-fn is_black(key: u8) -> bool {
-    matches!(key % 12, 1 | 3 | 6 | 8 | 10)
+/// The MIDI notes of the selected clip, if any.
+fn selected_notes(session: &Session, state: &UiState) -> Option<Vec<NoteData>> {
+    let clip = session.clip_at(state.selected_clip?)?;
+    clip.is_midi().then(|| clip.notes().to_vec())
 }
 
-fn snap(ticks: f64, grid: u64, enabled: bool) -> i64 {
-    if !enabled || grid == 0 {
-        return ticks.round() as i64;
+fn store_notes(session: &mut Session, state: &UiState, notes: Vec<NoteData>) {
+    let Some(cref) = state.selected_clip else {
+        return;
+    };
+    if let Some(n) = session.clip_at_mut(cref).and_then(|c| c.notes_mut()) {
+        *n = notes;
+        session.sync_ref(cref);
     }
-    ((ticks / grid as f64).round() as i64) * grid as i64
+}
+
+/// The selected notes, moved so the earliest starts at tick 0.
+pub fn copy_selection(session: &Session, state: &mut UiState) -> Option<Vec<NoteData>> {
+    let notes = selected_notes(session, state)?;
+    let mut picked: Vec<NoteData> = state
+        .piano
+        .selected
+        .iter()
+        .filter_map(|&i| notes.get(i).cloned())
+        .collect();
+    let first = picked.iter().map(|n| n.start).min()?;
+    let end = picked.iter().map(|n| n.start + n.length).max()?;
+    for n in &mut picked {
+        n.start -= first;
+    }
+    // A plain Paste lands right after what was copied.
+    state.piano.insert_tick = Some(end);
+    Some(picked)
+}
+
+pub fn delete_selected(session: &mut Session, state: &mut UiState) {
+    let Some(notes) = selected_notes(session, state) else {
+        return;
+    };
+    let sel = std::mem::take(&mut state.piano.selected);
+    let kept = notes
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !sel.contains(i))
+        .map(|(_, n)| n)
+        .collect();
+    store_notes(session, state, kept);
+}
+
+pub fn select_all(session: &Session, state: &mut UiState) {
+    if let Some(notes) = selected_notes(session, state) {
+        state.piano.selected = (0..notes.len()).collect();
+    }
+}
+
+/// Adds `notes` (starting at tick 0) at `at`, dropping any past the clip end, and selects them.
+fn insert_notes(session: &mut Session, state: &mut UiState, notes: &[NoteData], at: u64) {
+    let Some(cref) = state.selected_clip else {
+        return;
+    };
+    let Some(length) = session.clip_at(cref).map(|c| c.length) else {
+        return;
+    };
+    let Some(mut all) = selected_notes(session, state) else {
+        return;
+    };
+    let first_new = all.len();
+    all.extend(
+        notes
+            .iter()
+            .map(|n| NoteData {
+                start: n.start + at,
+                ..n.clone()
+            })
+            .filter(|n| n.start < length),
+    );
+    state.piano.selected = (first_new..all.len()).collect();
+    state.piano.insert_tick = notes.iter().map(|n| at + n.start + n.length).max();
+    store_notes(session, state, all);
+}
+
+pub fn paste_notes(session: &mut Session, state: &mut UiState, notes: &[NoteData]) {
+    let at = state.piano.insert_tick.unwrap_or(0);
+    insert_notes(session, state, notes, at);
+}
+
+pub fn duplicate_selection(session: &mut Session, state: &mut UiState) {
+    if let Some(copied) = copy_selection(session, state) {
+        let at = state.piano.insert_tick.unwrap_or(0);
+        insert_notes(session, state, &copied, at);
+    }
+}
+
+/// Where the song position is inside a timeline clip, while it's playing through it.
+fn arrangement_position(session: &Session, cref: ClipRef) -> Option<f64> {
+    let ClipRef::Arr { track, id } = cref else {
+        return None;
+    };
+    if !session.is_playing() {
+        return None;
+    }
+    let c = session.project.track(track)?.arr_clip(id)?;
+    let tick = session.engine.shared.tick.load();
+    if tick < c.start as f64 || tick >= c.end() as f64 {
+        return None;
+    }
+    let local = c.offset as f64 + tick - c.start as f64;
+    Some(if c.clip.looped && c.clip.length > 0 {
+        local % c.clip.length as f64
+    } else {
+        local
+    })
+}
+
+fn is_black(key: u8) -> bool {
+    matches!(key % 12, 1 | 3 | 6 | 8 | 10)
 }
 
 fn grid_label(g: u64) -> String {
@@ -98,10 +209,10 @@ fn grid_label(g: u64) -> String {
 }
 
 pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
-    let Some((track, slot)) = state.selected_clip else {
+    let Some(cref) = state.selected_clip else {
         return;
     };
-    let Some(clip) = session.clip(track, slot).cloned() else {
+    let Some(clip) = session.clip_at(cref).cloned() else {
         state.selected_clip = None;
         return;
     };
@@ -119,31 +230,25 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         [boxr.right_top(), boxr.right_bottom()],
         Stroke::new(1.0, SEPARATOR),
     );
-    clip_box(&mut bu, session, state, track, slot);
+    clip_box(&mut bu, session, state, cref);
 
     let editor = Rect::from_min_max(Pos2::new(boxr.right() + 1.0, full.top()), full.max);
     match &clip.content {
         ClipContent::Audio { path, gain_db } => {
             let mut eu = ui.new_child(UiBuilder::new().max_rect(editor.shrink(8.0)));
-            audio_clip_panel(&mut eu, session, track, slot, path, *gain_db);
+            audio_clip_panel(&mut eu, session, cref, path, *gain_db);
         }
-        ClipContent::Midi { .. } => note_editor(ui, editor, session, state, track, slot),
+        ClipContent::Midi { .. } => note_editor(ui, editor, session, state, cref),
     }
 }
 
-fn clip_box(
-    ui: &mut egui::Ui,
-    session: &mut Session,
-    state: &mut UiState,
-    track: TrackId,
-    slot: usize,
-) {
+fn clip_box(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, cref: ClipRef) {
     let sig = session.project.time_signature;
     let bar_ticks = sig.ticks_per_bar();
     let mut changed = false;
     widgets::section_label(ui, "CLIP");
-    let is_midi = session.clip(track, slot).is_some_and(|c| c.is_midi());
-    if let Some(c) = session.clip_mut(track, slot) {
+    let is_midi = session.clip_at(cref).is_some_and(|c| c.is_midi());
+    if let Some(c) = session.clip_at_mut(cref) {
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(Vec2::new(12.0, 18.0), Sense::hover());
             ui.painter()
@@ -223,7 +328,7 @@ fn clip_box(
         ui.horizontal_wrapped(|ui| {
             let r = ui.button("Duplicate Loop");
             if info(r, "Double the clip length and copy its notes").clicked() {
-                if let Some(c) = session.clip_mut(track, slot) {
+                if let Some(c) = session.clip_at_mut(cref) {
                     let len = c.length;
                     if let Some(notes) = c.notes_mut() {
                         let copies: Vec<NoteData> = notes
@@ -243,7 +348,7 @@ fn clip_box(
             if info(r, "Snap selected (or all) notes to the grid").clicked() {
                 let grid = state.piano.grid;
                 let sel = state.piano.selected.clone();
-                if let Some(notes) = session.clip_mut(track, slot).and_then(|c| c.notes_mut()) {
+                if let Some(notes) = session.clip_at_mut(cref).and_then(|c| c.notes_mut()) {
                     for (i, n) in notes.iter_mut().enumerate() {
                         if sel.is_empty() || sel.contains(&i) {
                             n.start = snap(n.start as f64, grid, true).max(0) as u64;
@@ -255,15 +360,14 @@ fn clip_box(
         });
     }
     if changed {
-        session.sync_clip(track, slot);
+        session.sync_ref(cref);
     }
 }
 
 fn audio_clip_panel(
     ui: &mut egui::Ui,
     session: &mut Session,
-    track: TrackId,
-    slot: usize,
+    cref: ClipRef,
     path: &std::path::Path,
     gain_db: f32,
 ) {
@@ -276,12 +380,12 @@ fn audio_clip_panel(
             .add(egui::Slider::new(&mut g, -36.0..=12.0).suffix(" dB"))
             .changed()
         {
-            if let Some(c) = session.clip_mut(track, slot) {
+            if let Some(c) = session.clip_at_mut(cref) {
                 if let ClipContent::Audio { gain_db, .. } = &mut c.content {
                     *gain_db = g;
                 }
             }
-            session.sync_clip(track, slot);
+            session.sync_ref(cref);
         }
     });
     if let Ok(sample) = session.samples.get(path) {
@@ -292,22 +396,24 @@ fn audio_clip_panel(
         let n = sample.len().max(1);
         let cols = rect.width() as usize;
         let color = session
-            .clip(track, slot)
+            .clip_at(cref)
             .map(|c| rgb(c.color))
             .unwrap_or(ACCENT);
-        for x in 0..cols {
-            let a = x * n / cols;
-            let b = ((x + 1) * n / cols).max(a + 1).min(n);
-            let peak = sample.left[a..b].iter().fold(0f32, |m, s| m.max(s.abs()));
-            let h = peak.min(1.0) * rect.height() * 0.48;
-            let cx = rect.left() + x as f32;
-            p.line_segment(
-                [
-                    Pos2::new(cx, rect.center().y - h),
-                    Pos2::new(cx, rect.center().y + h),
-                ],
-                Stroke::new(1.0, color),
-            );
+        if let Some((peaks, _)) = session.samples.peaks(path) {
+            for x in 0..cols {
+                let a = x * n / cols;
+                let b = ((x + 1) * n / cols).max(a + 1).min(n);
+                let (lo, hi) = peaks.min_max(a, b);
+                let h = hi.abs().max(lo.abs()).min(1.0) * rect.height() * 0.48;
+                let cx = rect.left() + x as f32;
+                p.line_segment(
+                    [
+                        Pos2::new(cx, rect.center().y - h),
+                        Pos2::new(cx, rect.center().y + h),
+                    ],
+                    Stroke::new(1.0, color),
+                );
+            }
         }
         ui.label(
             RichText::new(format!(
@@ -326,20 +432,24 @@ fn note_editor(
     area: Rect,
     session: &mut Session,
     state: &mut UiState,
-    track: TrackId,
-    slot: usize,
+    cref: ClipRef,
 ) {
-    let Some(clip) = session.clip(track, slot).cloned() else {
+    let Some(clip) = session.clip_at(cref).cloned() else {
         return;
     };
     let notes = clip.notes().to_vec();
     let sig = session.project.time_signature;
     let color = rgb(clip.color);
+    let track = cref.track();
     let shared = session.track_shared.get(&track).cloned();
-    let playing = shared
-        .as_ref()
-        .is_some_and(|s| s.playing_slot.load(Ordering::Relaxed) == slot as i32);
-    let playhead = shared.as_ref().map_or(0.0, |s| s.clip_position.load());
+    let arr_position = arrangement_position(session, cref);
+    let playing = arr_position.is_some()
+        || shared.as_ref().is_some_and(|s| {
+            cref.as_slot()
+                .is_some_and(|(_, slot)| s.playing_slot.load(Ordering::Relaxed) == slot as i32)
+        });
+    let playhead =
+        arr_position.unwrap_or_else(|| shared.as_ref().map_or(0.0, |s| s.clip_position.load()));
     let now = ui.input(|i| i.time);
 
     // ---- regions
@@ -414,31 +524,8 @@ fn note_editor(
         )
     };
 
-    // ---- keyboard shortcuts
-    let typing = ui.ctx().egui_wants_keyboard_input();
-    let (del, select_all) = ui.input(|i| {
-        (
-            i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
-            i.modifiers.command && i.key_pressed(egui::Key::A),
-        )
-    });
     let mut new_notes: Option<Vec<NoteData>> = None;
     let mut new_length: Option<u64> = None;
-    if !typing && del && !ps.selected.is_empty() {
-        let sel = std::mem::take(&mut ps.selected);
-        new_notes = Some(
-            notes
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !sel.contains(i))
-                .map(|(_, n)| n.clone())
-                .collect(),
-        );
-    }
-    if !typing && select_all && ui.rect_contains_pointer(area) {
-        ps.selected = (0..notes.len()).collect();
-    }
-
     let mut preview_on: Option<u8> = None;
     let mut preview_off = false;
     let mut from_keys = false;
@@ -610,7 +697,7 @@ fn note_editor(
         }
         if hr.drag_stopped() {
             ps.drag = None;
-            session.sync_clip(track, slot);
+            session.sync_ref(cref);
         }
         info(hr, "Loop end — drag to change the clip length");
     }
@@ -744,7 +831,11 @@ fn note_editor(
                     }
                 }
                 Some((i, _)) => ps.selected = vec![i],
-                None => ps.selected.clear(),
+                None => {
+                    ps.selected.clear();
+                    let t = pos_to_tick_key(pos).0;
+                    ps.insert_tick = Some(snap(t, ps.grid, !no_snap).max(0) as u64);
+                }
             }
         }
     }
@@ -798,13 +889,13 @@ fn note_editor(
                     }
                 }
             }
-            if let Some(nm) = session.clip_mut(track, slot).and_then(|c| c.notes_mut()) {
+            if let Some(nm) = session.clip_at_mut(cref).and_then(|c| c.notes_mut()) {
                 *nm = v;
             }
         }
     }
     if resp.drag_stopped() && ps.drag.take().is_some() {
-        session.sync_clip(track, slot);
+        session.sync_ref(cref);
         preview_off = true;
     }
     info(resp, "Double-click to add/remove notes · drag to move (Alt = no snap) · drag the right edge to resize · Cmd+wheel zooms");
@@ -819,7 +910,7 @@ fn note_editor(
         );
         let inner = vel.shrink2(Vec2::new(0.0, 4.0));
         let live: Vec<NoteData> = session
-            .clip(track, slot)
+            .clip_at(cref)
             .map(|c| c.notes().to_vec())
             .unwrap_or_default();
         for (i, n) in live.iter().enumerate() {
@@ -873,13 +964,13 @@ fn note_editor(
                         n.velocity = (orig.velocity + dv).clamp(0.02, 1.0);
                     }
                 }
-                if let Some(nm) = session.clip_mut(track, slot).and_then(|c| c.notes_mut()) {
+                if let Some(nm) = session.clip_at_mut(cref).and_then(|c| c.notes_mut()) {
                     *nm = v;
                 }
             }
         }
         if vr.drag_stopped() && ps.drag.take().is_some() {
-            session.sync_clip(track, slot);
+            session.sync_ref(cref);
         }
         info(
             vr,
@@ -889,13 +980,13 @@ fn note_editor(
 
     // ================= apply edits
     if let Some(v) = new_notes {
-        if let Some(n) = session.clip_mut(track, slot).and_then(|c| c.notes_mut()) {
+        if let Some(n) = session.clip_at_mut(cref).and_then(|c| c.notes_mut()) {
             *n = v;
         }
-        session.sync_clip(track, slot);
+        session.sync_ref(cref);
     }
     if let Some(len) = new_length {
-        if let Some(c) = session.clip_mut(track, slot) {
+        if let Some(c) = session.clip_at_mut(cref) {
             c.length = len;
             session.dirty = true;
         }

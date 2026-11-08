@@ -116,7 +116,7 @@ crates). On macOS it also instantiates Apple's built-in AUDelay. CI runs on macO
 
 This is an early but playable foundation. Not implemented yet:
 
-- Arrangement (timeline) view, audio/MIDI recording, automation lanes
+- Audio recording, automation lanes, undo for knob and plugin parameter moves
 - Time-stretching (audio clips play at original speed)
 - Plugin delay compensation, sidechains, groups/return tracks, Bitwig-style modulators
 - VST3 MIDI CC / pitch-bend mapping (`IMidiMapping`), AUv3-only view controllers

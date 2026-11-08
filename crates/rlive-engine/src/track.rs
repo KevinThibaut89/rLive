@@ -1,7 +1,8 @@
 //! Tracks, device chains and the mixer stage.
 #![allow(clippy::vec_box)]
 
-use crate::clip::{BlockTime, ClipData, ClipPlayer};
+use crate::clip::{BlockTime, ClipData, ClipPlayer, Pending};
+use crate::lane::{ArrangementLane, LanePlayer};
 use crate::shared::{PeakMeter, TrackShared, NO_SLOT};
 use rlive_core::{
     db_to_gain, AudioBuffer, DeviceId, MidiEvent, ParamOutQueue, ProcessContext, Processor,
@@ -122,6 +123,9 @@ pub struct TrackNode {
     pub shared: Arc<TrackShared>,
 
     pub(crate) player: ClipPlayer,
+    pub(crate) lane: LanePlayer,
+    /// Playing the lane. A launch turns this off until `BackToArrangement`.
+    pub(crate) follow: bool,
     pub(crate) left: Vec<f32>,
     pub(crate) right: Vec<f32>,
     pub(crate) events: Vec<MidiEvent>,
@@ -140,6 +144,8 @@ impl TrackNode {
             mix: MixSettings::default(),
             shared: Arc::new(TrackShared::default()),
             player: ClipPlayer::new(),
+            lane: LanePlayer::new(Arc::new(ArrangementLane::default())),
+            follow: true,
             left: vec![0.0; max_block],
             right: vec![0.0; max_block],
             events: Vec::with_capacity(MAX_EVENTS),
@@ -164,6 +170,11 @@ impl TrackNode {
         }
     }
 
+    /// Set the Arrangement lane on the UI thread before the track is sent to the engine.
+    pub fn set_lane(&mut self, lane: Arc<ArrangementLane>) {
+        self.lane = LanePlayer::new(lane);
+    }
+
     pub(crate) fn render(
         &mut self,
         time: BlockTime,
@@ -184,6 +195,21 @@ impl TrackNode {
         }
 
         if transport.playing {
+            if self.follow {
+                // A launch due in this block ends the lane at its launch point.
+                let launch_at = match self.player.pending {
+                    Some(Pending::Launch { at, .. }) if at < time.t1() => Some(at.max(time.t0)),
+                    _ => None,
+                };
+                let until = launch_at.unwrap_or(time.t1());
+                self.lane
+                    .render(time, time.t0, until, &mut self.events, left, right);
+                if let Some(at) = launch_at {
+                    self.lane
+                        .release_and_resync(time.event_offset(at), &mut self.events);
+                    self.follow = false;
+                }
+            }
             self.player
                 .render(time, &mut self.events, left, right, retire, &self.slots);
         }
@@ -218,6 +244,9 @@ impl TrackNode {
             std::sync::atomic::Ordering::Relaxed,
         );
         shared.clip_position.store(self.player.position(time.t1()));
+        shared
+            .follow_arrangement
+            .store(self.follow, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Apply volume/pan (mute/solo resolved by the caller) and update meters.

@@ -1,5 +1,10 @@
 //! The rLive project model: the UI thread's source of truth, saved as RON (`.rlive`).
 
+mod arrangement;
+pub mod history;
+
+pub use arrangement::{Arrangement, ArrangementClip};
+
 use rlive_core::{ids::reserve_id, DeviceId, PluginFormat, Quantize, TimeSignature, TrackId, PPQ};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -166,6 +171,9 @@ pub struct Track {
     pub devices: Vec<Device>,
     /// One entry per scene.
     pub clips: Vec<Option<Clip>>,
+    /// Clips on the timeline, sorted by start and not overlapping.
+    #[serde(default)]
+    pub arrangement: Vec<ArrangementClip>,
 }
 
 impl Track {
@@ -182,6 +190,7 @@ impl Track {
             arm: false,
             devices: Vec::new(),
             clips: vec![None; scenes],
+            arrangement: Vec::new(),
         }
     }
 
@@ -215,6 +224,8 @@ pub struct Project {
     pub scenes: Vec<Scene>,
     pub tracks: Vec<Track>,
     pub master: Master,
+    #[serde(default)]
+    pub arrangement: Arrangement,
 }
 
 impl Default for Project {
@@ -253,6 +264,7 @@ impl Project {
                 volume_db: 0.0,
                 devices: Vec::new(),
             },
+            arrangement: Arrangement::default(),
         }
     }
 
@@ -306,6 +318,7 @@ impl Project {
         let n = self.scenes.len();
         for t in self.tracks.iter_mut() {
             t.clips.resize(n, None);
+            t.arrangement.sort_by_key(|c| c.start);
         }
     }
 
@@ -331,6 +344,9 @@ impl Project {
             reserve_id(t.id.0);
             for d in &t.devices {
                 reserve_id(d.id.0);
+            }
+            for c in &t.arrangement {
+                reserve_id(c.id.0);
             }
         }
         for d in &p.master.devices {
