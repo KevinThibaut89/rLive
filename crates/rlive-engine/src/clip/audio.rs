@@ -1,8 +1,10 @@
 //! Audio clip rendering.
 
 use super::data::{AudioClip, WarpedClip};
+use super::envelopes::ClipEnvelopes;
 use super::BlockTime;
 use rlive_core::warp::{StretchBank, StretchKind, StretchSpan, WarpMap, WarpMode};
+use rlive_core::PPQ;
 
 /// Length of the anti-click ramps applied to audio at discontinuities, in frames.
 pub(crate) const FADE_FRAMES: u32 = 64;
@@ -29,6 +31,9 @@ pub(crate) struct AudioCursor {
     needs_seek: bool,
     /// The voice has rendered for this cursor, so it may be holding sound worth fading out.
     in_progress: bool,
+    /// Where the gain envelope has got to, smoothed so a step in it doesn't click. `None` until
+    /// the clip starts, so it doesn't fade in from nothing.
+    env_gain: Option<f32>,
 }
 
 impl AudioCursor {
@@ -41,6 +46,7 @@ impl AudioCursor {
             voice,
             needs_seek: true,
             in_progress: false,
+            env_gain: None,
         }
     }
 
@@ -49,8 +55,25 @@ impl AudioCursor {
         self.next_local = f64::NEG_INFINITY;
         self.region_end = region_end;
         self.in_progress = false;
+        self.env_gain = None;
+    }
+
+    /// The share of the Clip Gain the envelope leaves at `local`. A step takes about a millisecond,
+    /// which is what lets a drawn envelope punch holes in a sample without clicks.
+    fn envelope_gain(&mut self, env: &ClipEnvelopes, local: f64, sample_rate: f64) -> f32 {
+        let Some(curve) = &env.gain else {
+            return 1.0;
+        };
+        let target = curve.at(local).clamp(0.0, 1.0) as f32;
+        let coeff = 1.0 - (-1.0 / (GAIN_SMOOTH_SECONDS * sample_rate as f32)).exp();
+        let gain = self.env_gain.get_or_insert(target);
+        *gain += (target - *gain) * coeff;
+        *gain
     }
 }
+
+/// How quickly the gain envelope follows a sudden change.
+const GAIN_SMOOTH_SECONDS: f32 = 0.001;
 
 /// Render `[a, seg_end)` of an audio clip through its stretcher. `warp` is `None` for warp off.
 ///
@@ -60,9 +83,10 @@ impl AudioCursor {
 /// moment. The rest of the warp modes still read at native speed, as they did before those
 /// stretchers existed.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_audio(
+pub(super) fn render_audio_env(
     clip: &AudioClip,
     warp: Option<&WarpedClip>,
+    env: Option<&ClipEnvelopes>,
     origin: f64,
     a: f64,
     seg_end: f64,
@@ -74,7 +98,9 @@ pub(super) fn render_audio(
 ) {
     if let Some((w, map)) = warp.and_then(|w| w.map.as_ref().map(|m| (w, m))) {
         if w.mode.kind().follows_timeline() {
-            render_following(clip, w, map, origin, a, seg_end, time, audio, l, r, stretch);
+            render_following(
+                clip, w, map, env, origin, a, seg_end, time, audio, l, r, stretch,
+            );
             return;
         }
     }
@@ -158,6 +184,9 @@ pub(super) fn render_audio(
                 audio.fade_in -= 1;
             }
             let local = local_a + (f - from) as f64 * time.ticks_per_sample;
+            if let Some(env) = env {
+                gain *= audio.envelope_gain(env, local, time.sample_rate);
+            }
             let frames_left = (fade_end - local) / time.ticks_per_sample;
             if frames_left < FADE_FRAMES as f64 {
                 gain *= (frames_left / FADE_FRAMES as f64).max(0.0) as f32;
@@ -170,9 +199,15 @@ pub(super) fn render_audio(
     }
 }
 
-/// While the tempo is ramping, a span is at most this long, so the read position stays close to
-/// the curve between its exact ends.
+/// While the tempo is ramping, or an envelope is moving the read, a span is at most this long, so
+/// the read position stays close to the curve between its exact ends.
 const RAMP_CHUNK: usize = 32;
+/// How far a Sample Offset envelope reaches either way, in sixteenths (manual p. 536).
+const SAMPLE_OFFSET_REACH: f64 = 8.0;
+/// The most the Transposition envelope and the Transpose control add up to (manual p. 536).
+const TRANSPOSE_REACH: f64 = 48.0;
+/// A sixteenth note in ticks.
+const SIXTEENTH: f64 = PPQ as f64 / 4.0;
 /// How many source frames apart the read head and the timeline can be and still count as one
 /// continuous reading.
 const CONTINUOUS_FRAMES: f64 = 2.0;
@@ -188,6 +223,7 @@ fn render_following(
     clip: &AudioClip,
     warp: &WarpedClip,
     map: &WarpMap,
+    env: Option<&ClipEnvelopes>,
     origin: f64,
     a: f64,
     seg_end: f64,
@@ -228,6 +264,7 @@ fn render_following(
         }
     };
     let markers = map.markers();
+    let is_beats = warp.mode.kind() == StretchKind::Beats;
     let mut f = from;
     while f < to {
         let local = local_at(f);
@@ -237,40 +274,66 @@ fn render_following(
         } else {
             (local.max(0.0), 0.0)
         };
-        let want = map.tick_to_src(position);
+        // The Sample Offset envelope moves where in the clip this stretch reads.
+        let (read, shift) = match env
+            .and_then(|e| e.sample_offset.as_ref())
+            .filter(|_| is_beats)
+        {
+            Some(curve) => {
+                let sixteenths = curve
+                    .at(local)
+                    .clamp(-SAMPLE_OFFSET_REACH, SAMPLE_OFFSET_REACH);
+                let moved = position + sixteenths * SIXTEENTH;
+                let read = if clip.looped {
+                    moved.rem_euclid(len)
+                } else {
+                    moved.max(0.0)
+                };
+                (read, read - position)
+            }
+            None => (position, 0.0),
+        };
+        let transpose = match env.and_then(|e| e.transpose.as_ref()) {
+            Some(curve) => (f64::from(warp.transpose) + curve.at(local))
+                .clamp(-TRANSPOSE_REACH, TRANSPOSE_REACH) as f32,
+            None => warp.transpose,
+        };
+        let want = map.tick_to_src(read);
         if audio.needs_seek || jumped && f == from || (want - audio.src).abs() > CONTINUOUS_FRAMES {
             voice.seek(want);
             audio.needs_seek = false;
         }
 
-        // How far this stretch can run at one rate.
-        let next_marker = markers.partition_point(|m| m.tick <= position);
+        // How far this stretch can run at one rate, in the clip's time.
+        let next_marker = markers.partition_point(|m| m.tick <= read);
         let mut boundary = markers.get(next_marker).map_or(f64::INFINITY, |m| m.tick);
         if clip.looped && boundary > len {
             boundary = len;
         }
-        let limit = if time.ramp != 0.0 {
+        // Something an envelope moves is held still for this stretch, so it can't be a long one.
+        let moving = env.is_some_and(ClipEnvelopes::moves_the_read);
+        let limit = if time.ramp != 0.0 || moving {
             (f + RAMP_CHUNK).min(to)
         } else {
             to
         };
         let end = if boundary.is_finite() {
             // The first frame that is at or past the boundary.
-            let ticks = boundary + cycle_start + origin - time.t0;
+            let ticks = boundary - shift + cycle_start + origin - time.t0;
             let frame = time.run().frames_to(ticks).ceil();
             (frame.max(f as f64 + 1.0) as usize).min(limit)
         } else {
             limit
         };
         let count = end - f;
-        let end_position = local_at(end) - cycle_start;
+        let end_position = local_at(end) - cycle_start + shift;
         let src_end = map.tick_to_src(end_position);
         voice.render(
             sample,
             StretchSpan {
                 src_start: want,
                 src_end,
-                transpose: warp.transpose,
+                transpose,
                 mode: warp.mode,
                 slices: &warp.slices,
             },
@@ -284,7 +347,11 @@ fn render_following(
                 gain *= 1.0 - audio.fade_in as f32 / FADE_FRAMES as f32;
                 audio.fade_in -= 1;
             }
-            let frames_left = (fade_end - (local_a + (i - from) as f64 * tps)) / tps;
+            let at = local_a + (i - from) as f64 * tps;
+            if let Some(env) = env {
+                gain *= audio.envelope_gain(env, at, time.sample_rate);
+            }
+            let frames_left = (fade_end - at) / tps;
             if frames_left < FADE_FRAMES as f64 {
                 gain *= (frames_left / FADE_FRAMES as f64).max(0.0) as f32;
             }
@@ -295,6 +362,26 @@ fn render_following(
         f += count;
     }
     audio.in_progress = true;
+}
+
+/// [`render_audio_env`] for a clip with no envelopes.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_audio(
+    clip: &AudioClip,
+    warp: Option<&WarpedClip>,
+    origin: f64,
+    a: f64,
+    seg_end: f64,
+    time: BlockTime,
+    audio: &mut AudioCursor,
+    l: &mut [f32],
+    r: &mut [f32],
+    stretch: &mut StretchBank,
+) {
+    render_audio_env(
+        clip, warp, None, origin, a, seg_end, time, audio, l, r, stretch,
+    );
 }
 
 #[cfg(test)]

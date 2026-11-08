@@ -12,6 +12,9 @@ pub enum RecordCmd {
     SetRecording(bool),
     /// Automation Arm: while recording, parameter gestures are recorded as automation.
     SetAutomationArm(bool),
+    /// Whether gestures on this track record into its playing Session clip (Automation Arm still
+    /// applies). Turning it off ends every gesture in progress on the track.
+    SetSessionAutomation { track: TrackId, on: bool },
 
     /// Live MIDI (keyboard input) for a track. Never recorded, e.g. piano-roll previews.
     Midi {
@@ -55,6 +58,14 @@ impl Engine {
             }
             C::SetRecording(false) => self.finish_recording(),
             C::SetAutomationArm(on) => self.automation_arm = on,
+            C::SetSessionAutomation { track, on } => {
+                if let Some(t) = self.track_mut(track) {
+                    t.session_automation = on;
+                    if !on {
+                        t.bus.release_all_touches();
+                    }
+                }
+            }
             C::Midi { track, message } => {
                 if let Some(t) = self.track_mut(track) {
                     if t.live.len() < t.live.capacity() {

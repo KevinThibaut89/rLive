@@ -866,6 +866,15 @@ fn context_menu(
     let ticks_per_bar = session.project.time_signature.ticks_per_bar();
     let set_bpm = session.project.tempo;
     resp.context_menu(|ui| {
+        let mut auto_reset = state.midi_auto_reset;
+        if ui
+            .checkbox(&mut auto_reset, "MIDI Envelope Auto-Reset")
+            .changed()
+        {
+            state.toggle_midi_auto_reset = true;
+            ui.close();
+        }
+        ui.separator();
         let at = state.sample.menu_at.or(state.sample.insert).unwrap_or(0.0);
         let selected_seconds = state.sample.selected_marker.and_then(|t| {
             view.warp

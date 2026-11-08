@@ -17,6 +17,7 @@ super::domain! {
         RescanPlugins,
         ToggleDrawMode,
         ToggleLockEnvelopes,
+        ToggleMidiEnvelopeAutoReset,
     }
 }
 
@@ -36,6 +37,10 @@ pub const MENU: &[Entry] = &[
     ),
     Item("Draw Mode", M::Options(Options::ToggleDrawMode)),
     Item("Lock Envelopes", M::Options(Options::ToggleLockEnvelopes)),
+    Item(
+        "MIDI Envelope Auto-Reset",
+        M::Options(Options::ToggleMidiEnvelopeAutoReset),
+    ),
     Item("Rescan Plugins", M::Options(Options::RescanPlugins)),
 ];
 
@@ -46,6 +51,10 @@ const MIN_VELOCITY: f32 = 1.0 / 127.0;
 impl RliveApp {
     pub(super) fn options_state(&self, s: &mut MenuState) {
         s.check(M::Options(Options::ToggleDrawMode), self.ui.arr.auto.draw);
+        s.check(
+            M::Options(Options::ToggleMidiEnvelopeAutoReset),
+            self.settings.midi_envelope_auto_reset,
+        );
         s.check(
             M::Options(Options::ToggleLockEnvelopes),
             self.session.project.arrangement.lock_envelopes,
@@ -95,6 +104,13 @@ impl RliveApp {
                 let on = !self.session.project.arrangement.lock_envelopes;
                 return self.session.set_lock_envelopes(on);
             }
+            Options::ToggleMidiEnvelopeAutoReset => {
+                let on = !self.settings.midi_envelope_auto_reset;
+                self.settings.midi_envelope_auto_reset = on;
+                self.settings.save();
+                self.session.send_midi_envelope_auto_reset(on);
+                return;
+            }
             _ => {}
         }
         let ui = &mut self.ui;
@@ -111,7 +127,8 @@ impl RliveApp {
             Options::ToggleSoloInPlace
             | Options::ToggleDelayCompensation
             | Options::ToggleReducedLatency
-            | Options::ToggleLockEnvelopes => {}
+            | Options::ToggleLockEnvelopes
+            | Options::ToggleMidiEnvelopeAutoReset => {}
         }
     }
 }

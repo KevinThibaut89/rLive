@@ -2,6 +2,7 @@
 
 use super::audio::{AudioCursor, SESSION_VOICE};
 use super::data::ClipData;
+use super::envelopes::enter_clip;
 use super::midi::Voices;
 use super::{render_range, BlockTime};
 use rlive_core::warp::StretchBank;
@@ -46,6 +47,8 @@ pub(crate) struct ClipPlayer {
     /// The clip starts from wherever that puts it the moment it does.
     pub late: Option<(usize, f64)>,
     voices: Voices,
+    /// MIDI Envelope Auto-Reset: each new clip sets controllers back first.
+    pub(crate) auto_reset: bool,
 }
 
 impl ClipPlayer {
@@ -56,6 +59,7 @@ impl ClipPlayer {
             hold_for_arrival: false,
             late: None,
             voices: Voices::new(NoteSpace::Session),
+            auto_reset: false,
         }
     }
 
@@ -92,6 +96,7 @@ impl ClipPlayer {
                 self.late = None;
                 if let Pending::Launch { slot, .. } = p {
                     if let Some(Some(clip)) = slots.get(slot) {
+                        enter_clip(clip, 0.0, off, self.auto_reset, events);
                         self.playing = Some(Playing {
                             slot,
                             clip: clip.clone(),

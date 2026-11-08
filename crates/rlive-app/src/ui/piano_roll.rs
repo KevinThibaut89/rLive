@@ -1,12 +1,13 @@
 //! Clip view, styled after Live: a "Clip" properties box on the left and the note editor
 //! (ruler with loop brace, piano keys, note grid, velocity lane) on the right.
 
+use super::clip_envelopes;
 use super::keymap::{self, Platform};
 use super::sample_editor;
 use super::theme::{self, *};
 use super::timeline::snap;
 use super::widgets::{self, info, rgb};
-use super::UiState;
+use super::{BrowserItem, UiState};
 use crate::session::{ClipRef, Session};
 use egui::{
     Align2, Color32, CursorIcon, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
@@ -262,12 +263,35 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     clip_box(&mut bu, session, state, cref);
 
     let editor = Rect::from_min_max(Pos2::new(boxr.right() + 1.0, full.top()), full.max);
-    match &clip.content {
-        ClipContent::Audio { file, .. } => {
-            let mut eu = ui.new_child(UiBuilder::new().max_rect(editor.shrink(8.0)));
-            sample_editor::show(&mut eu, session, state, cref, &file.path);
+    let tabs = Rect::from_min_size(
+        editor.min + Vec2::new(8.0, 3.0),
+        Vec2::new(editor.width() - 16.0, 17.0),
+    );
+    clip_envelopes::tab_row(ui, tabs, clip.is_midi(), &mut state.env);
+    let body = Rect::from_min_max(Pos2::new(editor.left(), tabs.bottom() + 2.0), editor.max);
+    if state.env.open {
+        clip_envelopes::show(ui, session, state, cref, body);
+    } else {
+        match &clip.content {
+            ClipContent::Audio { file, .. } => {
+                let mut eu = ui.new_child(UiBuilder::new().max_rect(body.shrink(8.0)));
+                sample_editor::show(&mut eu, session, state, cref, &file.path);
+            }
+            ClipContent::Midi { .. } => note_editor(ui, body, session, state, cref),
         }
-        ClipContent::Midi { .. } => note_editor(ui, editor, session, state, cref),
+    }
+    drop_sample_on_clip(ui, session, cref, full);
+}
+
+/// Dropping a sample onto the Clip View puts it in the clip, keeping every clip setting and the
+/// envelopes (manual p. 537).
+fn drop_sample_on_clip(ui: &mut egui::Ui, session: &mut Session, cref: ClipRef, area: Rect) {
+    let id = ui.scope_id().with("clip_view_drop");
+    let resp = ui.interact(area, id, Sense::hover());
+    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+        if let BrowserItem::Sample(path) = &*item {
+            session.replace_clip_sample(cref, path);
+        }
     }
 }
 

@@ -2,6 +2,7 @@
 
 mod arrangement;
 mod clip;
+pub mod clip_envelope;
 mod defaults;
 mod device;
 mod envelope;

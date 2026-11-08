@@ -1,5 +1,6 @@
 //! The clip content the engine plays.
 
+use super::envelopes::{ClipEnvelopes, EnvelopedClip};
 use rlive_core::warp::{WarpMap, WarpMode};
 use rlive_core::{SampleBuffer, ScaleInfo};
 use std::sync::Arc;
@@ -122,31 +123,52 @@ pub enum ClipData {
     Midi(MidiClip),
     Audio(AudioClip),
     Warped(WarpedClip),
+    /// Any of the above, with envelopes on its own content.
+    Enveloped(Box<EnvelopedClip>),
 }
 
 impl ClipData {
-    pub fn length(&self) -> u64 {
+    /// What the clip plays, envelopes or no envelopes.
+    pub fn content(&self) -> &ClipData {
         match self {
+            ClipData::Enveloped(c) => &c.clip,
+            _ => self,
+        }
+    }
+
+    /// The envelopes on the clip's own content.
+    pub fn envelopes(&self) -> Option<&ClipEnvelopes> {
+        match self {
+            ClipData::Enveloped(c) => Some(&c.envelopes),
+            _ => None,
+        }
+    }
+
+    pub fn length(&self) -> u64 {
+        match self.content() {
             ClipData::Midi(c) => c.length,
             ClipData::Audio(c) => c.length,
             ClipData::Warped(c) => c.audio.length,
+            ClipData::Enveloped(_) => 0,
         }
     }
 
     /// The scale devices should follow while this clip plays.
     pub fn scale(&self) -> Option<ScaleInfo> {
-        match self {
+        match self.content() {
             ClipData::Midi(c) => c.scale,
             ClipData::Audio(c) => c.scale,
             ClipData::Warped(c) => c.audio.scale,
+            ClipData::Enveloped(_) => None,
         }
     }
 
     pub fn looped(&self) -> bool {
-        match self {
+        match self.content() {
             ClipData::Midi(c) => c.looped,
             ClipData::Audio(c) => c.looped,
             ClipData::Warped(c) => c.audio.looped,
+            ClipData::Enveloped(_) => false,
         }
     }
 }

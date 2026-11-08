@@ -103,6 +103,7 @@ impl Session {
             slot,
             clip: data,
         }));
+        self.sync_clip_routes(track);
     }
 
     pub fn clip(&self, track: TrackId, slot: usize) -> Option<&Clip> {

@@ -3,6 +3,7 @@
 use crate::graph::TrackRef;
 use crate::params::{CellIx, TrackRoutes};
 use crate::{retire, Engine, EngineEvent, Garbage};
+use rlive_core::TrackId;
 use std::sync::Arc;
 
 pub enum ParamCmd {
@@ -37,7 +38,7 @@ impl Engine {
                 value,
                 gesture,
             } => {
-                if gesture && self.records_automation() {
+                if gesture && self.records_automation(track) {
                     self.record_gesture(track, cell, value);
                 } else if let Some(bus) = self.bus_mut(track) {
                     bus.set_base(cell, value, gesture);
@@ -53,6 +54,15 @@ impl Engine {
                 if let Some(bus) = self.bus_mut(track) {
                     bus.release_touch(cell);
                 }
+                if let Some((track, slot, position)) = self.clip_recording_at(track) {
+                    let _ = self.events.push(EngineEvent::ClipAutomationReleased {
+                        track,
+                        slot,
+                        cell,
+                        position,
+                    });
+                    return;
+                }
                 let tick = self.command_tick;
                 let _ = self.events.push(EngineEvent::AutomationReleased {
                     target: track,
@@ -63,15 +73,43 @@ impl Engine {
         }
     }
 
-    /// Whether a parameter gesture is being recorded as automation right now.
-    pub(crate) fn records_automation(&self) -> bool {
-        self.automation_arm && self.recording && self.playing
+    /// Whether a parameter gesture on this track is being recorded as automation right now: into
+    /// the Arrangement, or into the Session clip it's playing.
+    pub(crate) fn records_automation(&self, track: TrackRef) -> bool {
+        self.automation_arm && self.playing && (self.recording || self.records_clip(track))
+    }
+
+    /// Whether a gesture on this track goes into its playing Session clip.
+    fn records_clip(&self, track: TrackRef) -> bool {
+        let TrackRef::Track(id) = track else {
+            return false;
+        };
+        self.tracks
+            .iter()
+            .find(|t| t.id == id)
+            .is_some_and(|t| t.session_automation && t.player.playing.is_some())
+    }
+
+    /// Which Session clip a gesture on this track records into, and where it's up to in it. The
+    /// Arrangement outranks a Session clip: recording the Session into it gets the changes.
+    fn clip_recording_at(&self, track: TrackRef) -> Option<(TrackId, usize, f64)> {
+        if self.recording || !self.records_clip(track) {
+            return None;
+        }
+        let TrackRef::Track(id) = track else {
+            return None;
+        };
+        let t = self.tracks.iter().find(|t| t.id == id)?;
+        let position = t.player.position(self.command_tick);
+        let slot = t.player.playing.as_ref()?.slot;
+        Some((id, slot, position))
     }
 
     /// The user moved a parameter while automation records: the knob is heard for now, and the
     /// UI gets told where on the timeline the move happened.
     fn record_gesture(&mut self, track: TrackRef, cell: CellIx, value: f64) {
         let tick = self.command_tick;
+        let clip = self.clip_recording_at(track);
         let Some(bus) = self.bus_mut(track) else {
             return;
         };
@@ -80,26 +118,42 @@ impl Engine {
             bus.set_base(cell, value, true);
             return;
         }
-        if let Some(before) = bus.touch_cell(cell, value) {
-            let _ = self.events.push(EngineEvent::AutomationMoved {
+        let Some(before) = bus.touch_cell(cell, value) else {
+            return;
+        };
+        let event = match clip {
+            Some((track, slot, position)) => EngineEvent::ClipAutomationMoved {
+                track,
+                slot,
+                cell,
+                value,
+                before,
+                position,
+            },
+            None => EngineEvent::AutomationMoved {
                 target: track,
                 cell,
                 value,
                 before,
                 tick,
-            });
-        }
+            },
+        };
+        let _ = self.events.push(event);
     }
 
     /// Replace a track's routes, handing cells no lane drives any more back to their knobs. The
     /// old routes are freed on the UI thread.
     pub(crate) fn set_routes(&mut self, track: TrackRef, routes: Arc<TrackRoutes>) {
-        let (slot, bus) = match track {
-            TrackRef::Master => (&mut self.master.routes, &mut self.master.bus),
+        let (slot, bus, clip_key) = match track {
+            TrackRef::Master => (
+                &mut self.master.routes,
+                &mut self.master.bus,
+                &mut self.master.clip_key,
+            ),
             TrackRef::Track(id) => match self.tracks.iter_mut().find(|t| t.id == id) {
                 Some(t) => {
                     let t = &mut **t;
-                    (&mut t.routes, &mut t.bus)
+                    (&mut t.routes, &mut t.bus, &mut t.clip_key)
                 }
                 None => {
                     retire(&mut self.garbage, Garbage::Shared(routes));
@@ -108,6 +162,21 @@ impl Engine {
             },
         };
         slot.release_dropped(&routes, bus);
+        if !slot.same_clips(&routes) {
+            // What was running stops; the clip's new envelopes take over at the next step.
+            *clip_key = None;
+            let events = &mut self.events;
+            bus.release_clip_envelopes(
+                |cell| routes.has_lane(cell),
+                |cell, value| {
+                    let _ = events.push(EngineEvent::ClipAutomationEnded {
+                        target: track,
+                        cell,
+                        value,
+                    });
+                },
+            );
+        }
         let old = std::mem::replace(slot, routes);
         retire(&mut self.garbage, Garbage::Shared(old));
     }

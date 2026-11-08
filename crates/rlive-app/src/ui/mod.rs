@@ -3,6 +3,7 @@
 mod arrangement;
 mod automation;
 mod browser;
+pub mod clip_envelopes;
 pub mod commands;
 pub(crate) mod devices;
 mod icons;
@@ -84,6 +85,11 @@ pub struct UiState {
     pub renaming: Option<(TrackId, String)>,
     pub piano: piano_roll::PianoState,
     pub sample: sample_editor::SampleState,
+    pub env: clip_envelopes::ClipEnvState,
+    /// MIDI Envelope Auto-Reset, mirrored for the Sample Editor's context menu to show.
+    pub midi_auto_reset: bool,
+    /// The context menu asked for MIDI Envelope Auto-Reset to be toggled.
+    pub toggle_midi_auto_reset: bool,
     pub layout: session_view::SessionLayout,
     pub arr: arrangement::ArrangementState,
     pub show_browser: bool,
@@ -179,6 +185,8 @@ impl RliveApp {
         let plugins = PluginCache::load(&PluginCache::default_path());
         let mut session = Session::new(handle, Project::new_default(), plugins);
         session.samples.configure(settings.samples.loader_config());
+        session.send_midi_envelope_auto_reset(settings.midi_envelope_auto_reset);
+        session.set_session_automation_in(settings.record_session_automation_in);
         let routing = MidiRouting {
             sender: Arc::new(Mutex::new(sender)),
             targets: session.midi_targets.clone(),
@@ -214,6 +222,9 @@ impl RliveApp {
             renaming: None,
             piano: piano_roll::PianoState::default(),
             sample: sample_editor::SampleState::new(),
+            env: clip_envelopes::ClipEnvState::default(),
+            midi_auto_reset: false,
+            toggle_midi_auto_reset: false,
             layout: session_view::SessionLayout::default(),
             arr: arrangement::ArrangementState::default(),
             show_browser: settings.show_browser.unwrap_or(true),
@@ -1349,6 +1360,12 @@ impl eframe::App for RliveApp {
         self.session.colors = self.settings.colors;
         self.session.warp_defaults = self.settings.warp;
         self.session.record = self.settings.record.clone();
+        self.ui.midi_auto_reset = self.settings.midi_envelope_auto_reset;
+        if std::mem::take(&mut self.ui.toggle_midi_auto_reset) {
+            self.pending.push(commands::MenuCommand::Options(
+                commands::options::Options::ToggleMidiEnvelopeAutoReset,
+            ));
+        }
         self.session.idle();
         self.poll_scan();
         if std::mem::take(&mut self.ui.request_scan) && self.ui.scan_rx.is_none() {

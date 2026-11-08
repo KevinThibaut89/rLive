@@ -192,6 +192,7 @@ impl Session {
         let (mut b, _) = self.builder();
         let lane = b.lane(&clips);
         self.send(EngineCommand::Clip(ClipCmd::SetLane { track, lane }));
+        self.sync_clip_routes(track);
     }
 
     /// Sends the loop range to the engine.

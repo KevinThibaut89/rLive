@@ -4,39 +4,21 @@
 //! `ParamCmd::SetRoutes` (or `GraphOp::SetRoutes`, when a device edit moves cells). The routes
 //! are read-only here, so a control step only has to find each lane's place by binary search:
 //! there is no cursor to fall behind at a loop or a seek, and nothing to allocate.
+//!
+//! Clip envelopes that drive parameters are compiled into the routes as well, one [`ClipRoutes`]
+//! per clip, since they address cells and so have to change when cells do. Which of them counts
+//! at a step depends only on which clip is under the playhead.
 
+use crate::clip::{ClipCurve, EnvCurve};
 use crate::params::{CellIx, ParamBus};
-use rlive_core::envelope::{value_at, EnvPoint, Interp};
-use rlive_core::param::rack;
+use rlive_core::param::{rack, ModMode};
 use rlive_core::ParamRange;
-
-/// A point of a compiled lane, in knob position, which is the space segments run straight in.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct LanePoint {
-    time: f64,
-    knob: f64,
-    curve: f32,
-}
-
-impl EnvPoint for LanePoint {
-    fn time(&self) -> f64 {
-        self.time
-    }
-    fn value(&self) -> f64 {
-        self.knob
-    }
-    fn curve(&self) -> f32 {
-        self.curve
-    }
-}
 
 /// One envelope, addressed to the cell it drives.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AutomationLane {
     cell: CellIx,
-    range: ParamRange,
-    interp: Interp,
-    points: Box<[LanePoint]>,
+    curve: EnvCurve,
 }
 
 impl AutomationLane {
@@ -47,25 +29,9 @@ impl AutomationLane {
         range: ParamRange,
         points: impl IntoIterator<Item = (f64, f64, f32)>,
     ) -> Option<Self> {
-        let mut points: Vec<LanePoint> = points
-            .into_iter()
-            .filter(|(time, value, _)| time.is_finite() && value.is_finite())
-            .map(|(time, value, curve)| LanePoint {
-                time,
-                knob: range.to_normalized(value),
-                curve,
-            })
-            .collect();
-        if points.is_empty() {
-            return None;
-        }
-        // Stable, so two points at one tick stay a step in the right direction.
-        points.sort_by(|a, b| a.time.total_cmp(&b.time));
         Some(Self {
             cell,
-            range,
-            interp: Interp::of(range.quantized),
-            points: points.into_boxed_slice(),
+            curve: EnvCurve::new(range, points)?,
         })
     }
 
@@ -75,8 +41,76 @@ impl AutomationLane {
 
     /// The lane's value at `tick`, in plain units.
     pub fn plain_at(&self, tick: f64) -> f64 {
-        let knob = value_at(&self.points, tick, self.interp).unwrap_or(0.0);
-        self.range.from_normalized(knob)
+        self.curve.plain_at(tick)
+    }
+}
+
+/// What a clip's envelope does to the parameter it drives.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClipEnvAction {
+    /// Sets its absolute value, in plain units (only a Session clip's envelopes do).
+    Automate,
+    /// Moves it, the way the parameter modulates.
+    Modulate(ModMode),
+}
+
+/// One of a clip's envelopes for a parameter of its track.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipLane {
+    cell: CellIx,
+    curve: ClipCurve,
+    action: ClipEnvAction,
+}
+
+impl ClipLane {
+    pub fn new(cell: CellIx, curve: ClipCurve, action: ClipEnvAction) -> Self {
+        Self {
+            cell,
+            curve,
+            action,
+        }
+    }
+
+    pub fn cell(&self) -> CellIx {
+        self.cell
+    }
+}
+
+/// Every envelope of one clip that drives its track's parameters.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ClipRoutes {
+    lanes: Box<[ClipLane]>,
+}
+
+impl ClipRoutes {
+    pub fn new(lanes: Vec<ClipLane>) -> Self {
+        Self {
+            lanes: lanes.into_boxed_slice(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lanes.is_empty()
+    }
+
+    pub fn lanes(&self) -> &[ClipLane] {
+        &self.lanes
+    }
+
+    /// Steps 2 and 3 of the resolve order, for a clip `local` ticks past its start.
+    pub(crate) fn run(&self, local: f64, bus: &mut ParamBus) {
+        for lane in self.lanes.iter() {
+            let value = lane.curve.at(local);
+            match lane.action {
+                ClipEnvAction::Automate => bus.write_clip_automation(lane.cell, value),
+                ClipEnvAction::Modulate(ModMode::Scale) => {
+                    bus.modulate_clip(lane.cell, 0.0, value.clamp(0.0, 1.0) as f32)
+                }
+                ClipEnvAction::Modulate(_) => {
+                    bus.modulate_clip(lane.cell, value.clamp(-1.0, 1.0) as f32, 1.0)
+                }
+            }
+        }
     }
 }
 
@@ -123,6 +157,10 @@ pub struct TrackRoutes {
     lanes: Box<[AutomationLane]>,
     /// In the order they must run: a macro comes before anything it maps a nested macro onto.
     macros: Box<[MacroRoute]>,
+    /// The envelopes of each Session clip, sorted by slot.
+    session_clips: Box<[(u32, ClipRoutes)]>,
+    /// The envelopes of each Arrangement clip, sorted by where it starts.
+    lane_clips: Box<[(u64, ClipRoutes)]>,
 }
 
 impl TrackRoutes {
@@ -135,7 +173,58 @@ impl TrackRoutes {
         Self {
             lanes: lanes.into_boxed_slice(),
             macros: Box::default(),
+            session_clips: Box::default(),
+            lane_clips: Box::default(),
         }
+    }
+
+    /// These routes with the envelopes of the track's clips, by Session slot and by the tick an
+    /// Arrangement clip starts on.
+    pub fn with_clips(
+        mut self,
+        mut session: Vec<(u32, ClipRoutes)>,
+        mut lane: Vec<(u64, ClipRoutes)>,
+    ) -> Self {
+        session.retain(|(_, c)| !c.is_empty());
+        lane.retain(|(_, c)| !c.is_empty());
+        session.sort_by_key(|(slot, _)| *slot);
+        lane.sort_by_key(|(start, _)| *start);
+        self.session_clips = session.into_boxed_slice();
+        self.lane_clips = lane.into_boxed_slice();
+        self
+    }
+
+    /// The envelopes of the clip in a Session slot.
+    pub(crate) fn session_clip(&self, slot: u32) -> Option<&ClipRoutes> {
+        let i = self
+            .session_clips
+            .binary_search_by_key(&slot, |(s, _)| *s)
+            .ok()?;
+        Some(&self.session_clips[i].1)
+    }
+
+    /// The envelopes of the Arrangement clip starting on this tick.
+    pub(crate) fn lane_clip(&self, start: u64) -> Option<&ClipRoutes> {
+        let i = self
+            .lane_clips
+            .binary_search_by_key(&start, |(s, _)| *s)
+            .ok()?;
+        Some(&self.lane_clips[i].1)
+    }
+
+    /// Whether these clip envelopes are the same as `other`'s.
+    pub(crate) fn same_clips(&self, other: &TrackRoutes) -> bool {
+        self.session_clips == other.session_clips && self.lane_clips == other.lane_clips
+    }
+
+    /// Whether any clip of the track has envelopes for its parameters.
+    pub fn has_clip_routes(&self) -> bool {
+        !self.session_clips.is_empty() || !self.lane_clips.is_empty()
+    }
+
+    /// Whether a lane of this track automates a cell.
+    pub(crate) fn has_lane(&self, cell: CellIx) -> bool {
+        self.lanes.binary_search_by_key(&cell, |l| l.cell).is_ok()
     }
 
     /// These routes with Macro mappings as well, outermost racks first.
@@ -153,7 +242,10 @@ impl TrackRoutes {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.lanes.is_empty() && self.macros.is_empty()
+        self.lanes.is_empty()
+            && self.macros.is_empty()
+            && self.session_clips.is_empty()
+            && self.lane_clips.is_empty()
     }
 
     /// Step 2 of the resolve order: write every lane's value for this tick.

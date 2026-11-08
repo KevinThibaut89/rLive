@@ -3,6 +3,7 @@
 use crate::session::WarpDefaults;
 use crate::ui::theme::ThemeSettings;
 use rlive_audio_io::{BitDepth, CacheConfig, FileType, LoaderConfig};
+use rlive_project::clip_envelope::SessionAutomationIn;
 use rlive_project::{ExternalRoute, Project, PALETTE};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -281,6 +282,10 @@ pub struct Settings {
     pub samples: SampleSettings,
     pub warp: WarpDefaults,
     pub record: RecordSettings,
+    /// MIDI Envelope Auto-Reset: new clips set some controllers back first (manual p. 534).
+    pub midi_envelope_auto_reset: bool,
+    /// Where Session Record's automation goes (manual p. 512).
+    pub record_session_automation_in: SessionAutomationIn,
 }
 
 impl Default for Settings {
@@ -303,6 +308,8 @@ impl Default for Settings {
             samples: SampleSettings::default(),
             warp: WarpDefaults::default(),
             record: RecordSettings::default(),
+            midi_envelope_auto_reset: false,
+            record_session_automation_in: SessionAutomationIn::default(),
         }
     }
 }
@@ -444,6 +451,8 @@ mod tests {
                 short_samples: ShortSampleMode::WarpedOneShot,
                 mode: WarpMode::RePitch,
             },
+            midi_envelope_auto_reset: true,
+            record_session_automation_in: SessionAutomationIn::AllTracks,
         };
         let path = temp_file("round-trip.json");
         settings.save_to(&path);

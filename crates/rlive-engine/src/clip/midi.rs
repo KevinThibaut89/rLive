@@ -175,7 +175,7 @@ pub(crate) fn chase(
     voices: &mut Voices,
     ev: &mut Vec<MidiEvent>,
 ) {
-    let ClipData::Midi(clip) = clip else {
+    let ClipData::Midi(clip) = clip.content() else {
         return;
     };
     let len = clip.length as f64;

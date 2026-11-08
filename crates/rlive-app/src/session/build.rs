@@ -4,7 +4,7 @@ use super::automation::routes_for;
 use super::ChainRef;
 use rlive_audio_io::{SampleCache, SampleStatus};
 use rlive_core::envelope::segment_value;
-use rlive_core::param::{chain as chain_controls, rack as rack_params};
+use rlive_core::param::{chain as chain_controls, rack as rack_params, ClipParam, EnvTarget};
 use rlive_core::time::{BarMap, TempoMap, TempoPoint, TimeMaps};
 use rlive_core::warp::{self, WarpMap};
 use rlive_core::{ChainId, DeviceId, ParamInfo, Ports, Processor, ScaleInfo, Section, ViewChannel};
@@ -12,16 +12,17 @@ use rlive_devices::devices::b1::common::SCALES;
 use rlive_devices::{DeviceInit, DeviceRole};
 use rlive_engine::shared::{ChainShared, TrackShared};
 use rlive_engine::{
-    mix_cell, ArrangementLane, AudioClip, BusLayout, ChainNode, ClipData, DeviceSlot, ExprPoint,
-    LaneClip, MidiClip, MixSettings, Note, NoteExpression, NullProcessor,
-    RackKind as EngineRackKind, RackNode, TrackNode, WarpedClip, MAX_RACK_DEPTH, MAX_SENDS,
+    mix_cell, ArrangementLane, AudioClip, BusLayout, ChainNode, ClipCurve, ClipData, ClipEnvelopes,
+    DeviceSlot, EnvCurve, EnvTiming, EnvelopedClip, ExprPoint, LaneClip, MidiClip, MixSettings,
+    Note, NoteExpression, NullProcessor, RackKind as EngineRackKind, RackNode, TrackNode,
+    WarpedClip, MAX_RACK_DEPTH, MAX_SENDS,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
 use rlive_project::{
-    ArrangementClip, BeatsPreserve, Breakpoint, Chain, Clip, ClipContent, ClipScale, Device,
-    DeviceKind, DrumPad as ProjectPad, Project, RackKind, Track, TrackKind, Warp,
-    WarpMode as ProjectWarpMode, Zone as ProjectZone, Zones as ProjectZones,
+    clip_envelope, ArrangementClip, BeatsPreserve, Breakpoint, Chain, Clip, ClipContent,
+    ClipEnvelope, ClipScale, Device, DeviceKind, DrumPad as ProjectPad, Project, RackKind, Track,
+    TrackKind, Warp, WarpMode as ProjectWarpMode, Zone as ProjectZone, Zones as ProjectZones,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU32;
@@ -119,6 +120,63 @@ fn tempo_points(points: &[Breakpoint]) -> Vec<TempoPoint> {
         }
     }
     out
+}
+
+/// How an envelope's time runs in its clip.
+pub(super) fn env_timing(e: &ClipEnvelope, clip: &Clip) -> EnvTiming {
+    match e.loop_region {
+        None => EnvTiming::Linked {
+            length: clip.length as f64,
+            looped: clip.looped,
+        },
+        Some(r) => EnvTiming::Unlinked {
+            start: r.start as f64,
+            end: r.end() as f64,
+            marker: r.marker as f64,
+            looped: r.looped,
+        },
+    }
+}
+
+/// An envelope of a clip, ready to read in the clip's time.
+pub(super) fn clip_curve(
+    e: &ClipEnvelope,
+    clip: &Clip,
+    range: rlive_core::ParamRange,
+) -> Option<ClipCurve> {
+    let points = e.envelope.points.iter().map(|p| (p.time, p.value, p.curve));
+    Some(ClipCurve::new(
+        EnvCurve::new(range, points)?,
+        env_timing(e, clip),
+    ))
+}
+
+/// A clip's envelopes for its own content. Parameter envelopes are compiled with the track's
+/// routes, as they address its cells.
+fn clip_envelopes(clip: &Clip) -> ClipEnvelopes {
+    let of = |param: ClipParam| {
+        let e = clip
+            .envelopes
+            .iter()
+            .find(|e| e.envelope.target == EnvTarget::Clip(param))?;
+        clip_curve(e, clip, clip_envelope::clip_param_range(param))
+    };
+    let midi: Vec<(u8, ClipCurve)> = clip
+        .envelopes
+        .iter()
+        .filter_map(|e| match e.envelope.target {
+            EnvTarget::MidiCtrl(cc) if cc <= clip_envelope::MAX_MIDI_CTRL => {
+                Some((cc, clip_curve(e, clip, clip_envelope::MIDI_CTRL_RANGE)?))
+            }
+            _ => None,
+        })
+        .collect();
+    ClipEnvelopes {
+        gain: of(ClipParam::Gain),
+        transpose: of(ClipParam::Transpose),
+        sample_offset: of(ClipParam::SampleOffset),
+        midi: midi.into_boxed_slice(),
+    }
 }
 
 fn warp_map(warp: &Warp, sample_rate: f64) -> Option<WarpMap> {
@@ -476,7 +534,7 @@ impl Builder<'_> {
     /// Compiles a clip. `None` means its sample hasn't finished loading or won't: the clip stays
     /// out of the engine, so it can't be played, and the failure has already been reported.
     pub fn clip(&mut self, clip: &Clip) -> Option<Arc<ClipData>> {
-        Some(Arc::new(match &clip.content {
+        let data = match &clip.content {
             ClipContent::Midi { notes, .. } => {
                 // Deactivated notes never reach the engine.
                 // Only what's inside the loop plays: a captured clip keeps earlier notes before it.
@@ -536,6 +594,15 @@ impl Builder<'_> {
                     ClipData::Audio(audio)
                 }
             }
+        };
+        let envelopes = clip_envelopes(clip);
+        Some(Arc::new(if envelopes.is_empty() {
+            data
+        } else {
+            ClipData::Enveloped(Box::new(EnvelopedClip {
+                clip: data,
+                envelopes,
+            }))
         }))
     }
 
@@ -589,6 +656,7 @@ impl Builder<'_> {
             &track.devices,
             ChainRef::Track(track.id),
             &layout,
+            (&track.clips, &track.arrangement),
         );
         layouts.insert(ChainRef::Track(track.id), layout);
         for (i, c) in track.clips.iter().enumerate() {
@@ -627,6 +695,7 @@ impl Builder<'_> {
             &project.master.devices,
             ChainRef::Master,
             &layout,
+            (&[], &[]),
         );
         layouts.insert(ChainRef::Master, layout);
         Box::new(node)

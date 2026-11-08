@@ -811,16 +811,20 @@ fn param_control(
     let cell = cx.session.device_cell(chain, dev.id, prm.id);
     let cell_state = cell.map_or(Default::default(), |c| cx.session.cell_state(chain, c));
     let automated = cell_state.automated() && !cell_state.overridden();
+    let source = cell.and_then(|c| cx.session.source_norm(chain, c));
     // A Macro or automation moves the value, not the knob's own setting, so show what it's doing.
+    // Modulation doesn't move the needle: that goes on the ring around it (manual p. 537).
     let shown = if owned || automated {
-        effective.map_or(base, |e| prm.from_normalized(e as f64))
+        source
+            .or(effective)
+            .map_or(base, |e| prm.from_normalized(e as f64))
     } else {
         base
     };
     let text = rt.format_value(prm, shown);
     let re_enable = std::cell::Cell::new(false);
     let state = ControlState {
-        effective: effective.filter(|_| !owned && !automated),
+        effective: effective.filter(|_| !owned),
         disabled,
         led: Led::of(cell_state),
         re_enable: cell_state.overridden().then_some(&re_enable),

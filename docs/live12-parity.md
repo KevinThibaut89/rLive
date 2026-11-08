@@ -791,12 +791,12 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 - `[~]` Breakpoint envelopes on nearly all mixer and device controls including tempo; LED states (automated, modulated, overridden). L
 - `[~]` Automation Arm. S
-- `[ ]` Session clip automation recording, armed tracks or All Tracks setting. L
+- `[~]` Session clip automation recording, armed tracks or All Tracks setting. L
 - `[ ]` Session-to-Arrangement capture becomes track automation; copying clips transfers automation. L
 - `[x]` Arrangement automation records on all tracks. M
 - `[~]` Overwrite: mouse is touch; hardware is latch; first pass in a clip always latch. M
 - `[~]` Override by manual change; Re-Enable global button and per parameter; relaunching clip restores. M
-- `[ ]` Clip Envelope Editor with Automation toggle and Device/Control choosers; Show Adjusted Only merges choosers. M
+- `[~]` Clip Envelope Editor with Automation toggle and Device/Control choosers; Show Adjusted Only merges choosers. M
 - `[~]` Automation Mode (A), main lane, Add Lane; hide additional lanes; duplicates limited to two; Add Lane for Each Automated Envelope; remove with modifiers; arrow navigation. L
 - `[ ]` Show Automation and Show in New Lane from parameter context menu. S
 - `[ ]` Dashed line for unautomated control; clicking a control shows its envelope. S
@@ -819,21 +819,21 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** A3
 
-- `[ ]` Envelope tab: audio clips have Clip, effects, Mixer; MIDI clips have MIDI Ctrl, devices, Mixer. M
-- `[ ]` Session clips have Automation and Modulation modes; Arrangement clips modulation only. M
-- `[ ]` Blue versus red colours and knob ring display. S
-- `[ ]` MIDI Envelope Auto-Reset option. S
-- `[ ]` Non-destructive, computed in real time. Architecture requirement.
-- `[ ]` Transposition envelope additive, clamped to ±48. M. Depends on warp.
-- `[ ]` Clip Gain envelope relative percentage. S
-- `[ ]` Sample Offset envelope in Beats mode only, ±8 sixteenths. L. Depends on warp.
-- `[ ]` Clip as template: dropping a sample keeps settings. S
-- `[ ]` Modulation composes with automation; automation sets range. L
-- `[ ]` Modulated Track Volume dot; Sends relative; Pan intensity scales with knob position. M
-- `[ ]` Device parameter modulation relative. M. Depends on parameter system.
-- `[ ]` MIDI CC envelopes up to 119, including imported data. M
-- `[ ]` Unlink: local loop, region, start marker, per envelope, odd lengths. L
-- `[ ]` Linked envelopes follow Warp Markers, which are editable in the envelope view. M
+- `[~]` Envelope tab: audio clips have Clip, effects, Mixer; MIDI clips have MIDI Ctrl, devices, Mixer. M
+- `[~]` Session clips have Automation and Modulation modes; Arrangement clips modulation only. M
+- `[~]` Blue versus red colours and knob ring display. S
+- `[~]` MIDI Envelope Auto-Reset option. S
+- `[x]` Non-destructive, computed in real time. Architecture requirement.
+- `[x]` Transposition envelope additive, clamped to ±48. M. Depends on warp.
+- `[x]` Clip Gain envelope relative percentage. S
+- `[x]` Sample Offset envelope in Beats mode only, ±8 sixteenths. L. Depends on warp.
+- `[~]` Clip as template: dropping a sample keeps settings. S
+- `[x]` Modulation composes with automation; automation sets range. L
+- `[~]` Modulated Track Volume dot; Sends relative; Pan intensity scales with knob position. M
+- `[x]` Device parameter modulation relative. M. Depends on parameter system.
+- `[~]` MIDI CC envelopes up to 119, including imported data. M
+- `[~]` Unlink: local loop, region, start marker, per envelope, odd lengths. L
+- `[~]` Linked envelopes follow Warp Markers, which are editable in the envelope view. M
 
 
 ## 28. Working with Video (546-551)

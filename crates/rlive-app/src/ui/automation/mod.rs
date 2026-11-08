@@ -5,7 +5,7 @@
 //! commits once the mouse is up. A drag always recomputes from the points it started with.
 
 mod edit;
-mod geom;
+pub(super) mod geom;
 mod gestures;
 mod headers;
 pub mod lanes;

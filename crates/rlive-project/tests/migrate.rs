@@ -462,10 +462,7 @@ fn the_v2_schema_round_trips_when_it_is_used() {
             points: vec![Breakpoint::new(0.0, 0.5)],
         },
         mode: EnvMode::Automation,
-        loop_region: Some(EnvLoop {
-            start: 0,
-            length: 960,
-        }),
+        loop_region: Some(EnvLoop::new(0, 960)),
     });
     let notes = clip.notes_mut().unwrap();
     notes[0].release = 0.25;

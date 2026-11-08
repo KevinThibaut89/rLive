@@ -1,6 +1,6 @@
 //! Breakpoint envelopes: track automation, clip envelopes and per-note expression.
 
-use crate::defaults::is_default;
+use crate::defaults::{is_default, is_true, yes};
 use rlive_core::envelope::{self, EnvPoint, Interp};
 use rlive_core::param::EnvTarget;
 use rlive_core::ParamRange;
@@ -220,11 +220,35 @@ pub struct ClipEnvelope {
     pub loop_region: Option<EnvLoop>,
 }
 
-/// The loop of an unlinked clip envelope, in ticks of the clip's content.
+/// The loop and region of an unlinked clip envelope, in ticks of the envelope's own time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnvLoop {
+    /// Where the loop or region starts.
     pub start: u64,
+    /// Any length at all, odd ones included.
     pub length: u64,
+    /// Where the envelope starts from when the clip does (manual p. 544).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub marker: u64,
+    /// With the Loop switch off the envelope plays through its region once and holds the end.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub looped: bool,
+}
+
+impl EnvLoop {
+    /// A looping envelope of this length, starting at its loop's start.
+    pub fn new(start: u64, length: u64) -> Self {
+        Self {
+            start,
+            length,
+            marker: start,
+            looped: true,
+        }
+    }
+
+    pub fn end(&self) -> u64 {
+        self.start + self.length
+    }
 }
 
 #[cfg(test)]

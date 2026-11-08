@@ -25,10 +25,14 @@ pub mod track;
 
 pub use automation::AutomationLane;
 pub use automation::MacroRoute;
+pub use automation::{ClipEnvAction, ClipLane, ClipRoutes};
 pub use capture::{capture_pair, CaptureSink, CaptureTail, Chunk as CaptureChunk};
 use capture::{CaptureBlock, CaptureMode, InputSource};
 use clip::BlockTime;
-pub use clip::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
+pub use clip::{
+    AudioClip, ClipCurve, ClipData, ClipEnvelopes, EnvCurve, EnvTiming, EnvelopedClip, ExprPoint,
+    MidiClip, Note, NoteExpression, WarpedClip,
+};
 pub use commands::{
     ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, PreviewCmd, RecordCmd, TransportCmd,
 };
@@ -188,6 +192,30 @@ pub enum EngineEvent {
         target: TrackRef,
         cell: CellIx,
         tick: f64,
+    },
+    /// The user moved a parameter that's being recorded into the Session clip playing on `track`.
+    /// `position` is where in the clip it moved, in ticks.
+    ClipAutomationMoved {
+        track: TrackId,
+        slot: usize,
+        cell: CellIx,
+        value: f64,
+        before: f64,
+        position: f64,
+    },
+    /// The user let go of a parameter being recorded into a Session clip.
+    ClipAutomationReleased {
+        track: TrackId,
+        slot: usize,
+        cell: CellIx,
+        position: f64,
+    },
+    /// The clip whose automation was moving this cell stopped counting. The cell stays where it
+    /// was left, at `value`, and is its knob's again.
+    ClipAutomationEnded {
+        target: TrackRef,
+        cell: CellIx,
+        value: f64,
     },
 }
 
@@ -503,6 +531,8 @@ pub struct Engine {
     silence: Vec<f32>,
     /// Parameter gestures are recorded as automation while recording.
     automation_arm: bool,
+    /// MIDI Envelope Auto-Reset: a new clip sets some controllers back first.
+    midi_auto_reset: bool,
     /// Where on the timeline commands being handled now take effect.
     command_tick: f64,
     /// Backdated recorded notes never land before this tick.
@@ -570,6 +600,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         clock: 0,
         silence: vec![0.0; max_block],
         automation_arm: false,
+        midi_auto_reset: false,
         command_tick: 0.0,
         record_floor: 0.0,
         metronome: Metronome {
@@ -949,10 +980,11 @@ impl Engine {
         let smooth = self.smooth_coeff;
         for t in self.tracks.iter_mut() {
             t.smooth = smooth;
-            t.begin_block(time, &transport, &mut retire_clip);
+            t.begin_block(time, &transport, self.midi_auto_reset, &mut retire_clip);
         }
         self.master.smooth = smooth;
-        self.master.begin_block(time, &transport, &mut retire_clip);
+        self.master
+            .begin_block(time, &transport, self.midi_auto_reset, &mut retire_clip);
 
         let ctx = BlockCtx {
             transport: &transport,
@@ -1351,14 +1383,28 @@ impl Engine {
                     self.tracks.get_mut(step.track as usize).map(|t| &mut **t)
                 };
                 if let Some(t) = t {
-                    t.control_step(index, offset, ctx, buses, &mut |t, d, p, v| {
-                        let owner = if is_master {
-                            TrackRef::Master
-                        } else {
-                            TrackRef::Track(t)
-                        };
-                        push_param_changed(events, owner, d, p, v)
-                    });
+                    let target = if is_master {
+                        TrackRef::Master
+                    } else {
+                        TrackRef::Track(t.id)
+                    };
+                    let sink = std::cell::RefCell::new(&mut *events);
+                    t.control_step(
+                        index,
+                        offset,
+                        ctx,
+                        buses,
+                        &mut |_, d, p, v| {
+                            push_param_changed(&mut sink.borrow_mut(), target, d, p, v)
+                        },
+                        &mut |cell, value| {
+                            let _ = sink.borrow_mut().push(EngineEvent::ClipAutomationEnded {
+                                target,
+                                cell,
+                                value,
+                            });
+                        },
+                    );
                 }
             }
             for step in steps {

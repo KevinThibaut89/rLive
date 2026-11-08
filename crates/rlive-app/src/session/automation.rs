@@ -10,17 +10,23 @@
 //!
 //! [`EngineEvent::AutomationMoved`]: rlive_engine::EngineEvent::AutomationMoved
 
+use super::build::clip_curve;
 use super::devices::mixer_cell_of;
 use super::{build, ChainRef, Session};
+use rlive_core::param::mixer;
 use rlive_core::param::{transport, EnvTarget, ParamOwner, ParamRef, ACTIVATOR};
 use rlive_core::{ChainId, DeviceId, ParamRange, TrackId};
+use rlive_engine::shared::NO_SLOT;
 use rlive_engine::{
     AutomationLane, BusLayout, CellIx, CellState, CellTarget, EngineCommand, GraphOp, MacroRoute,
     ParamCmd, RecordCmd, TrackRef, TrackRoutes, TransportCmd,
 };
-use rlive_project::{Breakpoint, Device, DeviceKind, EnvMode, Envelope};
-use std::collections::HashMap;
+use rlive_engine::{ClipEnvAction, ClipLane, ClipRoutes};
+use rlive_project::clip_envelope::{self, modulation_range, SessionAutomationIn};
+use rlive_project::{ArrangementClip, Breakpoint, Clip, Device, DeviceKind, EnvMode, Envelope};
+use std::collections::{HashMap, HashSet};
 use std::mem::take;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 /// Compiles a track's envelopes and Macro mappings for the engine, addressed to the cells of its
@@ -30,6 +36,7 @@ pub(super) fn routes_for(
     devices: &[Device],
     owner: ChainRef,
     layout: &BusLayout,
+    clips: (&[Option<Clip>], &[ArrangementClip]),
 ) -> Arc<TrackRoutes> {
     let lanes = envelopes
         .iter()
@@ -44,7 +51,51 @@ pub(super) fn routes_for(
         .collect();
     let mut macros = Vec::new();
     collect_macro_routes(devices, owner, layout, &mut macros);
-    Arc::new(TrackRoutes::new(lanes).with_macros(macros))
+    let session = clips
+        .0
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, clip)| {
+            let clip = clip.as_ref()?;
+            Some((slot as u32, clip_lanes(clip, owner, layout, true)))
+        })
+        .collect();
+    let lane = clips
+        .1
+        .iter()
+        .map(|c| (c.start, clip_lanes(&c.clip, owner, layout, false)))
+        .collect();
+    Arc::new(
+        TrackRoutes::new(lanes)
+            .with_macros(macros)
+            .with_clips(session, lane),
+    )
+}
+
+/// A clip's envelopes for the parameters of its track. An Arrangement clip only has modulation:
+/// a Session clip's automation is what it is because it's launched (manual p. 538).
+fn clip_lanes(clip: &Clip, owner: ChainRef, layout: &BusLayout, session: bool) -> ClipRoutes {
+    ClipRoutes::new(
+        clip.envelopes
+            .iter()
+            .filter_map(|e| {
+                let EnvTarget::Param(target) = e.envelope.target else {
+                    return None;
+                };
+                let cell = cell_of(target, owner, layout)?;
+                let spec = layout.spec(cell)?;
+                let (range, action) = match e.mode {
+                    EnvMode::Automation if !session => return None,
+                    EnvMode::Automation => (spec.range, ClipEnvAction::Automate),
+                    EnvMode::Modulation => (
+                        modulation_range(spec.mod_mode).0,
+                        ClipEnvAction::Modulate(spec.mod_mode),
+                    ),
+                };
+                Some(ClipLane::new(cell, clip_curve(e, clip, range)?, action))
+            })
+            .collect(),
+    )
 }
 
 /// Every Macro mapping under these devices, outer racks before the racks nested in them.
@@ -147,6 +198,9 @@ struct Stroke {
     /// What the parameter was sounding at when the stroke started.
     before: f64,
     points: Vec<Breakpoint>,
+    /// The Session slot this goes into, when it isn't the Arrangement. Points are then in the
+    /// clip's own time.
+    slot: Option<usize>,
 }
 
 impl Stroke {
@@ -155,6 +209,7 @@ impl Stroke {
             key,
             before,
             points: vec![Breakpoint::new(tick, value)],
+            slot: None,
         }
     }
 
@@ -189,6 +244,14 @@ pub(super) struct AutomationRecorder {
     wrote: bool,
     /// The last control the user moved, as its track and cell, for the automation lanes to show.
     touched: Option<(ChainRef, CellIx)>,
+    /// Session Record: gestures go into the Session clips playing.
+    session_record: bool,
+    /// Which tracks Session Record records on.
+    session_in: SessionAutomationIn,
+    /// Which tracks the engine currently has recording into their Session clips.
+    session_tracks: HashSet<TrackId>,
+    /// Tracks the engine has clip envelopes for, so it hears when the last of them goes.
+    clip_routed: HashSet<TrackId>,
 }
 
 impl AutomationRecorder {
@@ -202,6 +265,7 @@ impl AutomationRecorder {
         self.open.clear();
         self.done.clear();
         self.wrote = false;
+        self.session_tracks.clear();
     }
 }
 
@@ -257,15 +321,31 @@ impl Session {
     }
 
     /// The plain value a mixer control should be drawn at: what automation has it at, unless the
-    /// user has overridden that.
+    /// user has overridden that. Modulation doesn't move the needle; it's drawn beside it.
     pub fn automated_cell_value(&self, chain: ChainRef, cell: CellIx) -> Option<f64> {
         let layout = self.layouts.get(&chain.owner())?;
         let state = layout.state(cell);
         if !state.automated() || state.overridden() {
             return None;
         }
-        let norm = layout.effective(cell)?;
+        let norm = layout.source(cell)?;
         Some(layout.spec(cell)?.range.from_normalized(norm as f64))
+    }
+
+    /// Where modulation has taken a control, normalized, when something is modulating it. Mixer
+    /// controls draw this beside their needle (manual pp. 539-541).
+    pub fn modulated_cell_norm(&self, chain: ChainRef, cell: CellIx) -> Option<f32> {
+        let layout = self.layouts.get(&chain.owner())?;
+        layout
+            .state(cell)
+            .modulated()
+            .then(|| layout.effective(cell))
+            .flatten()
+    }
+
+    /// The normalized value a control is at, before modulation.
+    pub fn source_norm(&self, chain: ChainRef, cell: CellIx) -> Option<f32> {
+        self.layouts.get(&chain.owner())?.source(cell)
     }
 
     /// Relaunching a clip with automation in it hands that automation back.
@@ -310,6 +390,15 @@ impl Session {
         }
     }
 
+    pub(super) fn track_clips(&self, track: TrackRef) -> (&[Option<Clip>], &[ArrangementClip]) {
+        match track {
+            TrackRef::Master => (&[], &[]),
+            TrackRef::Track(id) => self.project.track(id).map_or((&[], &[]), |t| {
+                (t.clips.as_slice(), t.arrangement.as_slice())
+            }),
+        }
+    }
+
     pub(super) fn track_devices(&self, track: TrackRef) -> Option<&Vec<Device>> {
         match track {
             TrackRef::Master => Some(&self.project.master.devices),
@@ -324,7 +413,44 @@ impl Session {
             self.track_devices(track)?,
             owner,
             self.layouts.get(&owner)?,
+            self.track_clips(track),
         ))
+    }
+
+    /// Whether a clip on this track has an envelope for one of the track's parameters.
+    pub(super) fn has_clip_routes(&self, track: TrackId) -> bool {
+        let (clips, lane) = self.track_clips(TrackRef::Track(track));
+        let any = |c: &Clip| {
+            c.envelopes
+                .iter()
+                .any(|e| !clip_envelope::targets_clip_content(e.envelope.target))
+        };
+        clips.iter().flatten().any(any) || lane.iter().any(|c| any(&c.clip))
+    }
+
+    /// Start knowing which tracks the engine has clip envelopes for, after building them all.
+    pub(super) fn note_clip_routes(&mut self) {
+        let routed = self
+            .project
+            .tracks
+            .iter()
+            .map(|t| t.id)
+            .filter(|id| self.has_clip_routes(*id))
+            .collect();
+        self.automation.clip_routed = routed;
+    }
+
+    /// Give the engine a track's routes after its clips changed, when that can have changed them.
+    pub(super) fn sync_clip_routes(&mut self, track: TrackId) {
+        let has = self.has_clip_routes(track);
+        if has || self.automation.clip_routed.contains(&track) {
+            if has {
+                self.automation.clip_routed.insert(track);
+            } else {
+                self.automation.clip_routed.remove(&track);
+            }
+            self.send_routes(TrackRef::Track(track));
+        }
     }
 
     /// Replace a parameter's envelope. No points removes it. This is what editing envelopes goes
@@ -422,7 +548,7 @@ impl Session {
     /// A control is being moved. Call before the value goes to the engine.
     pub(super) fn note_gesture(&mut self, chain: ChainRef, cell: CellIx) {
         self.automation.touched = Some((chain.owner(), cell));
-        if self.automation.arm && self.is_recording() {
+        if self.automation.arm && (self.is_recording() || self.records_clip(chain)) {
             let key = CellKey {
                 track: chain.into(),
                 cell,
@@ -437,7 +563,7 @@ impl Session {
 
     /// The next moves of a control come from a knob or fader on a MIDI controller, so they latch.
     pub fn note_hardware_gesture(&mut self, chain: ChainRef, cell: CellIx) {
-        if self.automation.arm && self.is_recording() {
+        if self.automation.arm && (self.is_recording() || self.records_clip(chain)) {
             let key = CellKey {
                 track: chain.into(),
                 cell,
@@ -467,7 +593,7 @@ impl Session {
             }
         }
         for (key, dragged) in released {
-            if dragged && self.has_envelope(key) {
+            if dragged && self.has_recorded_before(key) {
                 self.automation.gestures.remove(&key);
                 self.send(EngineCommand::Param(ParamCmd::EndGesture {
                     track: key.track,
@@ -497,6 +623,24 @@ impl Session {
         })
     }
 
+    /// Whether the envelope a gesture is recording into already existed, which decides whether
+    /// the mouse going up hands the parameter back or latches it (manual pp. 514-515).
+    fn has_recorded_before(&self, key: CellKey) -> bool {
+        match self.automation.open.get(&key).and_then(|s| s.slot) {
+            None => self.has_envelope(key),
+            Some(slot) => self.clip_has_automation(key, slot),
+        }
+    }
+
+    fn clip_has_automation(&self, key: CellKey, slot: usize) -> bool {
+        let (TrackRef::Track(track), Some((target, _))) = (key.track, self.lane_of(key)) else {
+            return false;
+        };
+        self.clip(track, slot)
+            .and_then(|c| c.envelope(target, EnvMode::Automation))
+            .is_some_and(|e| !e.envelope.points.is_empty())
+    }
+
     pub(super) fn automation_moved(
         &mut self,
         track: TrackRef,
@@ -524,7 +668,7 @@ impl Session {
     /// The playhead jumped: each stroke ends where it left. A latch is over; a mouse still down
     /// goes on recording where the playhead landed.
     pub(super) fn automation_jumped(&mut self, from: f64, to: f64) {
-        let open: Vec<Stroke> = take(&mut self.automation.open).into_values().collect();
+        let open = self.take_track_strokes();
         for mut stroke in open {
             stroke.close(from);
             let key = stroke.key;
@@ -549,9 +693,277 @@ impl Session {
         self.write_recorded_automation();
     }
 
+    // ------------------------------------------------------------- Session automation
+
+    /// Session Record: whether gestures are recorded into the Session clips playing. A track
+    /// records if it's armed, or on every track with Record Session Automation In set so.
+    pub fn session_automation_record(&self) -> bool {
+        self.automation.session_record
+    }
+
+    pub fn set_session_automation_record(&mut self, on: bool) {
+        if on == self.automation.session_record {
+            return;
+        }
+        self.automation.session_record = on;
+        if !on {
+            self.finish_session_automation();
+        }
+        self.sync_session_tracks();
+    }
+
+    /// The Record Session Automation In setting.
+    pub fn set_session_automation_in(&mut self, tracks: SessionAutomationIn) {
+        self.automation.session_in = tracks;
+        self.sync_session_tracks();
+    }
+
+    /// Whether gestures on this chain are going into its playing Session clip.
+    fn records_clip(&self, chain: ChainRef) -> bool {
+        match chain.owner() {
+            ChainRef::Track(t) => self.automation.session_tracks.contains(&t),
+            _ => false,
+        }
+    }
+
+    /// Which tracks should be recording into their clips right now, as the engine must know.
+    pub(super) fn sync_session_tracks(&mut self) {
+        let wanted: HashSet<TrackId> = if self.automation.session_record {
+            let all = self.automation.session_in == SessionAutomationIn::AllTracks;
+            self.project
+                .tracks
+                .iter()
+                .filter(|t| all || t.arm)
+                .map(|t| t.id)
+                .collect()
+        } else {
+            HashSet::new()
+        };
+        let changed: Vec<(TrackId, bool)> = wanted
+            .difference(&self.automation.session_tracks)
+            .map(|t| (*t, true))
+            .chain(
+                self.automation
+                    .session_tracks
+                    .difference(&wanted)
+                    .map(|t| (*t, false)),
+            )
+            .collect();
+        for (track, on) in changed {
+            self.send(EngineCommand::Record(RecordCmd::SetSessionAutomation {
+                track,
+                on,
+            }));
+        }
+        self.automation.session_tracks = wanted;
+    }
+
+    pub(super) fn clip_automation_moved(
+        &mut self,
+        track: TrackId,
+        slot: usize,
+        cell: CellIx,
+        (value, before): (f64, f64),
+        position: f64,
+    ) {
+        let key = CellKey {
+            track: TrackRef::Track(track),
+            cell,
+        };
+        let wrapped = self.automation.open.get(&key).is_some_and(|s| {
+            s.slot != Some(slot) || position < s.points.last().map_or(0.0, |p| p.time)
+        });
+        let resumed = if wrapped {
+            self.end_clip_stroke(key, None)
+        } else {
+            None
+        };
+        self.automation
+            .open
+            .entry(key)
+            .and_modify(|s| s.push(position, value))
+            .or_insert_with(|| {
+                let mut stroke = Stroke::starting(key, resumed.unwrap_or(before), position, value);
+                stroke.slot = Some(slot);
+                stroke
+            });
+    }
+
+    pub(super) fn clip_automation_released(&mut self, track: TrackId, cell: CellIx, position: f64) {
+        let key = CellKey {
+            track: TrackRef::Track(track),
+            cell,
+        };
+        self.end_clip_stroke(key, Some(position));
+        self.write_recorded_automation();
+    }
+
+    /// Ends a stroke recording into a clip, at `at` or at the end of the clip, and hands it over
+    /// to be written. Returns what it was last at.
+    fn end_clip_stroke(&mut self, key: CellKey, at: Option<f64>) -> Option<f64> {
+        let mut stroke = self.automation.open.remove(&key)?;
+        let slot = stroke.slot?;
+        let TrackRef::Track(track) = key.track else {
+            return None;
+        };
+        let end = at.or_else(|| self.clip(track, slot).map(|c| c.length as f64));
+        if let Some(end) = end {
+            stroke.close(end);
+        }
+        let last = stroke.last_value();
+        self.automation.done.push(stroke);
+        Some(last)
+    }
+
+    /// A pass of a latched control ends at the end of the clip or its loop, which only the
+    /// playhead's progress can say. Call often.
+    pub(super) fn poll_clip_strokes(&mut self) {
+        let keys: Vec<CellKey> = self
+            .automation
+            .open
+            .iter()
+            .filter(|(_, s)| s.slot.is_some())
+            .map(|(k, _)| *k)
+            .collect();
+        let mut changed = false;
+        for key in keys {
+            let TrackRef::Track(track) = key.track else {
+                continue;
+            };
+            let Some(stroke) = self.automation.open.get(&key) else {
+                continue;
+            };
+            let (slot, last) = (stroke.slot, stroke.points.last().map_or(0.0, |p| p.time));
+            let (playing, position) = self.track_shared.get(&track).map_or((None, 0.0), |s| {
+                let at = s.playing_slot.load(Ordering::Relaxed);
+                (
+                    (at != NO_SLOT).then_some(at as usize),
+                    s.clip_position.load(),
+                )
+            });
+            if playing == slot && position >= last {
+                continue;
+            }
+            // It came round, or the clip isn't playing any more.
+            let end = if playing == slot { None } else { Some(last) };
+            self.end_clip_stroke(key, end);
+            let held = self
+                .automation
+                .gestures
+                .get(&key)
+                .is_some_and(|g| g.source == GestureSource::Mouse && !g.latched);
+            if !held {
+                self.automation.gestures.remove(&key);
+                self.send(EngineCommand::Param(ParamCmd::EndGesture {
+                    track: key.track,
+                    cell: key.cell,
+                }));
+            }
+            changed = true;
+        }
+        if changed {
+            self.write_recorded_automation();
+            self.note_automation_pass();
+        }
+    }
+
+    /// The strokes in progress going into the Arrangement. Those going into a clip keep going.
+    fn take_track_strokes(&mut self) -> Vec<Stroke> {
+        let mut strokes = Vec::new();
+        self.automation.open.retain(|_, s| {
+            s.slot.is_some() || {
+                strokes.push(std::mem::replace(
+                    s,
+                    Stroke {
+                        key: s.key,
+                        before: s.before,
+                        points: Vec::new(),
+                        slot: None,
+                    },
+                ));
+                false
+            }
+        });
+        strokes
+    }
+
+    /// Session Record went off: every gesture ends where the clip is now.
+    fn finish_session_automation(&mut self) {
+        let keys: Vec<CellKey> = self
+            .automation
+            .open
+            .iter()
+            .filter(|(_, s)| s.slot.is_some())
+            .map(|(k, _)| *k)
+            .collect();
+        for key in keys {
+            let last = self
+                .automation
+                .open
+                .get(&key)
+                .and_then(|s| s.points.last().map(|p| p.time));
+            self.end_clip_stroke(key, last);
+            self.automation.gestures.remove(&key);
+        }
+        self.write_recorded_automation();
+        self.note_automation_pass();
+    }
+
+    fn note_automation_pass(&mut self) {
+        if take(&mut self.automation.wrote) {
+            self.dirty = true;
+            self.history.pending = Some("Record Automation");
+            self.history.settling = 0;
+        }
+    }
+
+    /// A clip that set this parameter stopped counting, leaving it where it was. Everything else
+    /// that knows the knob's value has to catch up.
+    pub(super) fn clip_automation_ended(&mut self, target: TrackRef, cell: CellIx, value: f64) {
+        let owner = owner_of(target);
+        let Some(layout) = self.layouts.get_mut(&owner) else {
+            return;
+        };
+        layout.note_value(cell, value);
+        let Some(spec) = layout.spec(cell) else {
+            return;
+        };
+        match spec.target {
+            CellTarget::Device { device, param } => {
+                let chain = self.chain_of_device(device).unwrap_or(owner);
+                self.report_device_param(chain, device, param.0, value);
+                return;
+            }
+            CellTarget::Mixer(control) => {
+                if let TrackRef::Track(id) = target {
+                    let returns: Vec<TrackId> = self.project.returns.iter().map(|r| r.id).collect();
+                    if let Some(t) = self.project.track_mut(id) {
+                        match control {
+                            mixer::VOLUME => t.volume_db = value as f32,
+                            mixer::PAN => t.pan = value as f32,
+                            c if c >= mixer::FIRST_SEND => {
+                                let n = (c.0 - mixer::FIRST_SEND.0) as usize;
+                                if let Some(ret) = returns.get(n) {
+                                    if let Some(send) = t.sends.iter_mut().find(|s| s.to == *ret) {
+                                        send.level_db = value as f32;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                } else if control == mixer::VOLUME {
+                    self.project.master.volume_db = value as f32;
+                }
+            }
+            _ => {}
+        }
+        self.touch();
+    }
+
     /// Recording stopped at `tick`. The whole pass becomes one undo step.
     pub(super) fn finish_automation_pass(&mut self, tick: f64) {
-        for (_, mut stroke) in take(&mut self.automation.open) {
+        for mut stroke in self.take_track_strokes() {
             stroke.close(tick);
             self.automation.done.push(stroke);
         }
@@ -571,6 +983,29 @@ impl Session {
             let Some((target, range)) = self.lane_of(stroke.key) else {
                 continue;
             };
+            if let (Some(slot), TrackRef::Track(track)) = (stroke.slot, stroke.key.track) {
+                let Some(clip) = self.clip_mut(track, slot) else {
+                    continue;
+                };
+                if clip.envelope(target, EnvMode::Automation).is_none() {
+                    clip.envelopes.push(rlive_project::ClipEnvelope {
+                        envelope: Envelope {
+                            target,
+                            points: Vec::new(),
+                        },
+                        mode: EnvMode::Automation,
+                        loop_region: None,
+                    });
+                }
+                if let Some(e) = clip.envelope_mut(target, EnvMode::Automation) {
+                    e.envelope.overwrite(&stroke.points, stroke.before, range);
+                }
+                self.automation.clip_routed.insert(track);
+                if !changed.contains(&stroke.key.track) {
+                    changed.push(stroke.key.track);
+                }
+                continue;
+            }
             let Some(envelopes) = self.envelopes_mut(stroke.key.track) else {
                 continue;
             };

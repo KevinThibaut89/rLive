@@ -1178,6 +1178,12 @@ fn mixer_strip(
         if let Some(v) = widgets::pan_knob(&mut ku, shown) {
             new_mix.1 = v;
         }
+        if let Some(moved) = session.modulated_cell_norm(chain, mix_cell::PAN) {
+            let needle = (shown + 1.0) / 2.0;
+            if let Some(span) = widgets::mod_ring_span(needle, moved) {
+                widgets::paint_mod_ring(&p, knob_r.center(), 9.5, span);
+            }
+        }
         Led::of(session.cell_state(chain, mix_cell::PAN))
             .paint(&p, knob_r.left_top() + Vec2::new(2.0, 2.0));
         automation::control_zone(
@@ -1219,6 +1225,11 @@ fn mixer_strip(
         pal().accent,
     ) {
         new_mix.0 = db;
+    }
+    if let Some(norm) = session.modulated_cell_norm(chain, mix_cell::VOLUME) {
+        let db = mixer::VOLUME_MIN_DB as f32
+            + norm * (mixer::VOLUME_MAX_DB - mixer::VOLUME_MIN_DB) as f32;
+        widgets::paint_fader_dot(&p, fader_r, db);
     }
     Led::of(session.cell_state(chain, mix_cell::VOLUME))
         .paint(&p, fader_r.left_top() + Vec2::new(-5.0, 4.0));
@@ -1409,6 +1420,11 @@ fn send_knobs(
             widgets::KnobTone::Normal
         };
         widgets::paint_knob(&p, center, SEND_RADIUS, norm, false, tone);
+        if let Some(moved) = session.modulated_cell_norm(ChainRef::Track(id), mix_cell::send(n)) {
+            if let Some(span) = widgets::mod_ring_span(norm, moved) {
+                widgets::paint_mod_ring(&p, center, SEND_RADIUS, span);
+            }
+        }
         p.text(
             center + Vec2::new(0.0, SEND_RADIUS + 3.0),
             Align2::CENTER_CENTER,

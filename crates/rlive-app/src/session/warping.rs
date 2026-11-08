@@ -4,6 +4,7 @@
 //! records the undo step and sends the result to the engine.
 
 use super::{ClipRef, Session};
+use rlive_project::clip_envelope;
 use rlive_project::warp_edit::{self, WarpContext, WarpOp};
 use rlive_project::{Clip, ClipContent, Warp, WarpMode, WarpParams};
 use serde::{Deserialize, Serialize};
@@ -201,8 +202,15 @@ impl Session {
                 set_bpm,
                 transients: &transients,
             };
+            let markers = |w: &Warp| -> Vec<(f64, f64)> {
+                w.markers.iter().map(|m| (m.seconds, m.tick)).collect()
+            };
+            let before = markers(warp);
             let changed = warp_edit::apply(warp, op, &cx, &mut length);
+            let after = markers(warp);
             clip.length = length;
+            // Linked envelopes stay over the audio they were drawn on.
+            clip_envelope::retime_linked(&mut clip.envelopes, &before, &after);
             changed
         })
     }

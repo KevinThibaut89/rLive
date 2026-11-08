@@ -35,6 +35,9 @@ pub enum ModMode {
     Additive,
     /// The modulation amount multiplies the value, e.g. gain.
     Scale,
+    /// The modulation amount is added, but reduced as the value nears either end of its range,
+    /// e.g. pan: full reach from the centre, and none at all with the knob hard over (p. 541).
+    Intensity,
 }
 
 /// Capabilities of a parameter, as a set of bits.
@@ -128,7 +131,8 @@ pub mod mixer {
         [
             ParamInfo::continuous(VOLUME.0, "Volume", VOLUME_MIN_DB, VOLUME_MAX_DB, 0.0, "dB")
                 .with_mod_mode(ModMode::Scale),
-            ParamInfo::continuous(PAN.0, "Pan", -1.0, 1.0, 0.0, ""),
+            ParamInfo::continuous(PAN.0, "Pan", -1.0, 1.0, 0.0, "")
+                .with_mod_mode(ModMode::Intensity),
             ParamInfo::toggle(MUTE.0, "Mute", false),
             ParamInfo::toggle(SOLO.0, "Solo", false),
         ]

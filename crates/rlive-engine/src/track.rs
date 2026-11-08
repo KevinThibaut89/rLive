@@ -1,13 +1,16 @@
 //! Tracks, device chains and the mixer stage.
 #![allow(clippy::vec_box)]
 
+use crate::automation::ClipRoutes;
 use crate::capture::{CaptureSink, SlotRec};
 use crate::clip::{BlockTime, ClipData, ClipPlayer, Pending};
 use crate::delay::{offer_line, FadingDelay, StereoLine, TapLines};
 use crate::graph::{BusIn, InputGate, Tap, TrackIo};
 use crate::lane::{ArrangementLane, LanePlayer};
 use crate::params::{mix_cell, MAX_SENDS};
-use crate::params::{BusLayout, ControlHooks, ControlStep, ParamBus, TrackRoutes, CONTROL_STEP};
+use crate::params::{
+    BusLayout, CellIx, ControlHooks, ControlStep, ParamBus, TrackRoutes, CONTROL_STEP,
+};
 use crate::rack::RackNode;
 use crate::shared::{TrackShared, NO_SLOT};
 use crate::taps::{AuxBus, TapBus, TapSlots, MAX_AUX_OUTS};
@@ -908,6 +911,23 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
     input
 }
 
+/// A clip whose envelopes can drive a track's parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClipKey {
+    Slot(u32),
+    Lane(u64),
+}
+
+/// Which clip's envelopes count at a control step.
+enum ActiveClip {
+    /// None: a clip that was playing has stopped counting.
+    Idle,
+    /// A launch partway through the block hasn't happened yet: nothing changes yet.
+    Hold,
+    /// The clip with this key, `local` ticks past its start.
+    Clip { key: ClipKey, local: f64 },
+}
+
 /// Everything that writes a bus at a control step, in resolve order. Macros run even while a
 /// launched Session clip has punched the lanes out, since they are the mapping, not automation.
 #[allow(clippy::too_many_arguments)]
@@ -915,6 +935,7 @@ fn run_writers(
     hooks: Option<&mut (dyn ControlHooks + 'static)>,
     routes: &TrackRoutes,
     automate: bool,
+    clip: Option<(&ClipRoutes, f64)>,
     bus: &mut ParamBus,
     index: u32,
     offset: usize,
@@ -924,6 +945,9 @@ fn run_writers(
     let Some(hooks) = hooks else {
         if automate {
             routes.automate(tick, bus);
+        }
+        if let Some((clip, local)) = clip {
+            clip.run(local, bus);
         }
         routes.run_macros(bus);
         return;
@@ -936,6 +960,10 @@ fn run_writers(
     hooks.macros(step, bus);
     if automate {
         routes.automate(tick, bus);
+    }
+    // Before the macros too, so a clip envelope on a macro's knob is heard at this step.
+    if let Some((clip, local)) = clip {
+        clip.run(local, bus);
     }
     // After automation, so a macro's own automated knob is heard at this step.
     routes.run_macros(bus);
@@ -956,6 +984,10 @@ pub struct TrackNode {
     pub routes: Arc<TrackRoutes>,
     /// Writes the bus at each control step, around automation. Unused until modulators exist.
     pub hooks: Option<Box<dyn ControlHooks>>,
+    /// The clip whose envelopes last counted.
+    pub(crate) clip_key: Option<ClipKey>,
+    /// Session Record and Automation Arm record this track's playing Session clip.
+    pub(crate) session_automation: bool,
 
     pub(crate) player: ClipPlayer,
     pub(crate) lane: LanePlayer,
@@ -1044,6 +1076,8 @@ impl TrackNode {
             bus: BusLayout::for_track(&MixSettings::default()).build(),
             routes: Arc::new(TrackRoutes::default()),
             hooks: None,
+            clip_key: None,
+            session_automation: false,
             player: ClipPlayer::new(),
             lane: LanePlayer::new(Arc::new(ArrangementLane::default())),
             follow: true,
@@ -1145,8 +1179,11 @@ impl TrackNode {
         &mut self,
         time: BlockTime,
         transport: &TransportInfo,
+        auto_reset: bool,
         retire: &mut dyn FnMut(Arc<ClipData>),
     ) {
+        self.player.auto_reset = auto_reset;
+        self.lane.auto_reset = auto_reset;
         let n = time.frames;
         let left = &mut self.left[..n];
         let right = &mut self.right[..n];
@@ -1388,6 +1425,31 @@ impl TrackNode {
             .apply(&mut self.left, &mut self.right, frames, coeff);
     }
 
+    /// Which clip's envelopes count `tick` into the song.
+    fn active_clip(&self, playing: bool, tick: f64) -> ActiveClip {
+        if !playing {
+            return ActiveClip::Idle;
+        }
+        if let Some(p) = &self.player.playing {
+            if tick < p.start_tick {
+                return ActiveClip::Hold;
+            }
+            return ActiveClip::Clip {
+                key: ClipKey::Slot(p.slot as u32),
+                local: tick - p.start_tick,
+            };
+        }
+        if self.follow {
+            if let Some((start, origin)) = self.lane.clip_at(tick) {
+                return ActiveClip::Clip {
+                    key: ClipKey::Lane(start),
+                    local: tick - origin,
+                };
+            }
+        }
+        ActiveClip::Idle
+    }
+
     /// Run the chain up to `to` frames into the block, handing each device a segment of its own.
     fn render_to(
         &mut self,
@@ -1467,6 +1529,7 @@ impl TrackNode {
 
     /// Resolve this track's parameters at a step. Devices hear their changes as events at this
     /// offset; only a device being switched on or off makes the chain stop here.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn control_step(
         &mut self,
         index: u32,
@@ -1474,12 +1537,39 @@ impl TrackNode {
         ctx: &BlockCtx,
         buses: &mut [TapBus],
         on_param: &mut dyn FnMut(TrackId, DeviceId, u32, f64),
+        on_clip_end: &mut dyn FnMut(CellIx, f64),
     ) {
+        let tick = ctx.tick_at(offset);
+        let clip = match self.active_clip(ctx.transport.playing, tick) {
+            ActiveClip::Clip { key, local } => {
+                if self.clip_key != Some(key) {
+                    self.release_clip_envelopes(on_clip_end);
+                    self.clip_key = Some(key);
+                }
+                Some((key, local))
+            }
+            ActiveClip::Idle => {
+                if self.clip_key.is_some() {
+                    self.release_clip_envelopes(on_clip_end);
+                    self.clip_key = None;
+                }
+                None
+            }
+            ActiveClip::Hold => None,
+        };
+        let clip = clip.and_then(|(key, local)| {
+            let routes = match key {
+                ClipKey::Slot(slot) => self.routes.session_clip(slot),
+                ClipKey::Lane(start) => self.routes.lane_clip(start),
+            };
+            Some((routes?, local))
+        });
         run_writers(
             self.hooks.as_deref_mut(),
             // A launched Session clip punches a track's automation out until Back to Arrangement.
             &self.routes,
             self.follow,
+            clip,
             &mut self.bus,
             index,
             offset,
@@ -1498,6 +1588,13 @@ impl TrackNode {
             }
         });
         self.gain.dirty |= resolved.mixer;
+    }
+
+    /// The clip whose envelopes counted has stopped counting.
+    pub(crate) fn release_clip_envelopes(&mut self, on_clip_end: &mut dyn FnMut(CellIx, f64)) {
+        let routes = &self.routes;
+        self.bus
+            .release_clip_envelopes(|cell| routes.has_lane(cell), on_clip_end);
     }
 
     /// Take the crossfader's gains for the two sides, as of this control step.

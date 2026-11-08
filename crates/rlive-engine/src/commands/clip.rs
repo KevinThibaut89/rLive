@@ -16,6 +16,8 @@ pub enum ClipCmd {
         track: TrackId,
         lane: Arc<ArrangementLane>,
     },
+    /// MIDI Envelope Auto-Reset: each new clip sets some controllers back first.
+    SetMidiAutoReset(bool),
 }
 
 impl Engine {
@@ -72,6 +74,7 @@ impl Engine {
                     retire(&mut self.garbage, Garbage::Shared(old));
                 }
             }
+            C::SetMidiAutoReset(on) => self.midi_auto_reset = on,
             C::SetLane { track, lane } => {
                 let tick = self.tick;
                 let old = match self.tracks.iter_mut().find(|t| t.id == track) {

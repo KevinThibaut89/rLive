@@ -3,16 +3,21 @@
 mod audio;
 mod data;
 #[cfg(test)]
+mod envelope_tests;
+pub(crate) mod envelopes;
+#[cfg(test)]
 mod following_tests;
 mod launcher;
 mod midi;
 
 pub(crate) use audio::{AudioCursor, LANE_VOICE, SESSION_VOICE};
 pub use data::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
+pub use envelopes::{ClipCurve, ClipEnvelopes, EnvCurve, EnvTiming, EnvelopedClip};
 pub(crate) use launcher::{ClipPlayer, Pending, Playing};
 pub(crate) use midi::{chase, Voices};
 
-use audio::render_audio;
+use audio::render_audio_env;
+use envelopes::render_controllers;
 use midi::render_midi;
 use rlive_core::time::TempoRun;
 use rlive_core::warp::StretchBank;
@@ -90,14 +95,21 @@ pub(crate) fn render_range(
     if seg_end <= a {
         return;
     }
-    match clip {
-        ClipData::Midi(clip) => render_midi(clip, origin, a, seg_end, time, voices, ev),
-        ClipData::Audio(clip) => {
-            render_audio(clip, None, origin, a, seg_end, time, audio, l, r, stretch)
+    let envelopes = clip.envelopes();
+    match clip.content() {
+        ClipData::Midi(clip) => {
+            render_midi(clip, origin, a, seg_end, time, voices, ev);
+            if let Some(envelopes) = envelopes {
+                render_controllers(envelopes, origin, a, seg_end, time, ev);
+            }
         }
-        ClipData::Warped(clip) => render_audio(
+        ClipData::Audio(clip) => render_audio_env(
+            clip, None, envelopes, origin, a, seg_end, time, audio, l, r, stretch,
+        ),
+        ClipData::Warped(clip) => render_audio_env(
             &clip.audio,
             Some(clip),
+            envelopes,
             origin,
             a,
             seg_end,
@@ -107,5 +119,6 @@ pub(crate) fn render_range(
             r,
             stretch,
         ),
+        ClipData::Enveloped(_) => {}
     }
 }

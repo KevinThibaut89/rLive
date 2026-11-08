@@ -12,6 +12,7 @@ use crate::session::ShortSampleMode;
 use crate::settings::{ChannelBank, ClipColor, InputDevice, ScrollBars, Settings};
 use egui::{Color32, RichText, Sense, Stroke, StrokeKind, Vec2};
 use rlive_audio_io::{BitDepth, FileType};
+use rlive_project::clip_envelope::SessionAutomationIn;
 use rlive_project::WarpMode;
 
 /// A page of the Settings window.
@@ -151,6 +152,10 @@ impl RliveApp {
                 self.session
                     .samples
                     .configure(self.settings.samples.loader_config());
+            }
+            if self.settings.record_session_automation_in != before.record_session_automation_in {
+                let tracks = self.settings.record_session_automation_in;
+                self.session.set_session_automation_in(tracks);
             }
         }
     }
@@ -727,6 +732,7 @@ fn link_tab(ui: &mut egui::Ui) {
 fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     let warp = &mut settings.warp;
     let record = &mut settings.record;
+    let session_automation = &mut settings.record_session_automation_in;
     widgets::section_label(ui, "RECORD");
     grid(ui, "record", |ui| {
         label(ui, "File Type");
@@ -745,6 +751,26 @@ fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
                 for depth in BitDepth::ALL {
                     ui.selectable_value(&mut record.bit_depth, depth, depth.label());
                 }
+            });
+        ui.end_row();
+        label(ui, "Record Session automation in");
+        egui::ComboBox::from_id_salt("session_automation_in")
+            .width(160.0)
+            .selected_text(match session_automation {
+                SessionAutomationIn::ArmedTracks => "Armed Tracks",
+                SessionAutomationIn::AllTracks => "All Tracks",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    session_automation,
+                    SessionAutomationIn::ArmedTracks,
+                    "Armed Tracks",
+                );
+                ui.selectable_value(
+                    session_automation,
+                    SessionAutomationIn::AllTracks,
+                    "All Tracks",
+                );
             });
         ui.end_row();
         label(ui, "Start Playback with Record");

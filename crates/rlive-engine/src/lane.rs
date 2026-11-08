@@ -1,5 +1,6 @@
 //! Arrangement lanes: clips placed on the song timeline, played stateless from the tick.
 
+use crate::clip::envelopes::enter_clip;
 use crate::clip::{chase, render_range, AudioCursor, BlockTime, ClipData, Voices, LANE_VOICE};
 use rlive_core::warp::StretchBank;
 use rlive_core::{MidiEvent, NoteSpace};
@@ -48,6 +49,8 @@ pub(crate) struct LanePlayer {
     audio: AudioCursor,
     /// The playhead moved: find the clip again and chase notes on the next render.
     resync: bool,
+    /// MIDI Envelope Auto-Reset: each new clip sets controllers back first.
+    pub(crate) auto_reset: bool,
 }
 
 impl LanePlayer {
@@ -59,7 +62,16 @@ impl LanePlayer {
             voices: Voices::new(NoteSpace::Arrangement),
             audio: AudioCursor::new(LANE_VOICE),
             resync: true,
+            auto_reset: false,
         }
+    }
+
+    /// The clip placed over song tick `tick`, with what's needed to find it again: its start,
+    /// and the tick of its local 0.
+    pub fn clip_at(&self, tick: f64) -> Option<(u64, f64)> {
+        let clips = &self.lane.clips;
+        let c = clips.get(clips.partition_point(|c| c.end as f64 <= tick))?;
+        (c.start as f64 <= tick).then(|| (c.start, c.origin()))
     }
 
     /// The clip under the playhead, if any.
@@ -121,6 +133,7 @@ impl LanePlayer {
             voices,
             audio,
             resync,
+            auto_reset,
         } = self;
         let clips = &lane.clips;
         if std::mem::take(resync) {
@@ -153,6 +166,13 @@ impl LanePlayer {
                         enter,
                         time.event_offset(enter),
                         voices,
+                        ev,
+                    );
+                    enter_clip(
+                        &clip.data,
+                        enter - origin,
+                        time.event_offset(enter),
+                        *auto_reset,
                         ev,
                     );
                     audio.enter(clip.end as f64 - origin);

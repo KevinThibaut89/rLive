@@ -807,6 +807,15 @@ pub fn fader(ui: &mut Ui, size: Vec2, db: f32, peaks: (f32, f32), color: Color32
     changed
 }
 
+/// The small dot under a fader's thumb that says where modulation has actually put the volume
+/// (manual p. 539).
+pub fn paint_fader_dot(p: &egui::Painter, rect: Rect, db: f32) {
+    let x = rect.left() + (rect.width() - 10.0) / 2.0;
+    let height = rect.height() - 6.0;
+    let y = rect.top() + 3.0 + height * (1.0 - db_to_pos(db));
+    p.circle_filled(Pos2::new(x + 8.0, y), 2.0, pal().solo_blue);
+}
+
 /// Decaying peak display values (UI side).
 #[derive(Default, Clone, Copy)]
 pub struct MeterState {

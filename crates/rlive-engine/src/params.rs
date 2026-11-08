@@ -8,7 +8,8 @@
 //! 2. Automation writes `auto` unless overridden ([`TrackRoutes`]).
 //! 3. Modulators and clip envelopes set `add` and `scale` ([`ControlHooks::modulation`]).
 //! 4. `effective = clamp(norm(auto or base) * scale + add)`, converted to plain units and
-//!    delivered if changed.
+//!    delivered if changed. A [`ModMode::Intensity`] control reduces `add` as its value nears
+//!    either end of its range.
 //!
 //! Working in normalized space keeps VST3's normalized values and CLAP's plain values uniform.
 //! A cell's identity is its index: cells never move for the life of a track, so a [`CellIx`]
@@ -185,6 +186,21 @@ const OVERRIDDEN: u8 = 1 << 3;
 const TOUCHED: u8 = 1 << 4;
 /// Not the source of the value: automation has an opinion of it but isn't heard.
 const HOLDS_AUTOMATION: u8 = MACRO | OVERRIDDEN | TOUCHED;
+/// The clip playing has an automation envelope for this.
+const CLIP_AUTOMATED: u8 = 1 << 5;
+/// The clip playing has a modulation envelope for this.
+const CLIP_MODULATED: u8 = 1 << 6;
+
+/// What modulation does to a normalized value, kept on the knob.
+fn modulated(norm: f64, add: f32, scale: f32, mode: ModMode) -> f64 {
+    let add = f64::from(add);
+    let moved = match mode {
+        ModMode::Additive | ModMode::Scale => norm * f64::from(scale) + add,
+        // A reach of 1 is hard over from the centre, and shrinks to none at either end.
+        ModMode::Intensity => norm + add * 0.5 * (1.0 - (2.0 * norm - 1.0).abs()),
+    };
+    moved.clamp(0.0, 1.0)
+}
 
 /// What the UI shows about a cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -328,6 +344,8 @@ pub struct ParamBus {
     specs: Box<[CellSpec]>,
     /// Normalized effective values, for the UI.
     effective: Arc<[AtomicF32]>,
+    /// Normalized values before modulation, for the needle of a control that's being modulated.
+    sources: Arc<[AtomicF32]>,
     /// What each cell is doing, for the UI.
     states: Arc<[AtomicU8]>,
     /// How many cells are overridden, for the Re-Enable Automation button.
@@ -488,8 +506,8 @@ impl ParamBus {
             return source;
         }
         let range = self.specs[ix].range;
-        let norm = (range.to_normalized(source) * c.scale as f64 + c.add as f64).clamp(0.0, 1.0);
-        range.from_normalized(norm)
+        let mode = self.specs[ix].mod_mode;
+        range.from_normalized(modulated(range.to_normalized(source), c.add, c.scale, mode))
     }
 
     pub fn release_macro(&mut self, cell: CellIx) {
@@ -497,6 +515,62 @@ impl ParamBus {
         if ix < self.cells.len() && self.cells[ix].flags & MACRO != 0 {
             self.cells[ix].flags &= !MACRO;
             self.touch(ix);
+        }
+    }
+
+    /// Step 2 for the clip playing: its envelope's value. Marks the cell so the envelope stops
+    /// counting when the clip does.
+    pub fn write_clip_automation(&mut self, cell: CellIx, value: f64) {
+        if let Some(c) = self.cells.get_mut(cell.0 as usize) {
+            c.flags |= CLIP_AUTOMATED;
+        }
+        self.write_automation(cell, value);
+    }
+
+    /// Step 3 for the clip playing. Marks the cell so the modulation ends with the clip.
+    pub fn modulate_clip(&mut self, cell: CellIx, add: f32, scale: f32) {
+        if let Some(c) = self.cells.get_mut(cell.0 as usize) {
+            c.flags |= CLIP_MODULATED;
+        }
+        self.modulate(cell, add, scale);
+    }
+
+    /// The clip playing has stopped counting: its modulation goes away. A parameter its automation
+    /// set stays where it was left and is the knob's again, unless `lane_has` says a track lane
+    /// still automates it. `ended` hears of every parameter that went back to its knob this way.
+    pub(crate) fn release_clip_envelopes(
+        &mut self,
+        lane_has: impl Fn(CellIx) -> bool,
+        mut ended: impl FnMut(CellIx, f64),
+    ) {
+        for ix in 0..self.cells.len() {
+            let flags = self.cells[ix].flags;
+            if flags & (CLIP_AUTOMATED | CLIP_MODULATED) == 0 {
+                continue;
+            }
+            if flags & CLIP_MODULATED != 0 {
+                let c = &mut self.cells[ix];
+                c.flags &= !CLIP_MODULATED;
+                c.add = 0.0;
+                c.scale = 1.0;
+                self.touch(ix);
+            }
+            if flags & CLIP_AUTOMATED != 0 {
+                let cell = CellIx(ix as u32);
+                self.cells[ix].flags &= !CLIP_AUTOMATED;
+                if lane_has(cell) {
+                    continue;
+                }
+                let c = self.cells[ix];
+                // An override already put the knob in charge, and a Macro owns it regardless.
+                if c.flags & (OVERRIDDEN | MACRO) == 0 && c.flags & AUTOMATED != 0 {
+                    self.cells[ix].base = c.auto;
+                    ended(cell, c.auto);
+                }
+                self.set_overridden(ix, false);
+                self.cells[ix].flags &= !AUTOMATED;
+                self.touch(ix);
+            }
         }
     }
 
@@ -597,17 +671,19 @@ impl ParamBus {
             let automated = c.flags & MACRO != 0
                 || (c.flags & AUTOMATED != 0 && c.flags & (OVERRIDDEN | TOUCHED) == 0);
             let source = if automated { c.auto } else { c.base };
-            let (norm, plain) = if c.add == 0.0 && c.scale == 1.0 {
+            let (norm, plain, source_norm) = if c.add == 0.0 && c.scale == 1.0 {
                 // Without modulation, skip the trip through normalized space: delivered values
                 // stay exactly what was set.
                 let plain = spec.range.clamp(source);
-                (spec.range.to_normalized(plain), plain)
+                let norm = spec.range.to_normalized(plain);
+                (norm, plain, norm)
             } else {
-                let norm = (spec.range.to_normalized(source) * c.scale as f64 + c.add as f64)
-                    .clamp(0.0, 1.0);
-                (norm, spec.range.from_normalized(norm))
+                let knob = spec.range.to_normalized(source);
+                let norm = modulated(knob, c.add, c.scale, spec.mod_mode);
+                (norm, spec.range.from_normalized(norm), knob)
             };
             self.effective[ix].store(norm as f32);
+            self.sources[ix].store(source_norm as f32);
             if plain != c.sent {
                 c.sent = plain;
                 self.queue[kept] = ix as u32;
@@ -721,6 +797,7 @@ impl ParamBus {
             }
             self.cells[ix] = old.cells[ix];
             self.effective[ix].store(old.effective[ix].load());
+            self.sources[ix].store(old.sources[ix].load());
             let state = old.states[ix].load(Ordering::Relaxed);
             self.states[ix].store(state, Ordering::Relaxed);
             if self.cells[ix].flags & OVERRIDDEN != 0 {
@@ -790,6 +867,7 @@ pub struct BusLayout {
     /// Where each rack chain's strip starts.
     chains: HashMap<ChainId, u32>,
     effective: Arc<[AtomicF32]>,
+    sources: Arc<[AtomicF32]>,
     states: Arc<[AtomicU8]>,
     overridden: Arc<AtomicU32>,
     /// Largest block the bus will run in, which sizes its parameter queues.
@@ -810,6 +888,7 @@ impl BusLayout {
             devices: HashMap::new(),
             chains: HashMap::new(),
             effective: Arc::from([]),
+            sources: Arc::from([]),
             states: Arc::from([]),
             overridden: Arc::new(AtomicU32::new(0)),
             max_block: 0,
@@ -999,6 +1078,12 @@ impl BusLayout {
         self.effective.get(cell.0 as usize).map(|v| v.load())
     }
 
+    /// The normalized value of a cell before its modulation, as last resolved. This is where its
+    /// needle goes.
+    pub fn source(&self, cell: CellIx) -> Option<f32> {
+        self.sources.get(cell.0 as usize).map(|v| v.load())
+    }
+
     /// What the UI shows about a cell, as last resolved.
     pub fn state(&self, cell: CellIx) -> CellState {
         self.states
@@ -1028,6 +1113,13 @@ impl BusLayout {
             .map(|(spec, value)| AtomicF32::new(spec.range.to_normalized(*value) as f32))
             .collect();
         self.effective = effective.clone();
+        let sources: Arc<[AtomicF32]> = self
+            .specs
+            .iter()
+            .zip(&self.base)
+            .map(|(spec, value)| AtomicF32::new(spec.range.to_normalized(*value) as f32))
+            .collect();
+        self.sources = sources.clone();
         let states: Arc<[AtomicU8]> = self.specs.iter().map(|_| AtomicU8::new(0)).collect();
         self.states = states.clone();
         let overridden = Arc::new(AtomicU32::new(0));
@@ -1092,6 +1184,7 @@ impl BusLayout {
             owner_of_cell,
             inboxes,
             effective,
+            sources,
             states,
             overridden,
             cells,

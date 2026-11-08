@@ -8,6 +8,7 @@ mod automation;
 pub mod automation_edit;
 mod build;
 mod capture;
+mod clip_envelopes;
 mod clips;
 mod devices;
 mod export;
@@ -32,6 +33,8 @@ mod warping_tests;
 mod automation_edit_tests;
 #[cfg(test)]
 mod automation_tests;
+#[cfg(test)]
+mod clip_envelope_tests;
 #[cfg(test)]
 mod compensation_tests;
 #[cfg(test)]
@@ -263,6 +266,7 @@ impl Session {
         self.runtimes = runtimes;
         self.layouts = layouts;
         self.track_shared = shared_map;
+        self.note_clip_routes();
         self.messages.extend(errors);
         self.send_track_edits(vec![GraphOp::ReplaceAll {
             tracks: Box::new(tracks),
@@ -438,8 +442,29 @@ impl Session {
                 EngineEvent::AutomationReleased { target, cell, tick } => {
                     self.automation_released(target, cell, tick)
                 }
+                EngineEvent::ClipAutomationMoved {
+                    track,
+                    slot,
+                    cell,
+                    value,
+                    before,
+                    position,
+                } => self.clip_automation_moved(track, slot, cell, (value, before), position),
+                EngineEvent::ClipAutomationReleased {
+                    track,
+                    cell,
+                    position,
+                    ..
+                } => self.clip_automation_released(track, cell, position),
+                EngineEvent::ClipAutomationEnded {
+                    target,
+                    cell,
+                    value,
+                } => self.clip_automation_ended(target, cell, value),
             }
         }
+        self.poll_clip_strokes();
+        self.sync_session_tracks();
         let mut todo = Vec::new();
         for (id, rt) in self.runtimes.iter_mut() {
             if let Some(h) = rt.plugin.as_mut() {
