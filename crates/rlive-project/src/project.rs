@@ -105,6 +105,12 @@ pub struct Project {
         skip_serializing_if = "crate::defaults::is_true"
     )]
     pub delay_compensation: bool,
+    /// The Enable Follow Actions Globally button.
+    #[serde(
+        default = "crate::defaults::yes",
+        skip_serializing_if = "crate::defaults::is_true"
+    )]
+    pub follow_actions_on: bool,
     /// Tracks with input monitoring on skip compensation for the lowest possible latency.
     #[serde(default, skip_serializing_if = "is_default")]
     pub reduced_latency_when_monitoring: bool,
@@ -180,7 +186,7 @@ impl Project {
             time_signature: TimeSignature::default(),
             quantize: Quantize::Bar,
             metronome: false,
-            scenes: (1..=8).map(|i| Scene::new(i.to_string())).collect(),
+            scenes: (0..8).map(|_| Scene::new("")).collect(),
             tracks: Vec::new(),
             master: Track::new("Master", TrackKind::Master, MASTER_COLOR, 0),
             arrangement: Arrangement::default(),
@@ -193,6 +199,7 @@ impl Project {
             key_mappings: Vec::new(),
             solo_in_place: true,
             delay_compensation: true,
+            follow_actions_on: true,
             reduced_latency_when_monitoring: false,
             metronome_options: MetronomeOptions::default(),
             record_quantize: RecordQuantize::default(),
@@ -323,9 +330,35 @@ impl Project {
     }
 
     pub fn add_scene(&mut self) {
-        self.scenes
-            .push(Scene::new((self.scenes.len() + 1).to_string()));
+        self.scenes.push(Scene::new(""));
         self.normalize();
+    }
+
+    /// Rearrange the scenes and every track's slots: entry `new` of `map` is the scene that was
+    /// at that index, or an empty new one for an index past the end. Scenes not listed are gone.
+    pub fn remap_scenes(&mut self, map: &[usize]) {
+        let mut old = std::mem::take(&mut self.scenes);
+        self.scenes = map
+            .iter()
+            .map(|i| {
+                old.get_mut(*i)
+                    .map_or_else(|| Scene::new(""), |s| std::mem::replace(s, Scene::new("")))
+            })
+            .collect();
+        for t in self.tracks.iter_mut() {
+            let mut clips = std::mem::take(&mut t.clips);
+            t.clips = map
+                .iter()
+                .map(|i| clips.get_mut(*i).and_then(Option::take))
+                .collect();
+            let no_stop = std::mem::take(&mut t.no_stop);
+            t.no_stop = map
+                .iter()
+                .enumerate()
+                .filter(|(_, old)| no_stop.binary_search(&(**old as u32)).is_ok())
+                .map(|(new, _)| new as u32)
+                .collect();
+        }
     }
 
     pub fn to_ron(&self) -> Result<String, ProjectError> {
@@ -442,6 +475,22 @@ mod tests {
     #[test]
     fn a_new_file_is_at_the_current_version() {
         assert_eq!(Project::empty().version, FORMAT_VERSION);
+    }
+
+    #[test]
+    fn remapping_scenes_moves_their_slots_and_stop_buttons() {
+        let mut p = Project::new_default();
+        p.scenes[0].name = "a".into();
+        p.scenes[1].name = "b".into();
+        p.tracks[0].set_stop_button(1, false);
+        p.remap_scenes(&[1, usize::MAX, 0]);
+        assert_eq!(p.scenes.len(), 3);
+        assert_eq!(p.scenes[0].name, "b");
+        assert_eq!(p.scenes[1].name, "");
+        assert_eq!(p.scenes[2].name, "a");
+        assert!(!p.tracks[0].has_stop_button(0));
+        assert!(p.tracks[0].has_stop_button(1));
+        assert_eq!(p.tracks[0].clips.len(), 3);
     }
 
     #[test]

@@ -976,6 +976,8 @@ pub struct TrackNode {
     pub id: TrackId,
     pub devices: Vec<Box<DeviceSlot>>,
     pub slots: Vec<Option<Arc<ClipData>>>,
+    /// What each slot does when launched. Always `MAX_SCENES` long.
+    pub(crate) launch: Vec<crate::clip::SlotLaunch>,
     pub mix: MixSettings,
     pub shared: Arc<TrackShared>,
     /// Every parameter of this track. Devices must be placed in the layout it was built from.
@@ -1071,6 +1073,7 @@ impl TrackNode {
             id,
             devices: Vec::with_capacity(MAX_DEVICES),
             slots: Vec::with_capacity(MAX_SCENES),
+            launch: vec![crate::clip::SlotLaunch::default(); MAX_SCENES],
             mix: MixSettings::default(),
             shared: Arc::new(TrackShared::default()),
             bus: BusLayout::for_track(&MixSettings::default()).build(),
@@ -1169,6 +1172,18 @@ impl TrackNode {
         }
     }
 
+    /// Set what a slot does when launched, on the UI thread before the track is sent to the engine.
+    pub fn set_launch(&mut self, slot: usize, launch: crate::clip::SlotLaunch) {
+        if let Some(s) = self.launch.get_mut(slot) {
+            *s = launch;
+        }
+    }
+
+    /// What a slot does when launched.
+    pub(crate) fn launch_of(&self, slot: usize) -> crate::clip::SlotLaunch {
+        self.launch.get(slot).copied().unwrap_or_default()
+    }
+
     /// Set the Arrangement lane on the UI thread before the track is sent to the engine.
     pub fn set_lane(&mut self, lane: Arc<ArrangementLane>) {
         self.lane = LanePlayer::new(lane);
@@ -1180,6 +1195,7 @@ impl TrackNode {
         time: BlockTime,
         transport: &TransportInfo,
         auto_reset: bool,
+        env: crate::clip::LaunchEnv,
         retire: &mut dyn FnMut(Arc<ClipData>),
     ) {
         self.player.auto_reset = auto_reset;
@@ -1223,6 +1239,8 @@ impl TrackNode {
                 right,
                 retire,
                 &self.slots,
+                &self.launch,
+                env,
                 &mut self.stretch,
             );
         }
@@ -1690,6 +1708,7 @@ impl TrackNode {
             std::sync::atomic::Ordering::Relaxed,
         );
         shared.clip_position.store(self.player.position(time.t1()));
+        shared.clip_elapsed.store(self.player.elapsed(time.t1()));
         shared
             .follow_arrangement
             .store(self.follow, std::sync::atomic::Ordering::Relaxed);

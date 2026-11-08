@@ -120,6 +120,16 @@ pub struct ArrangementState {
 }
 
 impl ArrangementState {
+    /// Whether clips are being dragged.
+    pub fn dragging_clips(&self) -> bool {
+        self.drag.is_some()
+    }
+
+    /// Lets go of a clip drag without it doing anything.
+    pub fn cancel_clip_drag(&mut self) {
+        self.drag = None;
+    }
+
     /// Zooms the time ruler around the left of the visible range.
     pub fn zoom_ruler(&mut self, factor: f32) {
         let beat = self.scroll.x / self.px_per_beat;

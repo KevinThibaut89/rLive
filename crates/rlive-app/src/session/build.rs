@@ -691,6 +691,7 @@ impl Builder<'_> {
             if let Some(data) = c.as_ref().and_then(|c| self.clip(c)) {
                 node.set_slot(i, Some(data));
             }
+            node.set_launch(i, super::launch::slot_launch(track, i));
         }
         node.set_lane(self.lane(&track.arrangement));
         Box::new(node)

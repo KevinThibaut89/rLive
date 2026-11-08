@@ -207,6 +207,9 @@ pub struct Track {
     pub devices: Vec<Device>,
     /// One entry per scene.
     pub clips: Vec<Option<Clip>>,
+    /// Scenes whose empty slot on this track has no Clip Stop button, sorted.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub no_stop: Vec<u32>,
     /// Clips on the timeline, sorted by start and not overlapping.
     #[serde(default)]
     pub arrangement: Vec<ArrangementClip>,
@@ -261,6 +264,7 @@ impl Track {
             arm: false,
             devices: Vec::new(),
             clips: vec![None; scenes],
+            no_stop: Vec::new(),
             arrangement: Vec::new(),
             group: None,
             sends: Vec::new(),
@@ -275,6 +279,21 @@ impl Track {
             keep_monitor_latency: true,
             info: String::new(),
             ui: TrackUi::default(),
+        }
+    }
+
+    /// Whether a slot's Clip Stop button is there.
+    pub fn has_stop_button(&self, slot: usize) -> bool {
+        self.no_stop.binary_search(&(slot as u32)).is_err()
+    }
+
+    pub fn set_stop_button(&mut self, slot: usize, on: bool) {
+        match (self.no_stop.binary_search(&(slot as u32)), on) {
+            (Ok(at), true) => {
+                self.no_stop.remove(at);
+            }
+            (Err(at), false) => self.no_stop.insert(at, slot as u32),
+            _ => {}
         }
     }
 

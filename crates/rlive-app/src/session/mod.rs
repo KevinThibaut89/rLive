@@ -16,6 +16,8 @@ mod export;
 mod graph;
 mod info;
 mod io;
+mod launch;
+mod launch_log;
 mod rack_edit;
 mod racks;
 mod recording;
@@ -46,6 +48,8 @@ mod golden;
 #[cfg(test)]
 mod io_tests;
 #[cfg(test)]
+mod launch_tests;
+#[cfg(test)]
 mod rack_tests;
 #[cfg(test)]
 mod routing_tests;
@@ -67,6 +71,7 @@ pub use devices::ChainRef;
 pub use graph::compile_plan;
 pub use info::InfoTarget;
 pub use io::{can_arm, AudioHardware, CrossfaderField, CrossfaderKeys, RouteChoice};
+pub use launch::{set_follow_on, signature_is_valid, LaunchDefaults};
 pub use rack_edit::PadDrop;
 pub use racks::{ExtractNotes, MacroDisplay, ZoneKind};
 pub use rlive_audio_io::SampleCache;
@@ -153,6 +158,12 @@ pub struct Session {
     pending_samples: Vec<samples::PendingSample>,
     /// Where the Rand button's numbers come from.
     random: u64,
+    /// What new clips start with.
+    pub launch_defaults: LaunchDefaults,
+    /// The running song's tempo or meter comes from a launched scene: stopping undoes it.
+    timing_held: bool,
+    /// What Arrangement Record is writing down.
+    launch_log: launch_log::LaunchLog,
 }
 
 impl Session {
@@ -195,6 +206,9 @@ impl Session {
             pending_preview: None,
             pending_samples: Vec::new(),
             random: racks::random_seed(),
+            launch_defaults: LaunchDefaults::default(),
+            timing_held: false,
+            launch_log: launch_log::LaunchLog::default(),
         };
         s.preload_samples();
         s.rebuild();
@@ -299,6 +313,14 @@ impl Session {
             self.send(c);
         }
         self.send_automation_arm();
+        self.sync_scenes();
+        self.send_follow_enabled();
+        let seed = racks::random_seed();
+        self.send(EngineCommand::Launch(rlive_engine::LaunchCmd::SeedFollow(
+            seed,
+        )));
+        self.timing_held = false;
+        self.launch_log = launch_log::LaunchLog::default();
         self.sync_loop();
         self.update_midi_targets();
     }
@@ -437,6 +459,7 @@ impl Session {
                     self.slot_record_ended(track, slot, tick)
                 }
                 EngineEvent::Jumped { from, to } => {
+                    self.launch_log_jumped(from, to);
                     if let Some(r) = self.recording.as_mut() {
                         r.jumped(from, to);
                     }
@@ -444,9 +467,22 @@ impl Session {
                     self.automation_jumped(from, to);
                 }
                 EngineEvent::RecordingStopped { tick } => {
+                    self.close_launch_log(tick);
                     self.recording_stopped(tick);
                     self.finish_automation_pass(tick);
                 }
+                EngineEvent::SceneTiming {
+                    tick,
+                    tempo,
+                    signature,
+                    ..
+                } => self.scene_timing(tick, tempo, signature),
+                EngineEvent::SessionPlayback {
+                    track,
+                    slot,
+                    at,
+                    start_tick,
+                } => self.session_playback(track, slot, at, start_tick),
                 EngineEvent::AutomationMoved {
                     target,
                     cell,
@@ -478,6 +514,7 @@ impl Session {
                 } => self.clip_automation_ended(target, cell, value),
             }
         }
+        self.release_scene_timing();
         self.poll_clip_strokes();
         self.sync_session_tracks();
         let mut todo = Vec::new();

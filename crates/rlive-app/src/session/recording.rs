@@ -24,7 +24,8 @@ impl Session {
     }
 
     /// Starts recording onto armed tracks, and with Automation Arm automation on every track, as
-    /// the Start Playback with Record preference says. Returns false if that leaves nothing to
+    /// the Start Playback with Record preference says. Armed or not, what's launched in the
+    /// Session is logged into the Arrangement (manual p. 197), so there is always something to
     /// record.
     pub fn start_recording(&mut self) -> bool {
         let play = self.record.start_playback_with_record;
@@ -40,15 +41,13 @@ impl Session {
     fn start_recording_with(&mut self, play: bool) -> bool {
         let midi = self.armed_kind(TrackKind::Midi);
         let audio = self.armed_kind(TrackKind::Audio);
-        if midi.is_empty() && audio.is_empty() && !self.automation_arm() {
-            return false;
-        }
         let at = if self.is_playing() {
             self.engine.shared.tick.load()
         } else {
             self.insert_marker()
         };
         let mut recording = Recording::new(at as u64);
+        self.start_launch_log(at);
         let overdub = self.project.midi_arrangement_overdub;
         for track in &midi {
             if overdub {

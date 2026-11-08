@@ -40,6 +40,7 @@ impl Session {
 
     pub fn add_scene(&mut self) {
         self.project.add_scene();
+        self.sync_scenes();
         self.mark_edit("Add Scene");
     }
 
@@ -47,26 +48,11 @@ impl Session {
         if index >= self.project.scenes.len() || self.project.scenes.len() <= 1 {
             return;
         }
-        self.project.scenes.remove(index);
-        for t in self.project.tracks.iter_mut() {
-            if index < t.clips.len() {
-                t.clips.remove(index);
-            }
-        }
-        self.project.normalize();
-        // Slot indices shifted: resend all clips of every track.
-        self.resend_all_clips();
+        let map: Vec<usize> = (0..self.project.scenes.len())
+            .filter(|s| *s != index)
+            .collect();
+        self.remap_scenes(&map);
         self.mark_edit("Delete Scene");
-    }
-
-    fn resend_all_clips(&mut self) {
-        let ids: Vec<TrackId> = self.project.tracks.iter().map(|t| t.id).collect();
-        for id in ids {
-            let n = self.project.scenes.len() + 1;
-            for slot in 0..n {
-                self.sync_clip(id, slot);
-            }
-        }
     }
 
     /// Replace the clip in a slot (or clear it with `None`).
@@ -103,7 +89,9 @@ impl Session {
             slot,
             clip: data,
         }));
+        self.sync_launch(track, slot);
         self.sync_clip_routes(track);
+        self.clip_edited_while_logging(track, slot);
     }
 
     pub fn clip(&self, track: TrackId, slot: usize) -> Option<&Clip> {
@@ -182,6 +170,7 @@ impl Session {
             length: (beats as u64) * rlive_core::PPQ,
             looped: true,
             content: ClipContent::audio(path, 0.0),
+            launch: self.launch_defaults.settings(),
             ..Clip::default()
         };
         self.apply_new_clip_defaults(&mut clip, path, seconds);

@@ -10,12 +10,16 @@ mod icons;
 mod in_out;
 mod info_view;
 pub mod keymap;
+mod launch_panel;
 #[cfg(target_os = "macos")]
 mod mac_menu;
 pub(crate) mod panels;
 mod piano_roll;
 mod rack_mixer;
 mod sample_editor;
+mod scene_view;
+mod session_select;
+mod session_status;
 mod session_view;
 mod settings_window;
 pub mod theme;
@@ -50,6 +54,7 @@ pub enum MainView {
 pub enum Detail {
     Devices,
     Clip,
+    Scene,
 }
 
 /// Something dragged from the browser.
@@ -73,6 +78,8 @@ pub struct UiState {
     pub group_slot: Option<(TrackId, usize)>,
     pub selected_clip: Option<ClipRef>,
     pub detail: Detail,
+    /// What's selected in the Session grid.
+    pub sel: session_select::SessionSelection,
     pub main_view: MainView,
     pub focus: FocusArea,
     pub keys: KeyState,
@@ -253,6 +260,7 @@ impl RliveApp {
             group_slot: None,
             selected_clip: None,
             detail: Detail::Devices,
+            sel: session_select::SessionSelection::default(),
             main_view: MainView::Session,
             focus: FocusArea::Session,
             keys: KeyState::default(),
@@ -436,7 +444,7 @@ impl RliveApp {
         } else if inside(rects.detail) {
             match self.ui.detail {
                 Detail::Clip => FocusArea::Clip,
-                Detail::Devices => FocusArea::Device,
+                Detail::Devices | Detail::Scene => FocusArea::Device,
             }
         } else if self.ui.main_view == MainView::Arrangement {
             FocusArea::Arrangement
@@ -477,20 +485,18 @@ impl RliveApp {
             self.session.stop_recording();
             return;
         }
-        let started = if inverted {
-            self.session.start_recording_inverted()
+        if inverted {
+            self.session.start_recording_inverted();
         } else {
-            self.session.start_recording()
-        };
-        if started {
-            self.ui.main_view = MainView::Arrangement;
-        } else {
-            self.ui.status = "Arm a track, or Automation Arm, to record".into();
+            self.session.start_recording();
         }
     }
 
-    /// The scene Session recording and New work from: the selected clip's.
+    /// The scene Session recording and New work from: the selected scene or clip's.
     fn selected_scene(&self) -> usize {
+        if let Some(s) = self.ui.sel.scenes.iter().max() {
+            return *s;
+        }
         self.ui
             .selected_clip
             .and_then(ClipRef::as_slot)
@@ -615,6 +621,8 @@ impl RliveApp {
     /// What the keymap needs to resolve this frame's key presses.
     fn key_context(&self, ctx: &egui::Context) -> KeyContext {
         KeyContext {
+            slot_selected: self.ui.selected_clip.and_then(ClipRef::as_slot).is_some()
+                || !self.ui.sel.slots.is_empty(),
             platform: Platform::current(),
             focus: self.ui.focus,
             clip_is_midi: self
@@ -1097,6 +1105,25 @@ impl RliveApp {
         {
             self.session.back_to_arrangement();
         }
+        let follow_used = self.session.has_follow_actions();
+        let follow_on = self.session.project.follow_actions_on;
+        cu.add_enabled_ui(follow_used, |ui| {
+            let r = widgets::state_button(
+                ui,
+                Vec2::new(22.0, h),
+                follow_on && follow_used,
+                pal().accent,
+                "F",
+            );
+            if info(
+                r,
+                "Enable Follow Actions Globally — lets you edit running clips",
+            )
+            .clicked()
+            {
+                self.session.set_follow_actions_on(!follow_on);
+            }
+        });
 
         // ---- right: quantize, MIDI LED, keys, CPU
         let right = Rect::from_min_max(
@@ -1193,7 +1220,8 @@ impl RliveApp {
         }
         let arr = self.ui.main_view == MainView::Arrangement;
         let r = widgets::state_button(&mut ru, Vec2::new(56.0, h), arr, shade(0x8a8a8a), "Arrange");
-        if info(r, "Arrangement View — the timeline (Tab)").clicked() {
+        let hover_clip = r.dnd_hover_payload::<session_view::ClipDrag>().is_some();
+        if info(r, "Arrangement View — the timeline (Tab)").clicked() || hover_clip {
             self.ui.main_view = MainView::Arrangement;
         }
         let r = widgets::state_button(
@@ -1203,6 +1231,12 @@ impl RliveApp {
             shade(0x8a8a8a),
             "Session",
         );
+        let released_here = r.contains_pointer()
+            && self.ui.arr.dragging_clips()
+            && ru.input(|i| i.pointer.any_released());
+        if released_here {
+            self.send_selection_to_session();
+        }
         if info(r, "Session View — clips launched in any order (Tab)").clicked() {
             self.ui.main_view = MainView::Session;
         }
@@ -1475,6 +1509,8 @@ impl eframe::App for RliveApp {
         self.session.colors = self.settings.colors;
         self.session.warp_defaults = self.settings.warp;
         self.session.record = self.settings.record.clone();
+        self.session.launch_defaults = self.settings.launch.defaults();
+        self.ui.sel.prefs = self.settings.launch;
         self.ui.midi_auto_reset = self.settings.midi_envelope_auto_reset;
         if std::mem::take(&mut self.ui.toggle_midi_auto_reset) {
             self.pending.push(commands::MenuCommand::Options(
@@ -1594,8 +1630,14 @@ impl eframe::App for RliveApp {
                 )
                 .show(ui, |ui| match self.ui.detail {
                     Detail::Clip if self.ui.selected_clip.is_some() => {
-                        piano_roll::show(ui, &mut self.session, &mut self.ui)
+                        launch_panel::with_launch_strip(
+                            ui,
+                            &mut self.session,
+                            &mut self.ui,
+                            piano_roll::show,
+                        )
                     }
+                    Detail::Scene => scene_view::show(ui, &mut self.session, &mut self.ui),
                     _ => devices::show(ui, &mut self.session, &mut self.ui),
                 });
             rects.detail = Some(panel.response.rect);

@@ -13,7 +13,8 @@ mod midi;
 pub(crate) use audio::{AudioCursor, LANE_CROSSFADE_VOICE, LANE_VOICE, SESSION_VOICE};
 pub use data::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
 pub use envelopes::{ClipCurve, ClipEnvelopes, EnvCurve, EnvTiming, EnvelopedClip};
-pub(crate) use launcher::{ClipPlayer, Pending, Playing};
+pub use launcher::{velocity_gain, SlotLaunch};
+pub(crate) use launcher::{ArmedFollow, ClipPlayer, LaunchEnv, Pending, Playing, Repeat};
 pub(crate) use midi::{chase, Voices};
 
 use audio::render_audio_env;

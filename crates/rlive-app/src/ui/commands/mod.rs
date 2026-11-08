@@ -13,6 +13,7 @@ pub mod arrange;
 pub mod create;
 pub mod edit;
 pub mod file;
+pub mod launch;
 pub mod options;
 pub mod rack;
 pub mod track;
@@ -66,6 +67,7 @@ registry! {
     Track(track::Track),
     Rack(rack::Rack),
     Arrange(arrange::Arrange),
+    Launch(launch::Launch),
 }
 
 static ALL: LazyLock<Vec<MenuCommand>> = LazyLock::new(build_all);
@@ -154,6 +156,7 @@ impl RliveApp {
         self.view_state(&mut s);
         self.options_state(&mut s);
         self.arrange_state(&mut s);
+        self.launch_state(&mut s);
         s
     }
 
@@ -169,6 +172,7 @@ impl RliveApp {
             MenuCommand::Track(c) => self.track_command(c),
             MenuCommand::Rack(c) => self.rack_command(c),
             MenuCommand::Arrange(c) => self.arrange_command(c),
+            MenuCommand::Launch(c) => self.launch_command(c),
         }
     }
 
@@ -256,7 +260,8 @@ mod tests {
             + transport::Transport::ALL.len()
             + track::Track::ALL.len()
             + rack::Rack::ALL.len()
-            + arrange::Arrange::ALL.len();
+            + arrange::Arrange::ALL.len()
+            + launch::Launch::ALL.len();
         assert_eq!(MenuCommand::all().len(), expected);
         let unique: std::collections::HashSet<_> = MenuCommand::all().iter().collect();
         assert_eq!(unique.len(), expected, "a command appears twice");

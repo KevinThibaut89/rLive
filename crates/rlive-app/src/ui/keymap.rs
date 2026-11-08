@@ -254,6 +254,8 @@ pub struct KeyContext {
     pub track_header: bool,
     /// Enter is held down.
     pub enter_held: bool,
+    /// A Session slot is selected.
+    pub slot_selected: bool,
     /// An automation lane has the arrow keys.
     pub lane_focused: bool,
 }
@@ -272,6 +274,7 @@ impl KeyContext {
             When::TrackHeader => self.track_header,
             When::EnterHeld => self.enter_held,
             When::ArrowsFree => !self.lane_focused,
+            When::SlotSelected => self.slot_selected,
             // The rest are built by the milestones that need them.
             _ => false,
         }

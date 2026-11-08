@@ -123,7 +123,7 @@ impl Engine {
     }
 
     /// A change of tempo while recording becomes a Warp Marker on every take.
-    fn mark_tempo_change(&mut self) {
+    pub(crate) fn mark_tempo_change(&mut self) {
         if !self.playing {
             return;
         }
@@ -170,6 +170,8 @@ impl Engine {
         self.count_in = None;
         self.shared.count_in_left.store(0.0);
         self.pending_jump = None;
+        self.pending_scene = None;
+        self.scene_follow = None;
         self.hold_loop = None;
         self.stop_at = None;
         self.playing = false;
@@ -178,6 +180,11 @@ impl Engine {
         self.sync_sample_pos();
         for t in self.tracks.iter_mut() {
             t.player.pending = None;
+            t.player.follow = None;
+            t.player.repeat = None;
+            t.player.released_early = false;
+            t.player.from_scene = false;
+            t.player.logged = None;
             t.player.release_all(0, &mut t.live);
             t.lane.release_and_resync(0, &mut t.live);
             if let Some(p) = t.player.playing.take() {

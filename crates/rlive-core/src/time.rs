@@ -303,7 +303,8 @@ impl TempoMap {
         if pts[0].tick > 0.0 {
             pts.insert(0, TempoPoint::new(0.0, pts[0].bpm));
         }
-        let mut segs = Vec::with_capacity(pts.len());
+        // Room for the one a launched scene can leave at the end, without allocating.
+        let mut segs = Vec::with_capacity(pts.len() + 1);
         let mut seconds = 0.0;
         for (i, p) in pts.iter().enumerate() {
             let Some(q) = pts.get(i + 1) else {
@@ -345,6 +346,30 @@ impl TempoMap {
             self.segs[0].bpm = bpm.clamp(MIN_BPM, MAX_BPM);
         }
         constant
+    }
+
+    /// One tempo from `tick` on, as a launched scene sets. Whatever the map held after it is
+    /// gone until the map is rebuilt. Never allocates, so it can run on the audio thread.
+    pub fn hold_from(&mut self, tick: f64, bpm: f64) {
+        if self.set_constant(bpm) {
+            return;
+        }
+        let bpm = bpm.clamp(MIN_BPM, MAX_BPM);
+        let i = self.index_at(tick);
+        self.segs.truncate(i + 1);
+        let seg = self.segs[i];
+        let dt = (tick - seg.tick).max(0.0);
+        if dt > 0.0 && self.segs.len() < self.segs.capacity() {
+            self.segs.push(TempoSeg {
+                tick,
+                bpm,
+                slope: 0.0,
+                seconds: seg.seconds + seg.seconds_over(dt),
+            });
+        } else {
+            self.segs[i].bpm = bpm;
+            self.segs[i].slope = 0.0;
+        }
     }
 
     fn index_at(&self, tick: f64) -> usize {
@@ -449,6 +474,9 @@ struct BarSeg {
     first_bar: u64,
 }
 
+/// How many times scenes can restart the bar grid before the oldest restart gives way.
+const SPARE_BAR_SEGS: usize = 32;
+
 /// Meter over the song. A signature change restarts the bar grid at its tick, so a change placed
 /// mid-bar leaves a fragmentary bar before it.
 #[derive(Debug, Clone, PartialEq)]
@@ -477,11 +505,12 @@ impl BarMap {
     ) -> Self {
         let mut marks: Vec<(u64, TimeSignature)> = markers.into_iter().collect();
         marks.sort_by_key(|m| m.0);
-        let mut segs = vec![BarSeg {
+        let mut segs = Vec::with_capacity(marks.len() + 1 + SPARE_BAR_SEGS);
+        segs.push(BarSeg {
             tick: 0.0,
             signature: base,
             first_bar: 0,
-        }];
+        });
         let mut zero_marker = false;
         for (tick, signature) in marks {
             let tick = tick as f64;
@@ -516,6 +545,33 @@ impl BarMap {
         if !self.zero_marker {
             self.segs[0].signature = signature;
             self.number_bars();
+        }
+    }
+
+    /// A new signature from `tick` on, with the bar grid starting over there, as a launched scene
+    /// sets. What came after it is gone until the map is rebuilt. Never allocates: with no room
+    /// left the previous restart gives way, which only the past remembers.
+    pub fn restart_at(&mut self, tick: f64, signature: TimeSignature) {
+        let i = self.index_at(tick);
+        self.segs.truncate(i + 1);
+        if self.segs[i].signature == signature && self.segs[i].tick == tick {
+            return;
+        }
+        if self.segs[i].tick == tick {
+            self.segs[i].signature = signature;
+            return;
+        }
+        if self.segs.len() == self.segs.capacity() && self.segs.len() > 1 {
+            self.segs.pop();
+        }
+        let prev = self.segs[self.segs.len() - 1];
+        let bars = (tick - prev.tick) / prev.signature.ticks_per_bar() as f64;
+        if self.segs.len() < self.segs.capacity() {
+            self.segs.push(BarSeg {
+                tick,
+                signature,
+                first_bar: prev.first_bar + bars.ceil() as u64,
+            });
         }
     }
 
@@ -626,6 +682,50 @@ pub struct TimeMaps {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scene_restarts_the_bar_grid_where_it_lands() {
+        let mut bars = BarMap::default();
+        let three = TimeSignature {
+            numerator: 3,
+            denominator: 4,
+        };
+        bars.restart_at(7680.0, three);
+        assert_eq!(bars.next_boundary(7681.0, Quantize::Bar), 7680.0 + 2880.0);
+        assert_eq!(bars.signature_at(100.0), TimeSignature::default());
+        assert_eq!(bars.signature_at(7680.0), three);
+    }
+
+    #[test]
+    fn restarting_the_grid_never_allocates_past_its_room() {
+        let mut bars = BarMap::default();
+        let cap = bars.segs.capacity();
+        for i in 1..200u32 {
+            let sig = TimeSignature {
+                numerator: (i % 7 + 1) as u8,
+                denominator: 4,
+            };
+            bars.restart_at(i as f64 * 10000.0, sig);
+        }
+        assert_eq!(bars.segs.capacity(), cap);
+    }
+
+    #[test]
+    fn a_scene_tempo_holds_over_a_map_with_points() {
+        let mut map = TempoMap::new([TempoPoint::new(0.0, 100.0), TempoPoint::new(9600.0, 200.0)]);
+        let before = map.tick_to_seconds(4800.0);
+        map.hold_from(4800.0, 90.0);
+        assert_eq!(map.bpm_at(100000.0), 90.0);
+        assert_eq!(map.tick_to_seconds(4800.0), before, "the past stays put");
+    }
+
+    #[test]
+    fn a_constant_map_takes_the_scene_tempo_whole() {
+        let mut map = TempoMap::constant(120.0);
+        map.hold_from(4800.0, 90.0);
+        assert!(map.is_constant());
+        assert_eq!(map.bpm_at(0.0), 90.0);
+    }
 
     #[test]
     fn quantize_boundaries() {

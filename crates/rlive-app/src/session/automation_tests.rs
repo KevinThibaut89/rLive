@@ -92,7 +92,9 @@ fn stop_pass(engine: &mut Engine, s: &mut Session) {
 #[test]
 fn automation_arm_alone_is_enough_to_record() {
     let (mut engine, mut s) = session();
-    assert!(!s.start_recording(), "nothing armed, nothing to record");
+    assert!(s.start_recording(), "the Session can always be logged");
+    render(&mut engine, &mut s, 512);
+    stop_pass(&mut engine, &mut s);
     s.set_automation_arm(true);
     assert!(s.automation_arm());
     assert!(s.start_recording());

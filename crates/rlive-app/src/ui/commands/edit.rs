@@ -3,7 +3,8 @@
 use super::{Entry, Entry::Item, Entry::Separator, FocusArea, MenuCommand as M, MenuState};
 use crate::session::{ChainRef, ClipRef};
 use crate::ui::automation::{self, EnvelopeClipboard};
-use crate::ui::{piano_roll, session_view, Detail, MainView, RliveApp};
+use crate::ui::session_select::selected_slots;
+use crate::ui::{piano_roll, scene_view, session_view, Detail, MainView, RliveApp};
 use rlive_core::TrackId;
 use rlive_project::arrangement_edit::TimeClip;
 use rlive_project::{ArrangementClip, Clip, NoteData, RecordQuantize, TrackKind};
@@ -27,6 +28,7 @@ pub const MENU: &[Entry] = &[
     Item("Paste", M::Edit(Edit::Paste)),
     Item("Duplicate", M::Edit(Edit::Duplicate)),
     Item("Delete", M::Edit(Edit::Delete)),
+    super::launch::EDIT_ITEMS[0],
     Item("Rename", M::Edit(Edit::Rename)),
     Item("Return to Default", M::Edit(Edit::ReturnToDefault)),
     Separator,
@@ -116,6 +118,8 @@ pub enum EditFocus {
 pub enum ClipBoard {
     Notes(Vec<NoteData>),
     Slot(Box<Clip>),
+    /// Several Session clips, as (columns from the first track, rows from the top, clip).
+    Slots(Vec<(usize, usize, Clip)>),
     /// Clips with their tracks, their starts relative to the earliest.
     ArrClips(Vec<(TrackId, ArrangementClip)>),
     /// Stretches of envelope, which can be pasted onto other parameters.
@@ -203,14 +207,20 @@ impl RliveApp {
                 self.ui
                     .selected_clip
                     .is_some_and(|r| self.session.clip_at(r).is_some()),
-                matches!(self.ui.clipboard, Some(ClipBoard::Slot(_))),
+                matches!(
+                    self.ui.clipboard,
+                    Some(ClipBoard::Slot(_) | ClipBoard::Slots(_) | ClipBoard::ArrClips(_))
+                ),
             ),
             EditFocus::ArrClips => (
                 self.ui.arr.has_selection()
                     || self.ui.arr.selected_fade.is_some()
                     || self.ui.arr.selected_locator.is_some()
                     || self.ui.arr.selected_signature.is_some(),
-                matches!(self.ui.clipboard, Some(ClipBoard::ArrClips(_))),
+                matches!(
+                    self.ui.clipboard,
+                    Some(ClipBoard::ArrClips(_) | ClipBoard::Slot(_))
+                ),
             ),
             EditFocus::Envelopes => (
                 self.ui.arr.time.as_ref().is_some_and(|t| !t.is_point()),
@@ -229,7 +239,9 @@ impl RliveApp {
         s.enable(on(Edit::Delete), focus != EditFocus::Text && has_selection);
         s.enable(
             on(Edit::Rename),
-            focus != EditFocus::Text && matches!(self.ui.selected, Some(ChainRef::Track(_))),
+            focus != EditFocus::Text
+                && (matches!(self.ui.selected, Some(ChainRef::Track(_)))
+                    || !self.ui.sel.scenes.is_empty()),
         );
         s.enable(
             on(Edit::ReturnToDefault),
@@ -268,6 +280,9 @@ impl RliveApp {
         }
         match c {
             Edit::Undo | Edit::Redo => self.undo_redo(ctx, c),
+            Edit::Rename if !self.ui.sel.scenes.is_empty() => {
+                scene_view::rename_selected(&self.session, &mut self.ui);
+            }
             Edit::Rename if self.rename_in_rack() => {}
             Edit::Rename if self.rename_marker() => {}
             Edit::ReturnToDefault => {
@@ -459,6 +474,9 @@ impl RliveApp {
                     let at = self.session.insert_marker() as u64;
                     self.ui.arr.selection = self.session.arr_paste(&clips, at);
                 }
+                if let Some(ClipBoard::Slot(clip)) = self.ui.clipboard.clone() {
+                    self.paste_slot_on_timeline(*clip);
+                }
             }
             Edit::Duplicate => match span {
                 Some((a, b)) => {
@@ -503,10 +521,47 @@ impl RliveApp {
         }
     }
 
+    /// Puts a Session clip on the selected track's timeline, at the insert marker.
+    fn paste_slot_on_timeline(&mut self, clip: Clip) {
+        let Some(ChainRef::Track(track)) = self.ui.selected else {
+            return;
+        };
+        let fits = self
+            .session
+            .project
+            .track(track)
+            .is_some_and(|t| (t.kind == TrackKind::Midi) == clip.is_midi());
+        if !fits {
+            self.ui.status = "That clip can't be pasted on this kind of track".into();
+            return;
+        }
+        let at = self.session.insert_marker() as u64;
+        self.session
+            .arr_place(track, ArrangementClip::new(clip, at));
+    }
+
+    /// Dropping Arrangement clips on the Session selector: they land in the grid, top to bottom.
+    pub(in crate::ui) fn send_selection_to_session(&mut self) {
+        let clips = self.copy_arr_clips();
+        if clips.is_empty() {
+            return;
+        }
+        self.ui.arr.cancel_clip_drag();
+        let scene = self.selected_scene();
+        let placed = self.session.paste_arrangement_clips(&clips, scene);
+        self.ui.sel.slots = placed;
+        self.ui.main_view = MainView::Session;
+    }
+
     fn edit_session_clip(&mut self, c: Edit) {
         let Some((track, slot)) = self.ui.selected_clip.and_then(|r| r.as_slot()) else {
             return;
         };
+        let many = selected_slots(&self.session, &self.ui);
+        if many.len() > 1 && matches!(c, Edit::Copy | Edit::Cut | Edit::Delete | Edit::Duplicate) {
+            self.edit_session_clips(c, &many);
+            return;
+        }
         match c {
             Edit::Copy | Edit::Cut => {
                 if let Some(clip) = self.session.clip(track, slot).cloned() {
@@ -516,11 +571,14 @@ impl RliveApp {
                     }
                 }
             }
-            Edit::Paste => {
-                if let Some(ClipBoard::Slot(clip)) = self.ui.clipboard.clone() {
-                    self.paste_slot(track, slot, *clip);
+            Edit::Paste => match self.ui.clipboard.clone() {
+                Some(ClipBoard::Slot(clip)) => self.paste_slot(track, slot, *clip),
+                Some(ClipBoard::Slots(clips)) => self.paste_slots(track, slot, clips),
+                Some(ClipBoard::ArrClips(clips)) => {
+                    self.ui.sel.slots = self.session.paste_arrangement_clips(&clips, slot);
                 }
-            }
+                _ => {}
+            },
             Edit::Duplicate => session_view::duplicate_clip(&mut self.session, track, slot),
             Edit::Delete => {
                 self.session.set_clip(track, slot, None);
@@ -528,6 +586,59 @@ impl RliveApp {
             }
             _ => {}
         }
+    }
+
+    fn edit_session_clips(&mut self, c: Edit, slots: &[(TrackId, usize)]) {
+        let index = |s: &Self, t: TrackId| s.session.project.track_index(t).unwrap_or(0);
+        let left = slots
+            .iter()
+            .map(|(t, _)| index(self, *t))
+            .min()
+            .unwrap_or(0);
+        let top = slots.iter().map(|(_, s)| *s).min().unwrap_or(0);
+        if matches!(c, Edit::Copy | Edit::Cut) {
+            let copied = slots
+                .iter()
+                .filter_map(|(t, s)| {
+                    let clip = self.session.clip(*t, *s)?.clone();
+                    Some((index(self, *t) - left, *s - top, clip))
+                })
+                .collect();
+            self.ui.clipboard = Some(ClipBoard::Slots(copied));
+        }
+        if matches!(c, Edit::Cut | Edit::Delete) {
+            for (t, s) in slots {
+                self.session.set_clip(*t, *s, None);
+            }
+            self.ui.sel.slots.clear();
+            self.ui.selected_clip = None;
+        }
+        if c == Edit::Duplicate {
+            let height = slots.iter().map(|(_, s)| *s).max().unwrap_or(top) - top + 1;
+            let landed = self.session.move_slots(slots, 0, height as isize, true);
+            self.ui.sel.slots = landed;
+        }
+    }
+
+    fn paste_slots(&mut self, track: TrackId, slot: usize, clips: Vec<(usize, usize, Clip)>) {
+        let first = self.session.project.track_index(track).unwrap_or(0);
+        let tracks: Vec<TrackId> = self.session.project.tracks.iter().map(|t| t.id).collect();
+        let mut placed = Vec::new();
+        for (dx, dy, clip) in clips {
+            let Some(to) = tracks.get(first + dx).copied() else {
+                continue;
+            };
+            let fits = self
+                .session
+                .project
+                .track(to)
+                .is_some_and(|t| (t.kind == TrackKind::Midi) == clip.is_midi());
+            if fits && slot + dy < self.session.project.scenes.len() {
+                self.session.set_clip(to, slot + dy, Some(clip));
+                placed.push((to, slot + dy));
+            }
+        }
+        self.ui.sel.slots = placed;
     }
 
     fn paste_slot(&mut self, track: rlive_core::TrackId, slot: usize, clip: Clip) {

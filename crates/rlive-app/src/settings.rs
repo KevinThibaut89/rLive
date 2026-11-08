@@ -258,6 +258,39 @@ impl Default for RecordSettings {
     }
 }
 
+/// The Launch section of the Record, Warp & Launch tab.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LaunchPrefs {
+    pub default_mode: rlive_core::LaunchMode,
+    /// `None` is Global.
+    pub default_quantize: Option<rlive_core::Quantize>,
+    /// Launching a clip or scene also selects it (manual p. 196).
+    pub select_on_launch: bool,
+    /// The scene below a launched one is selected next (manual p. 190).
+    pub select_next_scene: bool,
+}
+
+impl Default for LaunchPrefs {
+    fn default() -> Self {
+        Self {
+            default_mode: rlive_core::LaunchMode::default(),
+            default_quantize: None,
+            select_on_launch: true,
+            select_next_scene: true,
+        }
+    }
+}
+
+impl LaunchPrefs {
+    pub fn defaults(&self) -> crate::session::LaunchDefaults {
+        crate::session::LaunchDefaults {
+            mode: self.default_mode,
+            quantize: self.default_quantize,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -282,6 +315,7 @@ pub struct Settings {
     pub samples: SampleSettings,
     pub warp: WarpDefaults,
     pub record: RecordSettings,
+    pub launch: LaunchPrefs,
     /// MIDI Envelope Auto-Reset: new clips set some controllers back first (manual p. 534).
     pub midi_envelope_auto_reset: bool,
     /// Where Session Record's automation goes (manual p. 512).
@@ -309,6 +343,7 @@ impl Default for Settings {
             outline_focus: false,
             scroll_bars: ScrollBars::default(),
             samples: SampleSettings::default(),
+            launch: LaunchPrefs::default(),
             warp: WarpDefaults::default(),
             record: RecordSettings::default(),
             midi_envelope_auto_reset: false,
@@ -419,6 +454,12 @@ mod tests {
                 start_recording_on_scene_launch: true,
                 exclusive_arm: false,
                 temp_folder: Some(PathBuf::from("/tmp/recordings")),
+            },
+            launch: LaunchPrefs {
+                default_mode: rlive_core::LaunchMode::Gate,
+                default_quantize: Some(rlive_core::Quantize::Beat),
+                select_on_launch: false,
+                select_next_scene: false,
             },
             midi_input: Some("Keys".into()),
             sample_dir: Some(PathBuf::from("/samples")),

@@ -304,10 +304,10 @@ fn an_empty_arrangement_does_not_export() {
 }
 
 #[test]
-fn recording_needs_an_armed_midi_track() {
+fn recording_with_nothing_armed_still_logs_the_session() {
     let (_engine, mut s) = session();
-    assert!(!s.start_recording());
-    assert!(!s.is_recording());
+    assert!(s.start_recording());
+    assert!(s.is_recording());
 }
 
 #[test]

@@ -17,6 +17,9 @@ use super::in_out;
 use super::info_view::edit_info_item;
 use super::keymap::{self, Platform};
 use super::rack_mixer::{self, ChainColumn, ColumnRects, MixFold};
+use super::scene_view::{self, SceneRows};
+use super::session_select::{click_slot, select_one, selected_slots};
+use super::session_status;
 use super::theme::{self, *};
 use super::widgets::{self, info, info_note, rgb, Led};
 use super::{BrowserItem, Detail, UiState};
@@ -97,6 +100,11 @@ pub fn next_free_slot(session: &mut Session, track: TrackId, slot: usize) -> usi
     }
 }
 
+/// Enter on a selected scene.
+pub(super) fn launch_selected_scene(session: &mut Session, state: &mut UiState, scene: usize) {
+    scene_view::launch_scene(session, state, scene);
+}
+
 pub fn duplicate_clip(session: &mut Session, track: TrackId, slot: usize) {
     let Some(clip) = session.clip(track, slot).cloned() else {
         return;
@@ -172,7 +180,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let n_returns = session.project.returns.len();
 
     // ---- geometry
-    let master_w = (full.width() * 0.13).clamp(112.0, 150.0);
+    let master_w = (full.width() * 0.13).clamp(112.0, 150.0) + state.sel.scene_fields_w;
     let master_x = full.right() - master_w;
     let return_w = if n_returns == 0 {
         0.0
@@ -266,6 +274,21 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
 
     let blink = (ui.input(|i| i.time) * 3.0).fract() < 0.5;
 
+    // A launch button comes up wherever the pointer has got to.
+    if let Some((track, slot)) = state.sel.held {
+        if ui.input(|i| !i.pointer.primary_down()) {
+            state.sel.held = None;
+            session.clip_up(track, slot);
+        }
+    }
+
+    if let Some((track, slot)) = state.sel.held_key {
+        if ui.input(|i| !i.key_down(egui::Key::Enter)) {
+            state.sel.held_key = None;
+            session.clip_up(track, slot);
+        }
+    }
+
     // ---- tracks
     for (col, column) in grid_columns.iter().enumerate() {
         let x = g.track_x(col, scroll.x);
@@ -319,10 +342,125 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     mixer_splitter(ui, state, &g);
     scrollbars(ui, state, &g, full, content_w, content_h, max_x, max_y);
 
+    rubber_band(ui, session, state, &g, &grid_columns, scroll);
+    drop_os_files(ui, session, state, &g, &grid_columns, scroll);
+
     if bg.clicked() {
         state.selected_clip = None;
         state.group_slot = None;
+        state.sel.clear();
     }
+}
+
+/// The track column and scene under a point in the grid.
+fn grid_cell(
+    g: &Geo,
+    columns: &[Column],
+    scroll: Vec2,
+    pos: Pos2,
+    n_scenes: usize,
+) -> Option<(TrackId, usize)> {
+    if !g.grid.contains(pos) || n_scenes == 0 {
+        return None;
+    }
+    let col = ((pos.x - g.tracks_left + scroll.x) / g.track_w).floor();
+    let row = ((pos.y - g.grid.top() + scroll.y) / g.slot_h).floor();
+    if col < 0.0 || row < 0.0 || row as usize >= n_scenes {
+        return None;
+    }
+    match columns.get(col as usize)? {
+        Column::Track(id, _) => Some((*id, row as usize)),
+        Column::Chain(_) => None,
+    }
+}
+
+/// Dragging from an empty slot selects everything it passes over.
+fn rubber_band(
+    ui: &mut egui::Ui,
+    session: &Session,
+    state: &mut UiState,
+    g: &Geo,
+    columns: &[Column],
+    scroll: Vec2,
+) {
+    let Some(start) = state.sel.rubber else {
+        return;
+    };
+    let Some(pos) = ui.input(|i| i.pointer.latest_pos()) else {
+        return;
+    };
+    let band = Rect::from_two_pos(start, pos);
+    let n = session.project.scenes.len();
+    let mut slots = Vec::new();
+    for (c, column) in columns.iter().enumerate() {
+        let Column::Track(id, _) = column else {
+            continue;
+        };
+        if session.project.track(*id).is_none_or(|t| t.is_group()) {
+            continue;
+        }
+        let x = g.track_x(c, scroll.x);
+        for row in 0..n {
+            let r = Rect::from_min_size(
+                Pos2::new(x, g.slot_y(row, scroll.y)),
+                Vec2::new(g.track_w - 1.0, g.slot_h - 1.0),
+            );
+            if r.intersects(band) {
+                slots.push((*id, row));
+            }
+        }
+    }
+    ui.painter().rect_stroke(
+        band,
+        0.0,
+        Stroke::new(1.0, pal().accent),
+        StrokeKind::Inside,
+    );
+    if !slots.is_empty() {
+        state.sel.scenes.clear();
+        state.selected_clip = slots
+            .first()
+            .map(|(t, s)| ClipRef::slot(*t, *s))
+            .filter(|r| session.clip_at(*r).is_some());
+        state.sel.slots = slots;
+    }
+    if ui.input(|i| !i.pointer.primary_down()) {
+        state.sel.rubber = None;
+    }
+}
+
+/// Files dropped on the grid from outside the app (manual p. 195).
+fn drop_os_files(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    g: &Geo,
+    columns: &[Column],
+    scroll: Vec2,
+) {
+    let paths: Vec<std::path::PathBuf> = ui.input(|i| {
+        i.raw
+            .dropped_files
+            .iter()
+            .map(|f| f.path().to_path_buf())
+            .collect()
+    });
+    if paths.is_empty() {
+        return;
+    }
+    let n = session.project.scenes.len();
+    let (pos, spread) = ui.input(|i| (i.pointer.latest_pos(), i.modifiers.command));
+    let target = pos
+        .and_then(|p| grid_cell(g, columns, scroll, p, n))
+        .or_else(|| state.selected_clip.and_then(ClipRef::as_slot));
+    let Some((track, slot)) = target else {
+        return;
+    };
+    let placed = session.drop_files(&paths, track, slot, spread);
+    if placed.is_empty() {
+        state.status = "Drop audio files onto an audio track".into();
+    }
+    state.sel.slots = placed;
 }
 
 /// A chain of a rack mixer: a header, an empty stretch where clips would go, and its strip.
@@ -699,6 +837,10 @@ fn track_column(
         let clip_info = session
             .clip(id, slot)
             .map(|c| (c.name.clone(), c.color, c.length));
+        let striped = session
+            .clip(id, slot)
+            .is_some_and(|c| c.launch.follow.assigned());
+        let clip_active = session.clip(id, slot).is_none_or(|c| c.active);
         let mut cu = child(
             ui,
             g.grid.intersect(col_clip),
@@ -708,6 +850,7 @@ fn track_column(
         let resp = cu.allocate_rect(rect, Sense::click_and_drag());
         let p = cu.painter().clone();
         let is_sel = state.selected_clip == Some(ClipRef::slot(id, slot))
+            || state.sel.slots.contains(&(id, slot))
             || state.group_slot.is_some_and(|(group, at)| {
                 at == slot && session.project.ancestors(id).contains(&group)
             });
@@ -717,10 +860,15 @@ fn track_column(
         let is_queued = queued_slot == slot as i32;
         let recording_here = recording_slot == Some(slot);
         let waiting_for_sample = session.clip_waiting_for_sample(id, slot);
+        let stop_button = session.has_stop_button(id, slot);
 
         match &clip_info {
             Some((cname, ccol, clen)) => {
-                let fill = rgb(*ccol);
+                let fill = if clip_active {
+                    rgb(*ccol)
+                } else {
+                    pal().raised
+                };
                 let fill = if resp.hovered() {
                     fill.gamma_multiply(1.12)
                 } else {
@@ -745,7 +893,11 @@ fn track_column(
                 } else {
                     theme::text_on(fill)
                 };
-                icons::play(&p, launch, tri);
+                if striped {
+                    icons::play_striped(&p, launch, tri, theme::darken(fill, 0.25));
+                } else {
+                    icons::play(&p, launch, tri);
+                }
                 let text_r = Rect::from_min_max(
                     Pos2::new(launch.right() + 4.0, rect.top()),
                     Pos2::new(rect.right() - 3.0, rect.bottom()),
@@ -806,7 +958,7 @@ fn track_column(
                             shade(0x8a4a4a)
                         },
                     );
-                } else {
+                } else if stop_button {
                     icons::stop(&p, launch.shrink(3.0), col);
                 }
                 if is_sel {
@@ -820,22 +972,41 @@ fn track_column(
             widgets::outline(&p, rect, pal().accent);
         }
 
+        // A clip launches as the button goes down: Gate and Repeat need to see it held.
+        if clip_info.is_some() && over_launch && cu.input(|i| i.pointer.primary_pressed()) {
+            session.clip_down(id, slot, 1.0);
+            state.sel.held = Some((id, slot));
+            if state.sel.prefs.select_on_launch {
+                state.selected = Some(ChainRef::Track(id));
+                state.group_slot = None;
+                select_one(state, id, slot);
+                state.detail = Detail::Clip;
+                state.piano.reset_view = true;
+            }
+        }
+        if resp.drag_started() && clip_info.is_none() {
+            state.sel.rubber = cu.input(|i| i.pointer.press_origin());
+        }
         if resp.clicked() {
-            state.selected = Some(ChainRef::Track(id));
             state.group_slot = None;
             if over_launch {
                 let queued = rec_queued == Some(slot);
                 if clip_info.is_some() {
-                    session.launch_clip(id, slot);
+                    // Already launched when the button went down.
                 } else if recording_here || queued {
+                    state.selected = Some(ChainRef::Track(id));
                     session.close_slot_recording(id);
                 } else if arm {
+                    state.selected = Some(ChainRef::Track(id));
                     session.record_slot(id, slot);
-                } else {
+                } else if stop_button {
+                    state.selected = Some(ChainRef::Track(id));
                     session.stop_track(id);
                 }
             } else {
-                state.selected_clip = Some(ClipRef::slot(id, slot));
+                state.selected = Some(ChainRef::Track(id));
+                let (shift, cmd) = cu.input(|i| (i.modifiers.shift, i.modifiers.command));
+                click_slot(session, state, id, slot, shift, cmd);
                 state.detail = if clip_info.is_some() {
                     Detail::Clip
                 } else {
@@ -854,9 +1025,10 @@ fn track_column(
                 state.piano.reset_view = true;
             } else if clip_info.is_none() && kind == TrackKind::Midi {
                 let color = session.new_clip_color(id);
-                let c = Clip::new_midi("MIDI Clip", color, 1, session.project.time_signature);
+                let mut c = Clip::new_midi("MIDI Clip", color, 1, session.project.time_signature);
+                c.launch = session.launch_defaults.settings();
                 session.set_clip(id, slot, Some(c));
-                state.selected_clip = Some(ClipRef::slot(id, slot));
+                select_one(state, id, slot);
                 state.detail = Detail::Clip;
                 state.show_detail = true;
                 state.piano.reset_view = true;
@@ -873,14 +1045,19 @@ fn track_column(
         }
         if let Some(src) = resp.dnd_release_payload::<ClipDrag>() {
             if (src.track, src.slot) != (id, slot) {
-                if let Some(c) = session.clip(src.track, src.slot).cloned() {
-                    let copy =
-                        cu.input(|i| keymap::copies_on_drag(i.modifiers, Platform::current()));
-                    session.set_clip(id, slot, Some(c));
-                    if !copy {
-                        session.set_clip(src.track, src.slot, None);
-                    }
-                    state.selected_clip = Some(ClipRef::slot(id, slot));
+                let moved = if state.sel.slots.contains(&(src.track, src.slot)) {
+                    state.sel.slots.clone()
+                } else {
+                    vec![(src.track, src.slot)]
+                };
+                let index = |t: TrackId| session.project.track_index(t).unwrap_or(0) as isize;
+                let tracks = index(id) - index(src.track);
+                let scenes = slot as isize - src.slot as isize;
+                let copy = cu.input(|i| keymap::copies_on_drag(i.modifiers, Platform::current()));
+                let landed = session.move_slots(&moved, tracks, scenes, copy);
+                if let Some((t, s)) = landed.first().copied() {
+                    state.selected_clip = Some(ClipRef::slot(t, s));
+                    state.sel.slots = landed;
                 }
             }
         }
@@ -925,6 +1102,9 @@ fn track_column(
                 pal().panel_dark
             },
         );
+        let stop_w = rect.width().min(22.0);
+        let status_r = Rect::from_min_max(Pos2::new(rect.left() + stop_w, rect.top()), rect.max);
+        session_status::show(&mut cu, session, state, id, status_r);
         let active =
             playing_slot != NO_SLOT || (kind == TrackKind::Group && group_is_playing(session, id));
         let col = if queued_slot == STOP_QUEUED && blink {
@@ -936,7 +1116,7 @@ fn track_column(
         };
         icons::stop(
             cu.painter(),
-            Rect::from_center_size(rect.center(), Vec2::splat(rect.height())),
+            Rect::from_min_size(rect.min, Vec2::new(stop_w, rect.height())),
             col,
         );
         if kind == TrackKind::Group {
@@ -1618,7 +1798,11 @@ fn master_column(
     );
     if resp.clicked() {
         state.selected = Some(ChainRef::Master);
-        state.detail = Detail::Devices;
+        state.detail = if state.sel.scenes.is_empty() {
+            Detail::Devices
+        } else {
+            Detail::Scene
+        };
     }
     if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
         match &*item {
@@ -1627,10 +1811,26 @@ fn master_column(
             BrowserItem::Sample(_) => {}
         }
     }
-    info(
+    let resp = info(
         resp,
-        "Master track — scene launch buttons; drop effects here",
+        "Master track — scene launch buttons; drop effects here; drag its left edge for scene tempo",
     );
+    resp.context_menu(|ui| {
+        if ui.button("Cancel Scene Launch").clicked() {
+            session.cancel_scene_launch();
+            ui.close();
+        }
+    });
+    // Dragging the left edge of the title reveals the Scene Tempo and Signature controls.
+    let edge = Rect::from_min_size(Pos2::new(m.left() - 2.0, m.top()), Vec2::new(5.0, HEADER_H));
+    let edge = ui.allocate_rect(edge, Sense::drag());
+    if edge.hovered() || edge.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    if edge.dragged() {
+        state.sel.scene_fields_w =
+            (state.sel.scene_fields_w - edge.drag_delta().x).clamp(0.0, scene_view::FIELDS_W * 1.3);
+    }
 
     // Scene launch buttons, aligned with the clip grid rows.
     let grid = Rect::from_min_max(
@@ -1640,86 +1840,21 @@ fn master_column(
     let n = session.project.scenes.len();
     let first = ((scroll_y / g.slot_h).floor().max(0.0)) as usize;
     let last = (((scroll_y + grid.height()) / g.slot_h).ceil() as usize).min(n);
-    let mut delete = None;
-    let any_queued = session
-        .track_shared
-        .values()
-        .any(|s| s.queued_slot.load(Ordering::Relaxed) >= 0);
-    for i in first..last {
-        let y = g.slot_y(i, scroll_y);
-        let rect = Rect::from_min_size(
-            Pos2::new(m.left() + 1.0, y),
-            Vec2::new(m.width() - 1.0, g.slot_h - 1.0),
-        );
-        let mut cu = child(ui, grid, rect, Layout::left_to_right(egui::Align::Center));
-        let resp = cu.allocate_rect(rect, Sense::click());
-        let cp = cu.painter().clone();
-        cp.rect_filled(
-            rect,
-            0.0,
-            if resp.hovered() {
-                shade(0x484848)
-            } else {
-                shade(0x3a3a3a)
-            },
-        );
-        let launch = Rect::from_min_size(rect.min, Vec2::new(g.slot_h.min(22.0), rect.height()));
-        // A scene is "queued" when every track with a clip in that row is queued on it.
-        let queued_here = any_queued
-            && session.project.tracks.iter().any(|t| {
-                session
-                    .track_shared
-                    .get(&t.id)
-                    .is_some_and(|s| s.queued_slot.load(Ordering::Relaxed) == i as i32)
-            });
-        let col = if queued_here && blink {
-            pal().play_green
-        } else if resp.hovered() {
-            shade(0xffffff)
-        } else {
-            shade(0xb0b0b0)
-        };
-        icons::play(&cp, launch, col);
-        let name = session.project.scenes[i].name.clone();
-        cp.text(
-            Pos2::new(launch.right() + 3.0, rect.center().y),
-            Align2::LEFT_CENTER,
-            name,
-            theme::font(11.0),
-            pal().text,
-        );
-        if resp.clicked() {
-            session.launch_scene(i);
-        }
-        let resp = info(resp, "Scene — click to launch every clip in this row");
-        info_note(
-            &resp,
-            session.info_text(InfoTarget::Scene(i)).unwrap_or_default(),
-        );
-        resp.context_menu(|ui| {
-            if let Some(scene) = session.project.scenes.get_mut(i) {
-                ui.horizontal(|ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut scene.name);
-                });
-            }
-            edit_info_item(ui, session, state, InfoTarget::Scene(i));
-            if ui.button("Insert Scene").clicked() {
-                session.add_scene();
-                ui.close();
-            }
-            if ui
-                .button(RichText::new("Delete Scene").color(pal().arm_red))
-                .clicked()
-            {
-                delete = Some(i);
-                ui.close();
-            }
-        });
-    }
-    if let Some(i) = delete {
-        session.delete_scene(i);
-    }
+    scene_view::rows(
+        ui,
+        session,
+        state,
+        &SceneRows {
+            grid,
+            left: m.left(),
+            right: m.right(),
+            first,
+            last,
+            scroll_y,
+            slot_h: g.slot_h,
+            blink,
+        },
+    );
     // "+ scene" row after the last scene, if visible.
     let y = g.slot_y(n, scroll_y);
     if y < grid.bottom() {
@@ -2067,9 +2202,19 @@ fn clip_menu(
 ) {
     let has = session.clip(id, slot).is_some();
     if !has {
+        let stop_label = if session.has_stop_button(id, slot) {
+            "Remove Stop Button"
+        } else {
+            "Add Stop Button"
+        };
+        if ui.button(stop_label).clicked() {
+            session.toggle_stop_buttons(&[(id, slot)]);
+            ui.close();
+        }
         if kind == TrackKind::Midi && ui.button("Insert MIDI Clip").clicked() {
             let color = session.new_clip_color(id);
-            let c = Clip::new_midi("MIDI Clip", color, 1, session.project.time_signature);
+            let mut c = Clip::new_midi("MIDI Clip", color, 1, session.project.time_signature);
+            c.launch = session.launch_defaults.settings();
             session.set_clip(id, slot, Some(c));
             state.selected_clip = Some(ClipRef::slot(id, slot));
             state.detail = Detail::Clip;
@@ -2114,6 +2259,23 @@ fn clip_menu(
     }
     if ui.button("Duplicate   ⌘D").clicked() {
         duplicate_clip(session, id, slot);
+        ui.close();
+    }
+    if ui.button("Create Follow Action Chain").clicked() {
+        let mut slots = selected_slots(session, state);
+        if !slots.contains(&(id, slot)) {
+            slots = vec![(id, slot)];
+        }
+        session.create_follow_chain(&slots);
+        ui.close();
+    }
+    let stop_label = if session.has_stop_button(id, slot) {
+        "Remove Stop Button"
+    } else {
+        "Add Stop Button"
+    };
+    if ui.button(stop_label).clicked() {
+        session.toggle_stop_buttons(&[(id, slot)]);
         ui.close();
     }
     let mut looped = session.clip(id, slot).is_some_and(|c| c.looped);

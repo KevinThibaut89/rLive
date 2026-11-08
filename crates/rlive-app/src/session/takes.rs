@@ -391,6 +391,7 @@ impl Session {
             length,
             looped,
             content,
+            launch: self.launch_defaults.settings(),
             ..Clip::default()
         }
     }
@@ -786,6 +787,7 @@ impl Session {
             length,
             looped: true,
             content: ClipContent::midi(notes),
+            launch: self.launch_defaults.settings(),
             ..Clip::default()
         };
         self.put_in_slot(track, slot, clip);
@@ -857,11 +859,9 @@ impl Session {
         }
         let sig = self.project.time_signature;
         let color = self.new_clip_color(track);
-        self.set_clip(
-            track,
-            slot,
-            Some(Clip::new_midi("MIDI Clip", color, 1, sig)),
-        );
+        let mut clip = Clip::new_midi("MIDI Clip", color, 1, sig);
+        clip.launch = self.launch_defaults.settings();
+        self.set_clip(track, slot, Some(clip));
         self.set_arm(track, true, false);
         self.launch_clip(track, slot);
         self.set_overdub(track, true);

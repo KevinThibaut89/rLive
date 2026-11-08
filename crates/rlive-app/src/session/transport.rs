@@ -73,13 +73,27 @@ impl Session {
     }
 
     pub fn launch_clip(&mut self, track: TrackId, slot: usize) {
+        self.clip_down(track, slot, 1.0);
+    }
+
+    /// A clip's launch button went down: at `velocity`, for one played from a key or note.
+    pub fn clip_down(&mut self, track: TrackId, slot: usize, velocity: f32) {
         // Its sample isn't ready: the slot is empty as far as the engine knows, and launching an
         // empty slot would stop the track.
         if self.clip_waiting_for_sample(track, slot) {
             return;
         }
         self.re_enable_clip_automation(track, slot);
-        self.send(EngineCommand::Launch(LaunchCmd::LaunchClip { track, slot }));
+        self.send(EngineCommand::Launch(LaunchCmd::ClipDown {
+            track,
+            slot,
+            velocity,
+        }));
+    }
+
+    /// A clip's launch button came up.
+    pub fn clip_up(&mut self, track: TrackId, slot: usize) {
+        self.send(EngineCommand::Launch(LaunchCmd::ClipUp { track, slot }));
     }
 
     pub fn stop_track(&mut self, track: TrackId) {

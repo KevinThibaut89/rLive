@@ -89,6 +89,8 @@ pub struct TrackShared {
     pub queued_slot: AtomicI32,
     /// Playhead position within the playing clip, in ticks.
     pub clip_position: AtomicF64,
+    /// How long the playing clip has run from its position 0, in ticks, loops included.
+    pub clip_elapsed: AtomicF64,
     /// Whether the track plays its Arrangement lane rather than a launched Session clip.
     pub follow_arrangement: AtomicBool,
     /// The Session slot being recorded into, or [`NO_SLOT`].
@@ -106,6 +108,7 @@ impl Default for TrackShared {
             playing_slot: AtomicI32::new(NO_SLOT),
             queued_slot: AtomicI32::new(NO_SLOT),
             clip_position: AtomicF64::new(0.0),
+            clip_elapsed: AtomicF64::new(0.0),
             follow_arrangement: AtomicBool::new(true),
             recording_slot: AtomicI32::new(NO_SLOT),
             record_queued_slot: AtomicI32::new(NO_SLOT),

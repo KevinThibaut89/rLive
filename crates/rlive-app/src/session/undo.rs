@@ -120,6 +120,7 @@ impl Session {
 
     /// Brings the project to `target` by applying only what differs.
     fn restore(&mut self, target: &Snapshot) {
+        let scenes_changed = self.project.scenes != *target.scenes;
         self.project.scenes = (*target.scenes).clone();
         let keep: HashSet<TrackId> = target.tracks.iter().map(|t| t.shell.id).collect();
         let gone: Vec<TrackId> = self
@@ -155,6 +156,10 @@ impl Session {
             self.sync_time_maps();
         }
         self.restore_settings(&target.shell);
+        if scenes_changed {
+            self.sync_scenes();
+        }
+        self.send_follow_enabled();
         self.sync_loop();
         self.project.normalize();
         self.update_midi_targets();
@@ -193,7 +198,10 @@ impl Session {
         if lane_changed {
             t.arrangement = s.lane.iter().map(|c| (**c).clone()).collect();
         }
+        let no_stop = t.no_stop.clone();
         adopt_track_shell(t, &s.shell);
+        changed.extend(no_stop.iter().map(|s| *s as usize));
+        changed.extend(t.no_stop.iter().map(|s| *s as usize));
         let automation_changed = t.automation != *s.automation;
         t.automation = (*s.automation).clone();
         t.take_lanes = (*s.take_lanes).clone();
@@ -299,6 +307,7 @@ impl Session {
             key_mappings,
             solo_in_place,
             delay_compensation,
+            follow_actions_on,
             reduced_latency_when_monitoring,
             metronome_options,
             record_quantize,
@@ -330,6 +339,7 @@ impl Session {
         p.key_mappings = key_mappings.clone();
         p.solo_in_place = *solo_in_place;
         p.delay_compensation = *delay_compensation;
+        p.follow_actions_on = *follow_actions_on;
         p.reduced_latency_when_monitoring = *reduced_latency_when_monitoring;
         p.metronome_options = *metronome_options;
         p.record_quantize = *record_quantize;

@@ -243,25 +243,25 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Multi-select rename with Tab flow, info text, colours [S]
 - `[~]` Group slots: shading by left-most clip colour, group launch and stop, click selects children [M]
 - `[ ]` Track resize to launch-only width, all-tracks modifier [S]
-- `[ ]` Scene launch; cancel pending launch [M]
-- `[ ]` Select Next Scene on Launch [S]
-- `[ ]` Scene rename, colour, info text, reorder (non-adjacent collapse by mouse, retained by keyboard) [M]
-- `[ ]` Position-derived scene numbers [S]
-- `[ ]` Scene Tempo 20-999 and Time Signature, hidden by default, disable by reset [M] → tempo engine
-- `[ ]` Coloured launch button for scenes with tempo/meter [S]
+- `[x]` Scene launch; cancel pending launch [M]
+- `[~]` Select Next Scene on Launch [S]
+- `[~]` Scene rename, colour, info text, reorder (non-adjacent collapse by mouse, retained by keyboard) [M]
+- `[~]` Position-derived scene numbers [S]
+- `[~]` Scene Tempo 20-999 and Time Signature, hidden by default, disable by reset [M] → tempo engine
+- `[~]` Coloured launch button for scenes with tempo/meter [S]
 - `[ ]` Tab/arrow navigation across scene fields [S]
 - `[ ]` Legacy name-encoded tempo migrated [S; only if importing old Sets]
-- `[ ]` Scene View panel: tempo, signature, Follow Actions, multi-scene edit [M] → ch. 16
-- `[ ]` Track Status: loop pie with counts, one-shot remaining time, input monitor icon, Arrangement mini-display; click opens clip [M]
-- `[ ]` Multi-file drop: one track by default, modifier spreads across tracks [S]
-- `[ ]` Rubber-band and modifier selection, drag moves [M]
-- `[ ]` Select on Launch toggle [S]
-- `[ ]` Add/Remove Stop Button, stopless scene behaviour [S]
-- `[ ]` Insert Scene [S]
-- `[ ]` Capture and Insert Scene: copy running clips, launch seamlessly [L]
-- `[ ]` Arrangement Record logs launches, clip property edits, automation, tempo/meter; no new audio [L]
-- `[ ]` Stop All Clips [S]
-- `[ ]` Drag or paste clips between views; Arrangement to Session lays out top to bottom [M]
+- `[~]` Scene View panel: tempo, signature, Follow Actions, multi-scene edit [M] → ch. 16
+- `[~]` Track Status: loop pie with counts, one-shot remaining time, input monitor icon, Arrangement mini-display; click opens clip [M]
+- `[~]` Multi-file drop: one track by default, modifier spreads across tracks [S]
+- `[~]` Rubber-band and modifier selection, drag moves [M]
+- `[~]` Select on Launch toggle [S]
+- `[x]` Add/Remove Stop Button, stopless scene behaviour [S]
+- `[x]` Insert Scene [S]
+- `[x]` Capture and Insert Scene: copy running clips, launch seamlessly [L]
+- `[x]` Arrangement Record logs launches, clip property edits, automation, tempo/meter; no new audio [L]
+- `[x]` Stop All Clips [S]
+- `[~]` Drag or paste clips between views; Arrangement to Session lays out top to bottom [M]
 - `[ ]` Consolidate Time to New Scene [M] → Consolidate
 
 
@@ -518,27 +518,27 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** C7, C8
 
-- `[ ]` Launch settings on Session clips, multi-clip edit [S]
-- `[ ]` Launch Modes: Trigger, Gate, Toggle, Repeat at quantize rate [M]
-- `[ ]` Legato: inherit play position, works unquantized; dropout risk mitigated by RAM Mode [M] → RAM Mode, streaming preload
-- `[ ]` Clip quantize: None, Global, bar and note values; Global shortcut [M]
-- `[ ]` Velocity Amount: MIDI velocity to volume, 0-100% [S]
-- `[ ]` Nudge Backward/Forward by global quantize [S]
+- `[~]` Launch settings on Session clips, multi-clip edit [S]
+- `[x]` Launch Modes: Trigger, Gate, Toggle, Repeat at quantize rate [M]
+- `[x]` Legato: inherit play position, works unquantized; dropout risk mitigated by RAM Mode [M] → RAM Mode, streaming preload
+- `[x]` Clip quantize: None, Global, bar and note values; Global shortcut [M]
+- `[x]` Velocity Amount: MIDI velocity to volume, 0-100% [S]
+- `[x]` Nudge Backward/Forward by global quantize [S]
 - `[ ]` Mapped scrub control appears in MIDI Map Mode [S]
-- `[ ]` Offsets from master clock retained [S]
-- `[ ]` Follow Actions on clips and scenes, off by default, toggle shortcut [L]
-- `[ ]` Two actions A/B with Chance and linking slider [S]
-- `[ ]` Linked (end of clip, loop Multiplier) or Unlinked (Follow Action Time, default one bar) [M]
-- `[ ]` Scenes have time only [S]
+- `[x]` Offsets from master clock retained [S]
+- `[x]` Follow Actions on clips and scenes, off by default, toggle shortcut [L]
+- `[~]` Two actions A/B with Chance and linking slider [S]
+- `[x]` Linked (end of clip, loop Multiplier) or Unlinked (Follow Action Time, default one bar) [M]
+- `[~]` Scenes have time only [S]
 - `[ ]` Editor marker draggable for Follow Time [S]
-- `[ ]` Ten actions: No Action, Stop, Play Again, Previous, Next (wraps), First, Last, Any, Other, Jump with target [M]
-- `[ ]` No Action blocks subsequent actions, Stop overrides loop [S]
-- `[ ]` Groups are adjacent slots, separated by empties [S]
-- `[ ]` Striped launch button [S]
-- `[ ]` Timing bypasses Global quantize, honours specific clip quantize [S]
-- `[ ]` Global enable button, greyed when unused [S]
-- `[ ]` Scene actions take precedence once fired; clip actions continue until then [M]
-- `[ ]` Create Follow Action Chain, non-contiguous selection allowed [S]
+- `[x]` Ten actions: No Action, Stop, Play Again, Previous, Next (wraps), First, Last, Any, Other, Jump with target [M]
+- `[x]` No Action blocks subsequent actions, Stop overrides loop [S]
+- `[x]` Groups are adjacent slots, separated by empties [S]
+- `[~]` Striped launch button [S]
+- `[x]` Timing bypasses Global quantize, honours specific clip quantize [S]
+- `[~]` Global enable button, greyed when unused [S]
+- `[x]` Scene actions take precedence once fired; clip actions continue until then [M]
+- `[x]` Create Follow Action Chain, non-contiguous selection allowed [S]
 
 
 ## Key dependency chains
@@ -1344,8 +1344,6 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **C19:** Cancel value entry; Confirm value entry; Current scene from the last track; Decrement value; Delete track from title bar; Eight scenes down; Eight scenes up; First track of the scene; Focus Mixer; Increment value; Jump to highlighted track title; Last track of the scene; Move nonadjacent tracks down; Move nonadjacent tracks left; Move nonadjacent tracks right; Move nonadjacent tracks up; Next control; Next field; Next name while renaming; Next neighbouring control; Next track while renaming; Previous control; Previous neighbouring control; Return to default; Scene down; Scene up; Select all clips and slots; Select clip above; Select clip below; Select clip left; Select clip right; Type a value; Value down by an octave or fine step; Value up by an octave or fine step
 - `[ ]` **C2:** Envelopes tab; Fit content to view height; Fit content to view width; Focus clip panels; Focus selected clip panel; Follow playback; Move clip region left with start marker; Move clip region right with start marker; Move end marker to position; Move start marker to position; Sample or Notes tab; Set end marker; Set loop end; Set loop start; Set start marker; Show Device and Clip View together; Switch Notes/Envelopes/MPE tabs; Switch Sample/Envelopes tabs; Toggle full-size Clip View; Zoom back from clip selection; Zoom to clip selection
 - `[ ]` **C6:** Add take area to the main lane; Add take lane; Audition take lane; Duplicate take lane; Next take into the main clip; Previous take into the main clip; Show take lanes
-- `[ ]` **C7:** Add or remove stop button; Deactivate selected clip; Insert captured scene; Move nonadjacent scenes down; Move nonadjacent scenes up
-- `[ ]` **C8:** Create Follow Action chain; Toggle Follow Actions
 - `[ ]` **C9:** Change velocity from the note editor; Chop notes or split at time selection; Chop notes, one at a time; Chop notes, two at a time; Copy notes; Fit notes to time range; Fit notes to view height; Fit notes to view width; Group notes (play all); Highlight scale; Insert marker to beginning; Insert marker to end; Invert note selection; Join notes; Lower note chance; Lower note velocity; Lower velocity deviation; Quantize; Quantize settings; Raise note chance; Raise note velocity; Raise velocity deviation; Scroll editor down; Scroll editor down, fine; Scroll editor left; Scroll editor right; Scroll editor up; Scroll editor up, fine; Select next note; Select next note in key track; Select previous note; Select previous note in key track; Set note velocity by typing; Show/hide note filters; Split notes at an exact place; Ungroup notes; Zoom back from clip selection; Zoom in horizontally; Zoom out horizontally; Zoom to clip selection
 - `[ ]` **out:** Focus Learn View; Hide/show Learn View
 <!-- pending-shortcuts:end -->

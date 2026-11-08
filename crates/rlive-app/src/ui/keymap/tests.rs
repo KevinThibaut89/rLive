@@ -30,6 +30,7 @@ fn cx(focus: FocusArea) -> KeyContext {
         loop_brace: false,
         track_header: false,
         enter_held: false,
+        slot_selected: false,
         lane_focused: false,
     }
 }
@@ -78,7 +79,9 @@ fn the_same_chord_means_different_things_by_focus() {
     );
     assert_eq!(
         resolve(cmd(Key::E), &cx(FocusArea::Session)),
-        Resolution::Pending
+        Resolution::Run(MenuCommand::Launch(
+            super::super::commands::launch::Launch::ToggleStopButton
+        )),
     );
     let notes = cx(FocusArea::Clip);
     assert_eq!(resolve(cmd(Key::E), &notes), Resolution::Pending);

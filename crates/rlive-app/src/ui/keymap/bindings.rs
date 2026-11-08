@@ -8,6 +8,7 @@ use super::super::commands::arrange::Arrange as Ar;
 use super::super::commands::create::Create;
 use super::super::commands::edit::Edit;
 use super::super::commands::file::File;
+use super::super::commands::launch::Launch as La;
 use super::super::commands::options::Options;
 use super::super::commands::rack::Rack;
 use super::super::commands::track::Track;
@@ -366,24 +367,24 @@ pub static BINDINGS: &[Binding] = &[
     b("42.15", Ses, Wh::SlotSelected, "Select clip right", k(NO, Key::ArrowRight), p!("C19")),
     b("42.15", Ses, Wh::SlotSelected, "Select all clips and slots", k(CMD, Key::A), p!("C19")),
     a("42.15", Ses, "Copy clips", g("Alt drag", "Ctrl drag"), W),
-    a("42.15", Ses, "Add or remove stop button", k(CMD, Key::E), p!("C7")),
+    a("42.15", Ses, "Add or remove stop button", k(CMD, Key::E), L(M::Launch(La::ToggleStopButton))),
     a("42.15", Ses, "Stop clips in the selected slot's track", k(CMD, Key::Enter), L(M::Track(Track::StopSelectedTrack))),
     a("42.15", Ses, "Insert MIDI clip", k(CMD_SHIFT, Key::M), L(M::Track(Track::InsertMidiClip))),
     a("42.15", Ses, "Insert scene", k(CMD, Key::I), L(M::Create(Create::NewScene))),
-    a("42.15", Ses, "Insert captured scene", k(CMD_SHIFT, Key::I), p!("C7")),
+    a("42.15", Ses, "Insert captured scene", k(CMD_SHIFT, Key::I), L(M::Create(Create::CaptureAndInsertScene))),
     b("42.15", Ses, Wh::TrackTitle, "Scene up", k(NO, Key::ArrowUp), p!("C19")),
     b("42.15", Ses, Wh::TrackTitle, "Scene down", k(NO, Key::ArrowDown), p!("C19")),
     a("42.15", Ses, "Eight scenes up", k(NO, Key::PageUp), p!("C19")),
     a("42.15", Ses, "Eight scenes down", k(NO, Key::PageDown), p!("C19")),
     a("42.15", All, "Record to Session View", k(CMD_SHIFT, Key::F9), L(M::Transport(Tr::SessionRecord))),
-    a("42.15", Ses, "Toggle Follow Actions", k(SHIFT, Key::Enter), p!("C8")),
-    a("42.15", Ses, "Create Follow Action chain", k(CMD_SHIFT, Key::Enter), p!("C8")),
+    a("42.15", Ses, "Toggle Follow Actions", k(SHIFT, Key::Enter), L(M::Launch(La::ToggleFollow))),
+    a("42.15", Ses, "Create Follow Action chain", k(CMD_SHIFT, Key::Enter), L(M::Launch(La::CreateFollowChain))),
     a("42.15", Ses, "Move selected track left", k(CMD, Key::ArrowLeft), L(M::Track(Track::MoveLeft))),
     a("42.15", Ses, "Move selected track right", k(CMD, Key::ArrowRight), L(M::Track(Track::MoveRight))),
-    a("42.15", Ses, "Move nonadjacent scenes up", k(CMD, Key::ArrowUp), p!("C7")),
-    a("42.15", Ses, "Move nonadjacent scenes down", k(CMD, Key::ArrowDown), p!("C7")),
+    a("42.15", Ses, "Move nonadjacent scenes up", k(CMD, Key::ArrowUp), L(M::Launch(La::MoveScenesUp))),
+    a("42.15", Ses, "Move nonadjacent scenes down", k(CMD, Key::ArrowDown), L(M::Launch(La::MoveScenesDown))),
     a("42.15", Ses, "Drop browser clips as a scene", g("Cmd", "Ctrl"), p!("C12")),
-    b("42.15", Ses, Wh::SlotSelected, "Deactivate selected clip", k(NO, Key::Num0), p!("C7")),
+    b("42.15", Ses, Wh::SlotSelected, "Deactivate selected clip", k(NO, Key::Num0), L(M::Launch(La::DeactivateClip))),
     b("42.15", Ses, Wh::TrackTitle, "Jump to highlighted track title", k(NO, Key::Escape), p!("C19")),
     b("42.15", Ses, Wh::SlotSelected, "First track of the scene", k(NO, Key::Home), p!("C19")),
     b("42.15", Ses, Wh::SlotSelected, "Last track of the scene", k(NO, Key::End), p!("C19")),

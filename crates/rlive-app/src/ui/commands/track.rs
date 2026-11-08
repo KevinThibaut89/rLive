@@ -106,7 +106,8 @@ impl RliveApp {
             .track(track)
             .map(|t| t.color)
             .unwrap_or(rlive_project::PALETTE[0]);
-        let clip = Clip::new_midi("MIDI Clip", color, 1, sig);
+        let mut clip = Clip::new_midi("MIDI Clip", color, 1, sig);
+        clip.launch = session.launch_defaults.settings();
         session.set_clip(track, slot, Some(clip));
     }
 
@@ -144,8 +145,12 @@ impl RliveApp {
             Track::HideGroupedTracks => self.set_selected_groups_folded(Some(true)),
             Track::ToggleGroupFold => self.set_selected_groups_folded(None),
             Track::LaunchSelectedClip => {
-                if let Some((track, slot)) = self.ui.selected_clip.and_then(ClipRef::as_slot) {
+                if let Some(scene) = self.ui.sel.scenes.first().copied() {
+                    session_view::launch_selected_scene(&mut self.session, &mut self.ui, scene);
+                } else if let Some((track, slot)) = self.ui.selected_clip.and_then(ClipRef::as_slot)
+                {
                     self.session.launch_clip(track, slot);
+                    self.ui.sel.held_key = Some((track, slot));
                 }
             }
             Track::StopSelectedTrack => {

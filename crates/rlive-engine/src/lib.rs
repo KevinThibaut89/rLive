@@ -30,11 +30,12 @@ pub use capture::{capture_pair, CaptureSink, CaptureTail, Chunk as CaptureChunk}
 use capture::{CaptureBlock, CaptureMode, InputSource};
 use clip::BlockTime;
 pub use clip::{
-    AudioClip, ClipCurve, ClipData, ClipEnvelopes, EnvCurve, EnvTiming, EnvelopedClip, ExprPoint,
-    MidiClip, Note, NoteExpression, WarpedClip,
+    velocity_gain, AudioClip, ClipCurve, ClipData, ClipEnvelopes, EnvCurve, EnvTiming,
+    EnvelopedClip, ExprPoint, MidiClip, Note, NoteExpression, SlotLaunch, WarpedClip,
 };
 pub use commands::{
-    ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, PreviewCmd, RecordCmd, TransportCmd,
+    ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, PreviewCmd, RecordCmd, SceneInfo,
+    TransportCmd, NO_OLD_SLOT,
 };
 use delay::FadingDelay;
 pub use delay::{StereoLine, TapLines, FADE_FRAMES, MAX_COMPENSATION_FRAMES};
@@ -60,7 +61,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 use track::BlockCtx;
-pub use track::{DeviceBody, DeviceSlot, MixSettings, RackOuts, TrackNode};
+pub use track::{DeviceBody, DeviceSlot, MixSettings, RackOuts, TrackNode, MAX_SCENES};
 
 pub const MAX_TRACKS: usize = 256;
 /// How deep a group can be nested for solo purposes, in case a plan links groups in a loop.
@@ -209,6 +210,21 @@ pub enum EngineEvent {
         slot: usize,
         cell: CellIx,
         position: f64,
+    },
+    /// A launched scene set the tempo or meter at `tick`.
+    SceneTiming {
+        scene: usize,
+        tick: f64,
+        tempo: Option<f64>,
+        signature: Option<TimeSignature>,
+    },
+    /// While recording: `track` now plays `slot` (or nothing) from `at`. `start_tick` is the song
+    /// tick of the clip's position 0.
+    SessionPlayback {
+        track: TrackId,
+        slot: Option<usize>,
+        at: f64,
+        start_tick: f64,
     },
     /// The clip whose automation was moving this cell stopped counting. The cell stays where it
     /// was left, at `value`, and is its knob's again.
@@ -523,6 +539,19 @@ pub struct Engine {
     stop_at: Option<f64>,
     /// Whether clips entered in the middle of a note play that note.
     chase: bool,
+    /// What each scene sets when launched. Always `MAX_SCENES` long.
+    scenes: Vec<SceneInfo>,
+    scene_count: usize,
+    /// A launched scene waiting for its launch point.
+    pending_scene: Option<commands::follow::PendingScene>,
+    /// The launched scene's Follow Action, waiting for its time.
+    scene_follow: Option<clip::ArmedFollow>,
+    /// The Enable Follow Actions Globally button.
+    follow_enabled: bool,
+    follow_random: commands::follow::Random,
+    /// Room for rearranging slots.
+    slot_scratch: Vec<Option<Arc<ClipData>>>,
+    launch_scratch: Vec<SlotLaunch>,
     /// The last block played up to `loop_end`. Tells that apart from being sought onto it,
     /// since only the former wraps.
     reached_loop_end: bool,
@@ -605,6 +634,14 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         hold_loop: None,
         stop_at: None,
         chase: true,
+        scenes: vec![SceneInfo::default(); track::MAX_SCENES],
+        scene_count: 0,
+        pending_scene: None,
+        scene_follow: None,
+        follow_enabled: true,
+        follow_random: commands::follow::Random::new(0),
+        slot_scratch: Vec::with_capacity(track::MAX_SCENES),
+        launch_scratch: Vec::with_capacity(track::MAX_SCENES),
         reached_loop_end: false,
         recording: false,
         rec_from: 0.0,
@@ -787,9 +824,27 @@ impl Engine {
         self.reached_loop_end = false;
         self.sync_sample_pos();
         let launch_at = self.launch_point();
+        if let Some(s) = self.pending_scene.as_mut() {
+            s.at = match kind {
+                JumpKind::Wrap => s.at + delta,
+                JumpKind::Seek => launch_at,
+            };
+        }
+        if let Some(f) = self.scene_follow.as_mut() {
+            f.at += delta;
+        }
         for t in self.tracks.iter_mut() {
             if let Some(p) = t.player.playing.as_mut() {
                 p.start_tick += delta;
+            }
+            if let Some(f) = t.player.follow.as_mut() {
+                f.at += delta;
+            }
+            if let Some(r) = t.player.repeat.as_mut() {
+                r.next = self.maps.bars.next_boundary(to, r.quantize);
+            }
+            if let Some(l) = t.player.logged.as_mut() {
+                l.1 += delta;
             }
             if let Some(p) = t.player.pending.as_mut() {
                 p.set_at(match kind {
@@ -877,10 +932,14 @@ impl Engine {
 
     /// The next tick something is due at: a queued jump or a stop.
     fn next_timed_event(&self) -> Option<f64> {
-        match (self.pending_jump, self.stop_at) {
+        let transport = match (self.pending_jump, self.stop_at) {
             (Some(j), Some(at)) => Some(j.at.min(at)),
             (Some(j), None) => Some(j.at),
             (None, at) => at,
+        };
+        match (transport, self.next_launch_event()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
         }
     }
 
@@ -906,6 +965,7 @@ impl Engine {
             self.jump(j.to, JumpKind::Seek);
             *run = self.tempo_run();
         }
+        self.run_launch_events(run);
     }
 
     /// Wrap at the loop end if we are there, re-reading the tempo at the new position.
@@ -1042,14 +1102,33 @@ impl Engine {
         let garbage = &mut self.garbage;
         let mut retire_clip = |c: Arc<ClipData>| retire(garbage, Garbage::Shared(c));
         let smooth = self.smooth_coeff;
+        let env = clip::LaunchEnv {
+            bars: &maps.bars,
+            global: self.quantize,
+            chase: self.chase,
+        };
         for t in self.tracks.iter_mut() {
             t.smooth = smooth;
             t.lane.set_chase(self.chase);
-            t.begin_block(time, &transport, self.midi_auto_reset, &mut retire_clip);
+            t.begin_block(
+                time,
+                &transport,
+                self.midi_auto_reset,
+                env,
+                &mut retire_clip,
+            );
         }
         self.master.smooth = smooth;
-        self.master
-            .begin_block(time, &transport, self.midi_auto_reset, &mut retire_clip);
+        self.master.begin_block(
+            time,
+            &transport,
+            self.midi_auto_reset,
+            env,
+            &mut retire_clip,
+        );
+        if self.recording {
+            self.log_session_playback();
+        }
 
         let ctx = BlockCtx {
             transport: &transport,
@@ -1085,6 +1164,22 @@ impl Engine {
         self.shared.tick.store(self.tick.max(0.0));
         self.shared.insert_marker.store(self.insert_marker);
         self.shared.tempo.store(self.maps.tempo.bpm_at(self.tick));
+    }
+
+    /// Tell the Arrangement what started and stopped in this block.
+    fn log_session_playback(&mut self) {
+        for t in self.tracks.iter_mut() {
+            let now = t.player.playing.as_ref().map(|p| (p.slot, p.start_tick));
+            if now != t.player.logged {
+                t.player.logged = now;
+                let _ = self.events.push(EngineEvent::SessionPlayback {
+                    track: t.id,
+                    slot: now.map(|n| n.0),
+                    at: t.player.changed_at,
+                    start_tick: now.map_or(0.0, |n| n.1),
+                });
+            }
+        }
     }
 
     /// Put the rendered block on the hardware. A channel nothing plays through is silent.

@@ -201,6 +201,7 @@ impl Session {
             start: phrase.loop_start,
             loop_start: phrase.loop_start,
             content: ClipContent::midi(phrase.notes),
+            launch: self.launch_defaults.settings(),
             ..Clip::default()
         };
         if into_arrangement {

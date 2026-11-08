@@ -1,9 +1,10 @@
 use crate::defaults::{is_default, is_one, is_true, one, yes};
 use crate::{Breakpoint, ClipEnvelope, FileRef};
-use rlive_core::{GrooveId, Quantize, TimeSignature, PPQ};
+use rlive_core::{GrooveId, Quantize, TimeSignature};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub use rlive_core::launch::{FollowAction, FollowActions, LaunchMode};
 pub use rlive_core::warp::{BeatsLoop, BeatsPreserve};
 
 /// Release velocity of a note that never recorded one (MIDI's default of 64, rounded).
@@ -215,15 +216,6 @@ impl Default for WarpParams {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum LaunchMode {
-    #[default]
-    Trigger,
-    Gate,
-    Toggle,
-    Repeat,
-}
-
 /// What a Session clip does when launched. Ignored in the Arrangement.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct LaunchSettings {
@@ -239,54 +231,6 @@ pub struct LaunchSettings {
     pub velocity_amount: f32,
     #[serde(default, skip_serializing_if = "is_default")]
     pub follow: FollowActions,
-}
-
-/// What happens after a clip or scene has played for a while.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct FollowActions {
-    pub enabled: bool,
-    pub action_a: FollowAction,
-    pub action_b: FollowAction,
-    /// Relative chance of each action, 0..1.
-    pub chance_a: f32,
-    pub chance_b: f32,
-    /// Clips only: fire at the end of the clip (after `multiplier` loops) rather than after `time`.
-    pub linked: bool,
-    pub multiplier: u32,
-    /// Ticks from where play starts, for an unlinked clip or a scene.
-    pub time: u64,
-}
-
-impl Default for FollowActions {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            action_a: FollowAction::None,
-            action_b: FollowAction::None,
-            chance_a: 1.0,
-            chance_b: 0.0,
-            linked: true,
-            multiplier: 1,
-            time: 4 * PPQ,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum FollowAction {
-    #[default]
-    None,
-    Stop,
-    PlayAgain,
-    Previous,
-    Next,
-    First,
-    Last,
-    Any,
-    Other,
-    /// To a slot of the group, or a scene, by its zero-based index.
-    Jump(u32),
 }
 
 /// A clip's scale. Audio clips only pass it on to scale-aware devices.

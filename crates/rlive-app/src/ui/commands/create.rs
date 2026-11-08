@@ -2,20 +2,27 @@
 
 use super::{Entry, Entry::Item, Entry::Separator, MenuCommand as M, MenuState};
 use crate::session::ChainRef;
-use crate::ui::RliveApp;
+use crate::ui::{session_select, RliveApp};
 use rlive_core::TrackId;
 use rlive_project::TrackKind;
 
 super::domain! {
     /// The Create menu.
-    Create { NewMidiTrack, NewAudioTrack, NewReturnTrack, NewScene, GroupTracks, UngroupTracks }
+    Create {
+        NewMidiTrack, NewAudioTrack, NewReturnTrack, NewScene, CaptureAndInsertScene, GroupTracks,
+        UngroupTracks,
+    }
 }
 
 pub const MENU: &[Entry] = &[
     Item("MIDI Track", M::Create(Create::NewMidiTrack)),
     Item("Audio Track", M::Create(Create::NewAudioTrack)),
     Item("Return Track", M::Create(Create::NewReturnTrack)),
-    Item("Scene", M::Create(Create::NewScene)),
+    Item("Insert Scene", M::Create(Create::NewScene)),
+    Item(
+        "Capture and Insert Scene",
+        M::Create(Create::CaptureAndInsertScene),
+    ),
     Separator,
     Item("Group Tracks", M::Create(Create::GroupTracks)),
     Item("Ungroup Tracks", M::Create(Create::UngroupTracks)),
@@ -25,6 +32,10 @@ impl RliveApp {
     fn select_new_track(&mut self, kind: TrackKind) {
         let id = self.session.add_track(kind, None);
         self.ui.selected = Some(ChainRef::Track(id));
+    }
+
+    fn select_new_scene(&mut self, scene: usize) {
+        session_select::click_scene(&mut self.ui, scene, false, false);
     }
 
     /// The tracks a Group or Ungroup command applies to: the multi-selection, or the single
@@ -93,7 +104,18 @@ impl RliveApp {
                     self.ui.selected = Some(ChainRef::Track(r));
                 }
             }
-            Create::NewScene => self.session.add_scene(),
+            Create::NewScene => {
+                let below = self.selected_scene();
+                if let Some(new) = self.session.insert_scene(below) {
+                    self.select_new_scene(new);
+                }
+            }
+            Create::CaptureAndInsertScene => {
+                let below = self.selected_scene();
+                if let Some(new) = self.session.capture_and_insert_scene(below) {
+                    self.select_new_scene(new);
+                }
+            }
             Create::GroupTracks => self.group_selected(),
             Create::UngroupTracks => self.ungroup_selected(),
         }

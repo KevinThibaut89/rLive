@@ -732,6 +732,7 @@ fn link_tab(ui: &mut egui::Ui) {
 fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     let warp = &mut settings.warp;
     let record = &mut settings.record;
+    let launch = &mut settings.launch;
     let session_automation = &mut settings.record_session_automation_in;
     let create_fades = &mut settings.create_fades;
     widgets::section_label(ui, "RECORD");
@@ -821,11 +822,32 @@ fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.add_space(10.0);
     widgets::section_label(ui, "LAUNCH");
     grid(ui, "launch", |ui| {
-        soon(ui, "Default Launch Mode", "Trigger", "C7");
-        soon(ui, "Default Launch Quantization", "Global", "C7");
-        soon_check(ui, "Select on Launch", true, "C7");
-        soon_check(ui, "Select Next Scene on Launch", false, "C7");
-        soon(ui, "Clip Update Rate", "1/16", "C7");
+        ui.label("Default Launch Mode");
+        egui::ComboBox::from_id_salt("default_launch_mode")
+            .selected_text(launch.default_mode.label())
+            .show_ui(ui, |ui| {
+                for m in rlive_core::LaunchMode::ALL {
+                    ui.selectable_value(&mut launch.default_mode, m, m.label());
+                }
+            });
+        ui.end_row();
+        ui.label("Default Launch Quantization");
+        egui::ComboBox::from_id_salt("default_launch_quantize")
+            .selected_text(launch.default_quantize.map_or("Global", |q| q.label()))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut launch.default_quantize, None, "Global");
+                for q in rlive_core::Quantize::ALL {
+                    ui.selectable_value(&mut launch.default_quantize, Some(q), q.label());
+                }
+            });
+        ui.end_row();
+        ui.label("Select on Launch");
+        ui.checkbox(&mut launch.select_on_launch, "");
+        ui.end_row();
+        ui.label("Select Next Scene on Launch");
+        ui.checkbox(&mut launch.select_next_scene, "");
+        ui.end_row();
+        soon(ui, "Clip Update Rate", "1/16", "later");
     });
 }
 

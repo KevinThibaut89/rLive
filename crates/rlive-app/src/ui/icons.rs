@@ -20,6 +20,35 @@ pub fn play(p: &Painter, rect: Rect, color: Color32) {
     ));
 }
 
+/// The launch triangle, striped for a clip or scene with Follow Actions.
+pub fn play_striped(p: &Painter, rect: Rect, color: Color32, background: Color32) {
+    play(p, rect, color);
+    let c = rect.center();
+    let r = s(rect, 0.3);
+    let stroke = Stroke::new(1.0, background);
+    for dy in [-0.45, 0.0, 0.45] {
+        let y = c.y + dy * r;
+        p.line_segment([Pos2::new(c.x - r, y), Pos2::new(c.x + r, y)], stroke);
+    }
+}
+
+/// A microphone: a capsule on a stand.
+pub fn microphone(p: &Painter, rect: Rect, color: Color32) {
+    let c = rect.center();
+    let r = s(rect, 0.3);
+    let capsule = Rect::from_center_size(c + Vec2::new(0.0, -r * 0.3), Vec2::new(r * 0.9, r * 1.4));
+    p.rect_filled(capsule, r * 0.45, color);
+    let st = Stroke::new(1.2, color);
+    p.line_segment([Pos2::new(c.x, c.y + r * 0.5), Pos2::new(c.x, c.y + r)], st);
+    p.line_segment(
+        [
+            Pos2::new(c.x - r * 0.5, c.y + r),
+            Pos2::new(c.x + r * 0.5, c.y + r),
+        ],
+        st,
+    );
+}
+
 pub fn stop(p: &Painter, rect: Rect, color: Color32) {
     let r = s(rect, 0.24);
     p.rect_filled(
