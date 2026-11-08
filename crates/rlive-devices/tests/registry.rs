@@ -160,6 +160,9 @@ const EXISTING: &[(&str, &str)] = &[
     ("rlive.simpler", "Simpler"),
     ("rlive.drum_sampler", "Drum Sampler"),
     ("rlive.impulse", "Impulse"),
+    ("rlive.hybrid_reverb", "Hybrid Reverb"),
+    ("rlive.resonators", "Resonators"),
+    ("rlive.corpus", "Corpus"),
 ];
 
 #[test]
@@ -241,10 +244,11 @@ fn a_declared_layout_only_names_the_devices_own_parameters() {
 fn a_sample_slot_is_declared_only_where_samples_load() {
     for b in builtins() {
         let slots = (b.desc)().samples.len();
+        // Hybrid Reverb's slot is the User category's impulse response.
         let expected = match b.id {
             "rlive.sampler" => devices::b10::multi::MAX_LAYERS,
             "rlive.impulse" => 8,
-            "rlive.simpler" | "rlive.drum_sampler" => 1,
+            "rlive.simpler" | "rlive.drum_sampler" | "rlive.hybrid_reverb" => 1,
             _ => 0,
         };
         assert_eq!(slots, expected, "{}", b.id);

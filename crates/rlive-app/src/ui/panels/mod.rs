@@ -8,11 +8,14 @@ mod b1_leds;
 mod channel_eq_display;
 mod clip_led;
 mod compressor_display;
+mod corpus_display;
 mod echo_tunnel;
 mod eq_eight_display;
 mod eq_three_leds;
 mod gain_reduction;
 mod gate_display;
+mod hybrid_algo_view;
+mod hybrid_ir_view;
 mod looper_transport;
 mod midi_monitor;
 mod multiband_display;
@@ -154,6 +157,9 @@ pub const PANELS: &[PanelDef] = &[
     simpler_panels::IMPULSE,
     sampler_panels::TABS,
     sampler_panels::ZONES,
+    corpus_display::PANEL,
+    hybrid_ir_view::PANEL,
+    hybrid_algo_view::PANEL,
 ];
 
 /// What a panel takes up when the table has no entry for it.

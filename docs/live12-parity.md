@@ -877,7 +877,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 | Channel EQ (578-579) | HP 80 toggle | Low, Mid sweep, High | Adaptive shelf and peak, LP-combined high | S | `[~]` |
 | Chorus-Ensemble (580-583) | Chorus, Ensemble, Vibrato | Delay, taps, width, rate, feedback, warmth, HPF | Modulated delay lines, 3-phase | M | `[~]` |
 | Compressor (584-589) | Peak, RMS, Expand; Lin, Log; lookahead 0/1/10 ms | Threshold, ratio, knee, attack, release, sidechain, 3 views | Feed-forward dynamics, lookahead | M | `[~]` |
-| Corpus (589-595) | 7 resonators; Eco to High | Decay, material, tuning, LFO, filter, MIDI sidechain | Modal and waveguide physical models | XL [P] | `[ ]` |
+| Corpus (589-595) | 7 resonators; Eco to High | Decay, material, tuning, LFO, filter, MIDI sidechain | Modal and waveguide physical models | XL [P] | `[~]` |
 | Delay (595-598) | Sync, Time; Repitch, Fade, Jump; Ping Pong; Freeze | Times, offset, feedback, BP filter, LFO | Interpolated delay, crossfade, Hi-Quality tape smoothing | M | `[x]` |
 | Drum Buss (599-600) | Soft, Medium, Hard | Trim, comp, drive, crunch, damp, transients, boom | Fixed comp, waveshape, transient shaper, resonant LF with note snap | L [P] | `[~]` |
 | Dynamic Tube (601-602) | Tubes A, B, C; Hi-Quality | Drive, bias, envelope, tone | Asymmetric waveshaper, oversampling | M [P] | `[~]` |
@@ -890,7 +890,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 | Gate (613-615) | Flip; lookahead 0/1/10 ms | Threshold, return, attack, hold, release, floor, sidechain | Hysteresis gate, lookahead | S | `[~]` |
 | Glue Compressor (615-617) | Auto release; soft clip; oversampling | Threshold, ratio, attack, release, range, makeup, sidechain | VCA bus model, dual-time release | L [P] | `[~]` |
 | Grain Delay (618-619) | Sync; X-Y assign | Delay, spray, frequency, pitch, random, feedback | Granular delay | M | `[~]` |
-| Hybrid Reverb (619-625) | Serial, Parallel, Algorithm, Convolution; 5 algorithms; vintage presets | Input, IR browser, envelope, algo, 4-band EQ, output | Partitioned convolution, FDN, shimmer, velvet noise, degrader | XL [O] for IRs [P] | `[ ]` |
+| Hybrid Reverb (619-625) | Serial, Parallel, Algorithm, Convolution; 5 algorithms; vintage presets | Input, IR browser, envelope, algo, 4-band EQ, output | Partitioned convolution, FDN, shimmer, velvet noise, degrader | XL [O] for IRs [P] | `[~]` |
 | Limiter (626-627) | Standard, Soft Clip, True Peak; L/R, M/S; Maximize | Ceiling, link, release, lookahead 1.5/3/6 ms | Lookahead peak limiter, oversampled true peak | L | `[x]` |
 | Looper (628-631) | Tempo control 3; song control 3; monitor 4; multi-purpose button; ×2, ÷2 | Transport, speed, reverse, feedback | Sync buffer, tempo estimate, device-as-routing-target, import and export | L. Link touches [C] | `[~]` |
 | Multiband Dynamics (632-636) | RMS, Peak; soft knee | 3 bands, above and below thresholds, ratios, time, sidechain | Linkwitz-Riley split, up and down dynamics, custom block UI | L | `[~]` |
@@ -898,8 +898,8 @@ Overview chapter; only behaviours stated here or foundational are listed.
 | Pedal (638-640) | Overdrive, Distortion, Fuzz; Sub; Hi-Quality | Gain, adaptive 3-band, mid switch | Pedal models | M [P] | `[~]` |
 | Phaser-Flanger (641-644) | Phaser, Flanger, Doubler | Notches, center, spread, 2 LFOs, envelope, Safe Bass | Allpass cascade, modulated delay | M | `[~]` |
 | Redux (644-645) | Pre and Post filter; DC Shift | Rate, jitter, bits, shape | Sample-hold, bit reduction, companding curve | S | `[x]` |
-| Resonators (646-647) | Mode A, B; scale aware; tuning systems | Input filter, 5 notes, decay, color | Resonant comb bank | M | `[ ]` |
-| Reverb (647-651) | Smooth; Density; Freeze, Flat, Cut | Input filter, ER, diffusion, chorus, size, decay | Algorithmic FDN | L | `[ ]` |
+| Resonators (646-647) | Mode A, B; scale aware; tuning systems | Input filter, 5 notes, decay, color | Resonant comb bank | M | `[~]` |
+| Reverb (647-651) | Smooth; Density; Freeze, Flat, Cut | Input filter, ER, diffusion, chorus, size, decay | Algorithmic FDN | L | `[~]` |
 | Roar (651-660) | 7 routings; 12 shapers; 9 filters; 5 feedback modes | Input, stages, mod matrix (2 LFO, Env, Noise), feedback, comp, MIDI sidechain | Waveshapers, dispersion, feedback routing, matrix UI | XL [P] | `[~]` |
 | Saturator (660-663) | 8 curves; Post Clip; Hi-Quality; Pre-DC | Drive, color filters, waveshaper params | Waveshapers, mirrored EQ | M | `[~]` |
 | Shifter (663-668) | Pitch, Freq, Ring; Internal or MIDI | Tuning, delay, LFO, envelope, glide | Pitch shift window, Hilbert shift, ring mod | L | `[~]` |

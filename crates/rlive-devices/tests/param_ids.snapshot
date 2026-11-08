@@ -340,6 +340,35 @@ rlive.reverb	1	Damping
 rlive.reverb	2	Width
 rlive.reverb	3	Dry/Wet
 rlive.reverb	4	Pre-delay
+rlive.reverb	5	Engine
+rlive.reverb	6	Input Low Cut
+rlive.reverb	7	Input High Cut
+rlive.reverb	8	Input Filter Freq
+rlive.reverb	9	Input Filter Width
+rlive.reverb	10	Spin
+rlive.reverb	11	Spin Amount
+rlive.reverb	12	Spin Rate
+rlive.reverb	13	Shape
+rlive.reverb	14	High Shelf
+rlive.reverb	15	High Shelf Freq
+rlive.reverb	16	High Shelf Gain
+rlive.reverb	17	Low Shelf
+rlive.reverb	18	Low Shelf Freq
+rlive.reverb	19	Low Shelf Gain
+rlive.reverb	20	Diffusion
+rlive.reverb	21	Scale
+rlive.reverb	22	Chorus
+rlive.reverb	23	Chorus Amount
+rlive.reverb	24	Chorus Rate
+rlive.reverb	25	Smooth
+rlive.reverb	26	Decay
+rlive.reverb	27	Freeze
+rlive.reverb	28	Flat
+rlive.reverb	29	Cut
+rlive.reverb	30	Stereo
+rlive.reverb	31	Density
+rlive.reverb	32	Reflect
+rlive.reverb	33	Diffuse
 rlive.utility	0	Gain
 rlive.utility	1	Pan
 rlive.utility	2	Width
@@ -1406,6 +1435,131 @@ rlive.looper	16	x2
 rlive.looper	17	/2
 rlive.looper	18	Octave Up
 rlive.looper	19	Octave Down
+rlive.hybrid_reverb	0	Send
+rlive.hybrid_reverb	1	Predelay
+rlive.hybrid_reverb	2	Predelay Sync
+rlive.hybrid_reverb	3	Predelay Division
+rlive.hybrid_reverb	4	Feedback
+rlive.hybrid_reverb	5	Feedback Sync
+rlive.hybrid_reverb	6	Routing
+rlive.hybrid_reverb	7	Blend
+rlive.hybrid_reverb	8	IR Category
+rlive.hybrid_reverb	9	IR
+rlive.hybrid_reverb	10	IR Attack
+rlive.hybrid_reverb	11	IR Decay
+rlive.hybrid_reverb	12	IR Size
+rlive.hybrid_reverb	13	Algorithm
+rlive.hybrid_reverb	14	Decay
+rlive.hybrid_reverb	15	Size
+rlive.hybrid_reverb	16	Delay
+rlive.hybrid_reverb	17	Freeze
+rlive.hybrid_reverb	18	Freeze In
+rlive.hybrid_reverb	19	Damping
+rlive.hybrid_reverb	20	Mod
+rlive.hybrid_reverb	21	Shape
+rlive.hybrid_reverb	22	Bass X
+rlive.hybrid_reverb	23	Bass Mult
+rlive.hybrid_reverb	24	Lo Damp
+rlive.hybrid_reverb	25	Diffusion
+rlive.hybrid_reverb	26	Distance
+rlive.hybrid_reverb	27	Pitch
+rlive.hybrid_reverb	28	Shimmer
+rlive.hybrid_reverb	29	Wave
+rlive.hybrid_reverb	30	Tide
+rlive.hybrid_reverb	31	Phase
+rlive.hybrid_reverb	32	Rate
+rlive.hybrid_reverb	33	Low Mult
+rlive.hybrid_reverb	34	High Mult
+rlive.hybrid_reverb	35	X over
+rlive.hybrid_reverb	36	EQ
+rlive.hybrid_reverb	37	Pre Algo
+rlive.hybrid_reverb	38	EQ Low Mode
+rlive.hybrid_reverb	39	EQ Low Slope
+rlive.hybrid_reverb	40	EQ Low Freq
+rlive.hybrid_reverb	41	EQ Low Gain
+rlive.hybrid_reverb	42	EQ Mid 1 Freq
+rlive.hybrid_reverb	43	EQ Mid 1 Gain
+rlive.hybrid_reverb	44	EQ Mid 1 Q
+rlive.hybrid_reverb	45	EQ Mid 2 Freq
+rlive.hybrid_reverb	46	EQ Mid 2 Gain
+rlive.hybrid_reverb	47	EQ Mid 2 Q
+rlive.hybrid_reverb	48	EQ High Mode
+rlive.hybrid_reverb	49	EQ High Slope
+rlive.hybrid_reverb	50	EQ High Freq
+rlive.hybrid_reverb	51	EQ High Gain
+rlive.hybrid_reverb	52	Stereo
+rlive.hybrid_reverb	53	Vintage Preset
+rlive.hybrid_reverb	54	Vintage
+rlive.hybrid_reverb	55	Bass Mono
+rlive.hybrid_reverb	56	Dry/Wet
+rlive.resonators	0	Mode
+rlive.resonators	1	Filter Type
+rlive.resonators	2	Frequency
+rlive.resonators	3	Decay
+rlive.resonators	4	Const
+rlive.resonators	5	Color
+rlive.resonators	6	Note
+rlive.resonators	7	Fine
+rlive.resonators	8	Gain I
+rlive.resonators	9	On I
+rlive.resonators	10	On II
+rlive.resonators	11	Pitch II
+rlive.resonators	12	Fine II
+rlive.resonators	13	Gain II
+rlive.resonators	14	On III
+rlive.resonators	15	Pitch III
+rlive.resonators	16	Fine III
+rlive.resonators	17	Gain III
+rlive.resonators	18	On IV
+rlive.resonators	19	Pitch IV
+rlive.resonators	20	Fine IV
+rlive.resonators	21	Gain IV
+rlive.resonators	22	On V
+rlive.resonators	23	Pitch V
+rlive.resonators	24	Fine V
+rlive.resonators	25	Gain V
+rlive.resonators	26	Width
+rlive.resonators	27	Gain
+rlive.resonators	28	Dry/Wet
+rlive.resonators	29	Use Current Scale
+rlive.corpus	0	Resonance Type
+rlive.corpus	1	Quality
+rlive.corpus	2	Decay
+rlive.corpus	3	Material
+rlive.corpus	4	Radius
+rlive.corpus	5	Bright
+rlive.corpus	6	Inharm
+rlive.corpus	7	Opening
+rlive.corpus	8	Ratio
+rlive.corpus	9	Hit
+rlive.corpus	10	Width
+rlive.corpus	11	Pos. L
+rlive.corpus	12	Pos. R
+rlive.corpus	13	Tune
+rlive.corpus	14	Transpose
+rlive.corpus	15	Fine
+rlive.corpus	16	Spread
+rlive.corpus	17	LFO
+rlive.corpus	18	LFO Amount
+rlive.corpus	19	LFO Sync
+rlive.corpus	20	LFO Rate
+rlive.corpus	21	LFO Division
+rlive.corpus	22	LFO Wave
+rlive.corpus	23	LFO Stereo
+rlive.corpus	24	LFO Phase
+rlive.corpus	25	LFO Spin
+rlive.corpus	26	LFO Offset
+rlive.corpus	27	Filter
+rlive.corpus	28	Freq
+rlive.corpus	29	Bdwidth
+rlive.corpus	30	Bleed
+rlive.corpus	31	Gain
+rlive.corpus	32	Dry/Wet
+rlive.corpus	33	Frequency
+rlive.corpus	34	Last/Low
+rlive.corpus	35	PB Range
+rlive.corpus	36	Off Decay
+rlive.corpus	37	Off Decay Amount
 rlive.simpler	0	Mode
 rlive.simpler	1	Sample Start
 rlive.simpler	2	Sample End

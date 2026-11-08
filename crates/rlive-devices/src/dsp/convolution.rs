@@ -41,12 +41,54 @@ impl ConvolverIr {
         }
     }
 
+    /// A silent response with room for `partitions` partitions, to be filled in place with
+    /// [`write_partition`](Self::write_partition). Allocates; filling does not.
+    pub fn silent(partition: usize, partitions: usize) -> Self {
+        let partition = partition_size(partition);
+        let partitions = partitions.max(1);
+        Self {
+            partition,
+            spectra: vec![Complex32::new(0.0, 0.0); partitions * (partition + 1)],
+            partitions,
+        }
+    }
+
     pub fn partition(&self) -> usize {
         self.partition
     }
 
     pub fn partitions(&self) -> usize {
         self.partitions
+    }
+
+    /// How many partitions this response has room for.
+    pub fn capacity(&self) -> usize {
+        self.spectra.len() / (self.partition + 1)
+    }
+
+    /// Replaces partition `index` with `chunk`, at most one partition of samples, without
+    /// allocating, so a response can be rebuilt a little at a time on the audio thread. `fft` is
+    /// `Fft::new(partition * 2)` and `time` holds `partition * 2` samples.
+    pub fn write_partition(
+        &mut self,
+        index: usize,
+        chunk: &[f32],
+        fft: &mut Fft,
+        time: &mut [f32],
+    ) {
+        let bins = self.partition + 1;
+        let n = chunk.len().min(self.partition);
+        time[..n].copy_from_slice(&chunk[..n]);
+        time[n..].fill(0.0);
+        let start = index * bins;
+        if let Some(spectrum) = self.spectra.get_mut(start..start + bins) {
+            fft.forward(time, spectrum);
+        }
+    }
+
+    /// How many of its partitions the response plays, up to its capacity.
+    pub fn set_partitions(&mut self, partitions: usize) {
+        self.partitions = partitions.clamp(1, self.capacity());
     }
 }
 
@@ -135,6 +177,12 @@ impl Convolver {
         }
         self.reset();
         self.ir.replace(ir)
+    }
+
+    /// Hands the impulse response back, leaving the convolver silent, so its owner can rebuild
+    /// it. Does not allocate or free.
+    pub fn take_ir(&mut self) -> Option<Arc<ConvolverIr>> {
+        self.ir.take()
     }
 
     /// Writes one output sample per input sample.
