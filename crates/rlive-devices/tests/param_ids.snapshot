@@ -20,6 +20,43 @@ rlive.poly	18	F Release
 rlive.poly	19	Velocity
 rlive.poly	20	Glide
 rlive.poly	21	Volume
+rlive.juno106	0	LFO Rate
+rlive.juno106	1	LFO Delay
+rlive.juno106	2	Range
+rlive.juno106	3	DCO LFO
+rlive.juno106	4	PWM
+rlive.juno106	5	PWM Mode
+rlive.juno106	6	Pulse
+rlive.juno106	7	Saw
+rlive.juno106	8	Sub
+rlive.juno106	9	Noise
+rlive.juno106	10	HPF
+rlive.juno106	11	VCF Freq
+rlive.juno106	12	VCF Res
+rlive.juno106	13	VCF Pol
+rlive.juno106	14	VCF Env
+rlive.juno106	15	VCF LFO
+rlive.juno106	16	VCF Kybd
+rlive.juno106	17	VCA Mode
+rlive.juno106	18	VCA Level
+rlive.juno106	19	Attack
+rlive.juno106	20	Decay
+rlive.juno106	21	Sustain
+rlive.juno106	22	Release
+rlive.juno106	23	Chorus
+rlive.juno106	24	Bend DCO
+rlive.juno106	25	Bend VCF
+rlive.juno106	26	LFO Sens
+rlive.juno106	27	Porta
+rlive.juno106	28	Porta On
+rlive.juno106	29	Assign
+rlive.juno106	30	Tune
+rlive.juno106	31	Volume
+rlive.juno106	32	Instability
+rlive.juno106	33	Unit
+rlive.juno106	34	Cold Start
+rlive.juno106	35	Hiss/Hum
+rlive.juno106	36	Mains
 rlive.sampler	0	Root Key
 rlive.sampler	1	Transpose
 rlive.sampler	2	Volume

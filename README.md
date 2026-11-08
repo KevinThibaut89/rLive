@@ -16,7 +16,9 @@ builds and runs on Linux.
   "Duplicate Loop", live playhead, clickable keyboard for previewing, Cmd+wheel zoom.
 - **Mixer**: volume, pan, mute, solo, arm, stereo peak meters, master bus.
 - **Device chains** (Bitwig-style horizontal cards) on every track and the master:
-  - Built-in: **Poly Synth** (2 PolyBLEP oscillators, noise, ZDF filter with envelope, glide),
+  - Built-in: **Juno-106** (circuit-level emulation from the service notes, with per-unit analog
+    tolerances, drift and a simulated BBD chorus), **Poly Synth** (2 PolyBLEP oscillators, noise,
+    ZDF filter with envelope, glide),
     **Sampler**, **EQ Three**, **Compressor**, **Saturator**, **Delay** (tempo-synced, ping-pong),
     **Reverb**, **Utility**.
   - Third-party plugins: **CLAP**, **VST3** and **Audio Units** (macOS) with parameters,

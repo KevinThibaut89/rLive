@@ -122,6 +122,7 @@ const BATCHES: &[(&str, &[&str])] = &[
 
 const EXISTING: &[(&str, &str)] = &[
     ("rlive.poly", "Poly Synth"),
+    ("rlive.juno106", "Juno-106"),
     ("rlive.sampler", "Sampler"),
     ("rlive.eq3", "EQ Three"),
     ("rlive.compressor", "Compressor"),
@@ -147,8 +148,8 @@ fn the_registry_holds_the_81_manual_devices_and_the_poly_synth() {
         .flat_map(|(_, n)| n.iter().copied())
         .collect();
     assert_eq!(manual.len(), 81);
-    assert_eq!(builtins().len(), 82, "81 rows plus the extra");
-    for name in manual.iter().chain(&["Poly Synth"]) {
+    assert_eq!(builtins().len(), 83, "81 rows plus the two extras");
+    for name in manual.iter().chain(&["Poly Synth", "Juno-106"]) {
         let rows = builtins().iter().filter(|b| b.name == *name).count();
         assert_eq!(rows, 1, "{name}");
     }

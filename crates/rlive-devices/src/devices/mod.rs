@@ -66,6 +66,7 @@ pub mod extra;
 /// Every device, in the order the browser lists them.
 pub static ALL: &[&BuiltinInfo] = &[
     &extra::poly_synth::INFO,
+    &extra::juno106::INFO,
     &b10::sampler::INFO,
     &b4::eq_three::INFO,
     &b3::compressor::INFO,

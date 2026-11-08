@@ -3,6 +3,7 @@
 pub mod devices;
 pub mod dsp;
 pub mod effects;
+pub mod juno106;
 pub mod sampler;
 pub mod synth;
 
