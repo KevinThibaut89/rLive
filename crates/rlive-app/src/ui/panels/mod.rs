@@ -8,10 +8,12 @@ mod b1_leds;
 mod channel_eq_display;
 mod clip_led;
 mod compressor_display;
+mod echo_tunnel;
 mod eq_eight_display;
 mod eq_three_leds;
 mod gain_reduction;
 mod gate_display;
+mod looper_transport;
 mod midi_monitor;
 mod multiband_display;
 mod plot;
@@ -115,6 +117,8 @@ pub const PANELS: &[PanelDef] = &[
     channel_eq_display::PANEL,
     auto_filter_display::PANEL,
     roar_matrix::PANEL,
+    echo_tunnel::PANEL,
+    looper_transport::PANEL,
 ];
 
 /// What a panel takes up when the table has no entry for it.

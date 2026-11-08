@@ -148,6 +148,15 @@ const EXISTING: &[(&str, &str)] = &[
     ("rlive.redux", "Redux"),
     ("rlive.roar", "Roar"),
     ("rlive.vinyl_distortion", "Vinyl Distortion"),
+    ("rlive.echo", "Echo"),
+    ("rlive.filter_delay", "Filter Delay"),
+    ("rlive.align_delay", "Align Delay"),
+    ("rlive.chorus_ensemble", "Chorus-Ensemble"),
+    ("rlive.phaser_flanger", "Phaser-Flanger"),
+    ("rlive.beat_repeat", "Beat Repeat"),
+    ("rlive.grain_delay", "Grain Delay"),
+    ("rlive.shifter", "Shifter"),
+    ("rlive.looper", "Looper"),
 ];
 
 #[test]

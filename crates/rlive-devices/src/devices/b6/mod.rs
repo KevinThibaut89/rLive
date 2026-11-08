@@ -1,6 +1,7 @@
 pub mod align_delay;
 pub mod beat_repeat;
 pub mod chorus_ensemble;
+pub mod common;
 pub mod delay;
 pub mod echo;
 pub mod filter_delay;

@@ -872,37 +872,37 @@ Overview chapter; only behaviours stated here or foundational are listed.
 | Auto Filter (554-562) | 10 types; slopes 6-48 dB; circuits SVF, DFM, MS2, PRD | Filter, LFO, envelope, drive, soft clip, SC filter | ZDF filters, ladder and Sallen-Key models, vowel, resampling, comb | L [P] | `[~]` |
 | Auto Pan-Tremolo (562-566) | Panning, Tremolo; Harmonic (600 Hz split), Vintage | LFO, shape, attack, dynamic rate | LFO amplitude, crossover, transient detect | M | `[~]` |
 | Auto Shift (566-573) | Quantizer or MIDI; Mono or Poly to 8; Live Mode; pitch ranges | Input, correction, scale, MIDI mods, LFO, formant, vibrato | Mono pitch detection, formant-preserving shift, polyphonic voices | XL [P] | `[ ]` |
-| Beat Repeat (574-575) | Variation modes; Mix, Insert, Gate | Interval, Offset, Chance, Gate, Grid, Pitch decay, filter | Tempo-locked buffer, resampling | M | `[ ]` |
+| Beat Repeat (574-575) | Variation modes; Mix, Insert, Gate | Interval, Offset, Chance, Gate, Grid, Pitch decay, filter | Tempo-locked buffer, resampling | M | `[x]` |
 | Cabinet (576-578) | 5 speakers; 3 mic positions; dynamic or condenser; mono or Dual | Speaker, mic | IR or filter modelling; needs own measurements | L [P] | `[~]` |
 | Channel EQ (578-579) | HP 80 toggle | Low, Mid sweep, High | Adaptive shelf and peak, LP-combined high | S | `[~]` |
-| Chorus-Ensemble (580-583) | Chorus, Ensemble, Vibrato | Delay, taps, width, rate, feedback, warmth, HPF | Modulated delay lines, 3-phase | M | `[ ]` |
+| Chorus-Ensemble (580-583) | Chorus, Ensemble, Vibrato | Delay, taps, width, rate, feedback, warmth, HPF | Modulated delay lines, 3-phase | M | `[~]` |
 | Compressor (584-589) | Peak, RMS, Expand; Lin, Log; lookahead 0/1/10 ms | Threshold, ratio, knee, attack, release, sidechain, 3 views | Feed-forward dynamics, lookahead | M | `[~]` |
 | Corpus (589-595) | 7 resonators; Eco to High | Decay, material, tuning, LFO, filter, MIDI sidechain | Modal and waveguide physical models | XL [P] | `[ ]` |
-| Delay (595-598) | Sync, Time; Repitch, Fade, Jump; Ping Pong; Freeze | Times, offset, feedback, BP filter, LFO | Interpolated delay, crossfade, Hi-Quality tape smoothing | M | `[ ]` |
+| Delay (595-598) | Sync, Time; Repitch, Fade, Jump; Ping Pong; Freeze | Times, offset, feedback, BP filter, LFO | Interpolated delay, crossfade, Hi-Quality tape smoothing | M | `[x]` |
 | Drum Buss (599-600) | Soft, Medium, Hard | Trim, comp, drive, crunch, damp, transients, boom | Fixed comp, waveshape, transient shaper, resonant LF with note snap | L [P] | `[~]` |
 | Dynamic Tube (601-602) | Tubes A, B, C; Hi-Quality | Drive, bias, envelope, tone | Asymmetric waveshaper, oversampling | M [P] | `[~]` |
-| Echo (602-606) | Stereo, Ping Pong, Mid/Side; sync modes; reverb pre, post, feedback | Delay, filter, modulation, gate, duck, noise, wobble | Delay, LFO and envelope, tape artefacts, small reverb, tunnel UI | L | `[ ]` |
+| Echo (602-606) | Stereo, Ping Pong, Mid/Side; sync modes; reverb pre, post, feedback | Delay, filter, modulation, gate, duck, noise, wobble | Delay, LFO and envelope, tape artefacts, small reverb, tunnel UI | L | `[~]` |
 | EQ Eight (606-608) | Stereo, L/R, M/S; 8 responses; Adaptive Q; audition; oversampling; expanded view | 8 bands, scale, analyzer | Biquads, FFT analyzer | M | `[~]` |
 | EQ Three (608-609) | 24 or 48 dB | 3 gains to -inf, crossovers, LEDs | Analog-style crossover with deliberate colouring | S [P] | `[~]` |
 | Erosion (609-610) | Sine to noise blend; Legacy for pre-12.4 Sets | Freq, amount, width, stereo | Short delay modulated by sine and filtered noise | S | `[~]` |
 | External Audio Effect (610-611) | ms or samples latency | Out, In, gains, invert, dry/wet | Hardware insert, manual PDC | M [H] | `[ ]` |
-| Filter Delay (612) | 3 taps; sync | Filters X-Y, time, feedback, pan, dry | Delay plus filters in feedback | S | `[ ]` |
+| Filter Delay (612) | 3 taps; sync | Filters X-Y, time, feedback, pan, dry | Delay plus filters in feedback | S | `[x]` |
 | Gate (613-615) | Flip; lookahead 0/1/10 ms | Threshold, return, attack, hold, release, floor, sidechain | Hysteresis gate, lookahead | S | `[~]` |
 | Glue Compressor (615-617) | Auto release; soft clip; oversampling | Threshold, ratio, attack, release, range, makeup, sidechain | VCA bus model, dual-time release | L [P] | `[~]` |
-| Grain Delay (618-619) | Sync; X-Y assign | Delay, spray, frequency, pitch, random, feedback | Granular delay | M | `[ ]` |
+| Grain Delay (618-619) | Sync; X-Y assign | Delay, spray, frequency, pitch, random, feedback | Granular delay | M | `[~]` |
 | Hybrid Reverb (619-625) | Serial, Parallel, Algorithm, Convolution; 5 algorithms; vintage presets | Input, IR browser, envelope, algo, 4-band EQ, output | Partitioned convolution, FDN, shimmer, velvet noise, degrader | XL [O] for IRs [P] | `[ ]` |
 | Limiter (626-627) | Standard, Soft Clip, True Peak; L/R, M/S; Maximize | Ceiling, link, release, lookahead 1.5/3/6 ms | Lookahead peak limiter, oversampled true peak | L | `[x]` |
-| Looper (628-631) | Tempo control 3; song control 3; monitor 4; multi-purpose button; ×2, ÷2 | Transport, speed, reverse, feedback | Sync buffer, tempo estimate, device-as-routing-target, import and export | L. Link touches [C] | `[ ]` |
+| Looper (628-631) | Tempo control 3; song control 3; monitor 4; multi-purpose button; ×2, ÷2 | Transport, speed, reverse, feedback | Sync buffer, tempo estimate, device-as-routing-target, import and export | L. Link touches [C] | `[~]` |
 | Multiband Dynamics (632-636) | RMS, Peak; soft knee | 3 bands, above and below thresholds, ratios, time, sidechain | Linkwitz-Riley split, up and down dynamics, custom block UI | L | `[~]` |
 | Overdrive (637) | none | BP X-Y, drive, tone, dynamics | Pedal waveshaper | S [P] | `[~]` |
 | Pedal (638-640) | Overdrive, Distortion, Fuzz; Sub; Hi-Quality | Gain, adaptive 3-band, mid switch | Pedal models | M [P] | `[~]` |
-| Phaser-Flanger (641-644) | Phaser, Flanger, Doubler | Notches, center, spread, 2 LFOs, envelope, Safe Bass | Allpass cascade, modulated delay | M | `[ ]` |
+| Phaser-Flanger (641-644) | Phaser, Flanger, Doubler | Notches, center, spread, 2 LFOs, envelope, Safe Bass | Allpass cascade, modulated delay | M | `[~]` |
 | Redux (644-645) | Pre and Post filter; DC Shift | Rate, jitter, bits, shape | Sample-hold, bit reduction, companding curve | S | `[x]` |
 | Resonators (646-647) | Mode A, B; scale aware; tuning systems | Input filter, 5 notes, decay, color | Resonant comb bank | M | `[ ]` |
 | Reverb (647-651) | Smooth; Density; Freeze, Flat, Cut | Input filter, ER, diffusion, chorus, size, decay | Algorithmic FDN | L | `[ ]` |
 | Roar (651-660) | 7 routings; 12 shapers; 9 filters; 5 feedback modes | Input, stages, mod matrix (2 LFO, Env, Noise), feedback, comp, MIDI sidechain | Waveshapers, dispersion, feedback routing, matrix UI | XL [P] | `[~]` |
 | Saturator (660-663) | 8 curves; Post Clip; Hi-Quality; Pre-DC | Drive, color filters, waveshaper params | Waveshapers, mirrored EQ | M | `[~]` |
-| Shifter (663-668) | Pitch, Freq, Ring; Internal or MIDI | Tuning, delay, LFO, envelope, glide | Pitch shift window, Hilbert shift, ring mod | L | `[ ]` |
+| Shifter (663-668) | Pitch, Freq, Ring; Internal or MIDI | Tuning, delay, LFO, envelope, glide | Pitch shift window, Hilbert shift, ring mod | L | `[~]` |
 | Spectral Resonator (668-673) | Internal or MIDI; Mono or Poly to 16; 4 mod modes | Freq, stretch, shift, decay, damp, harmonics, unison | STFT partial resonance, spectrogram | XL | `[ ]` |
 | Spectral Time (673-676) | Manual, Retrigger (Onsets, Sync); Crossfade, Envelope; effect order | Freezer, spectral delay tilt, spray, mask, resolution; Zero Dry Signal Latency | STFT freeze, up to 8 stacked; onset detect; per-bin delay | XL | `[ ]` |
 | Spectrum (677-678) | Linear, log, semitone; Auto, Range; expanded | Block, channel, refresh, avg, max | FFT analysis (no audio change) | S | `[ ]` |
@@ -1109,7 +1109,7 @@ Listed as editable with Suite or Standard plus add-on; otherwise editions not st
 - `[ ]` DS Tom (838) [S]: impulse plus oscillators, band-pass resonances, pitch bend env
 
 **Audio effects (4):**
-- `[ ]` Align Delay (839) [S]: time, samples or distance with temperature; per-channel or linked
+- `[x]` Align Delay (839) [S]: time, samples or distance with temperature; per-channel or linked
 - `[ ]` Envelope Follower (840-842) [M]: gain, rise, fall, delay, sidechain with mix
 - `[ ]` LFO (843-845) [M]: 9 waves, shape, steps, jitter, smooth, depth, offset, phase, hold, retrigger
 - `[ ]` Shaper (846-848) [M]: breakpoint envelope, curves, grid, 6 presets, scope; Loop, 1-Shot, Manual

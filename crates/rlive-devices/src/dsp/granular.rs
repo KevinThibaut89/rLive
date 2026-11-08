@@ -117,6 +117,8 @@ pub struct GrainSettings {
     pub jitter: f32,
     /// Random stereo position, 0..1.
     pub pan_spread: f32,
+    /// Random detune of each grain, in semitones either way. Zero draws no randomness.
+    pub pitch_random: f32,
 }
 
 impl Default for GrainSettings {
@@ -129,6 +131,7 @@ impl Default for GrainSettings {
             spray: 0.0,
             jitter: 0.0,
             pan_spread: 0.0,
+            pitch_random: 0.0,
         }
     }
 }
@@ -214,7 +217,10 @@ impl GranularEngine {
         let s = &self.settings;
         let sr = self.sample_rate as f64;
         let frames = (s.size.max(0.001) as f64 * sr).max(4.0);
-        let speed = s.pitch as f64;
+        let mut speed = s.pitch as f64;
+        if s.pitch_random > 0.0 {
+            speed *= 2f64.powf((self.rng.bipolar() * s.pitch_random) as f64 / 12.0);
+        }
         let spray = self.rng.unipolar() as f64 * s.spray.max(0.0) as f64 * sr;
         let (oldest, newest) = source.range();
         let wanted = if source.motion() > 0.0 {

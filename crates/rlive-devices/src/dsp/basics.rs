@@ -1,6 +1,7 @@
 //! Small DSP building blocks shared by the built-in devices.
 #![allow(clippy::should_implement_trait)]
 
+use super::util::cubic;
 use std::f32::consts::{PI, TAU};
 
 /// One-pole parameter smoother.
@@ -424,6 +425,21 @@ impl DelayLine {
         let i0 = (self.pos + n - idx as usize) % n;
         let i1 = (i0 + n - 1) % n;
         self.buf[i0] * (1.0 - frac) + self.buf[i1] * frac
+    }
+
+    /// Read `delay` samples behind the last write with four-point interpolation, for the
+    /// delays that want less treble loss than [`read`](Self::read).
+    #[inline]
+    pub fn read_cubic(&self, delay: f32) -> f32 {
+        let n = self.buf.len();
+        if n < 4 {
+            return 0.0;
+        }
+        let d = delay.clamp(2.0, (n - 3) as f32);
+        let whole = d as usize;
+        let t = d - whole as f32;
+        let at = |back: usize| self.buf[(self.pos + n * 2 - back) % n];
+        cubic(at(whole - 1), at(whole), at(whole + 1), at(whole + 2), t)
     }
 
     pub fn clear(&mut self) {

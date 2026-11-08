@@ -459,6 +459,7 @@ fn absurd_settings_stay_finite() {
             spray: wild(),
             jitter: wild(),
             pan_spread: wild(),
+            pitch_random: wild(),
         });
         filter.set(&FilterSettings {
             circuit: Circuit::Prd,

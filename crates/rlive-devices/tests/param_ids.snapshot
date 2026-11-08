@@ -125,6 +125,28 @@ rlive.delay	3	Feedback
 rlive.delay	4	Dry/Wet
 rlive.delay	5	Ping Pong
 rlive.delay	6	Tone
+rlive.delay	7	Stereo Link
+rlive.delay	8	Sync R
+rlive.delay	9	Time R
+rlive.delay	10	Division R
+rlive.delay	11	Offset L
+rlive.delay	12	Offset R
+rlive.delay	13	Freeze
+rlive.delay	14	Filter
+rlive.delay	15	Freq
+rlive.delay	16	Width
+rlive.delay	17	LFO Wave
+rlive.delay	18	LFO Rate Mode
+rlive.delay	19	LFO Rate
+rlive.delay	20	LFO Time
+rlive.delay	21	LFO Synced
+rlive.delay	22	LFO Sixteenth
+rlive.delay	23	LFO Morph
+rlive.delay	24	LFO Delay
+rlive.delay	25	LFO Filter
+rlive.delay	26	Smoothing
+rlive.delay	27	Hi-Quality
+rlive.delay	28	Equal-Loudness
 rlive.reverb	0	Size
 rlive.reverb	1	Damping
 rlive.reverb	2	Width
@@ -966,3 +988,233 @@ rlive.roar	203	Noise > Stage 3 Level
 rlive.roar	204	Noise > Stage 3 Freq
 rlive.roar	205	Noise > Stage 3 Reso
 rlive.roar	206	Noise > Stage 3 Morph
+rlive.echo	0	Channel Mode
+rlive.echo	1	Stereo Link
+rlive.echo	2	L Sync
+rlive.echo	3	L Sync Mode
+rlive.echo	4	L Division
+rlive.echo	5	L 16th
+rlive.echo	6	L Time
+rlive.echo	7	L Offset
+rlive.echo	8	R Sync
+rlive.echo	9	R Sync Mode
+rlive.echo	10	R Division
+rlive.echo	11	R 16th
+rlive.echo	12	R Time
+rlive.echo	13	R Offset
+rlive.echo	14	Input
+rlive.echo	15	Input Distortion
+rlive.echo	16	Feedback
+rlive.echo	17	Feedback Invert
+rlive.echo	18	Filter
+rlive.echo	19	HP
+rlive.echo	20	HP Res
+rlive.echo	21	LP
+rlive.echo	22	LP Res
+rlive.echo	23	Waveform
+rlive.echo	24	Mod Sync
+rlive.echo	25	Mod Rate
+rlive.echo	26	Mod Freq
+rlive.echo	27	Phase
+rlive.echo	28	Mod Delay
+rlive.echo	29	Modulation x4
+rlive.echo	30	Mod Filter
+rlive.echo	31	Env Mix
+rlive.echo	32	Gate
+rlive.echo	33	Gate Threshold
+rlive.echo	34	Gate Release
+rlive.echo	35	Ducking
+rlive.echo	36	Duck Threshold
+rlive.echo	37	Duck Release
+rlive.echo	38	Noise
+rlive.echo	39	Noise Amount
+rlive.echo	40	Noise Morph
+rlive.echo	41	Wobble
+rlive.echo	42	Wobble Amount
+rlive.echo	43	Wobble Morph
+rlive.echo	44	Repitch
+rlive.echo	45	Reverb
+rlive.echo	46	Reverb Location
+rlive.echo	47	Decay
+rlive.echo	48	Stereo
+rlive.echo	49	Output
+rlive.echo	50	Dry/Wet
+rlive.echo	51	Equal-Loudness
+rlive.filter_delay	0	Dry
+rlive.filter_delay	1	1 L On
+rlive.filter_delay	2	1 L Filter On
+rlive.filter_delay	3	1 L Filter Freq
+rlive.filter_delay	4	1 L Filter Width
+rlive.filter_delay	5	1 L Sync
+rlive.filter_delay	6	1 L Time
+rlive.filter_delay	7	1 L Delay Time
+rlive.filter_delay	8	1 L Offset
+rlive.filter_delay	9	1 L Feedback
+rlive.filter_delay	10	1 L Pan
+rlive.filter_delay	11	1 L Volume
+rlive.filter_delay	12	2 L+R On
+rlive.filter_delay	13	2 L+R Filter On
+rlive.filter_delay	14	2 L+R Filter Freq
+rlive.filter_delay	15	2 L+R Filter Width
+rlive.filter_delay	16	2 L+R Sync
+rlive.filter_delay	17	2 L+R Time
+rlive.filter_delay	18	2 L+R Delay Time
+rlive.filter_delay	19	2 L+R Offset
+rlive.filter_delay	20	2 L+R Feedback
+rlive.filter_delay	21	2 L+R Pan
+rlive.filter_delay	22	2 L+R Volume
+rlive.filter_delay	23	3 R On
+rlive.filter_delay	24	3 R Filter On
+rlive.filter_delay	25	3 R Filter Freq
+rlive.filter_delay	26	3 R Filter Width
+rlive.filter_delay	27	3 R Sync
+rlive.filter_delay	28	3 R Time
+rlive.filter_delay	29	3 R Delay Time
+rlive.filter_delay	30	3 R Offset
+rlive.filter_delay	31	3 R Feedback
+rlive.filter_delay	32	3 R Pan
+rlive.filter_delay	33	3 R Volume
+rlive.align_delay	0	Delay Mode
+rlive.align_delay	1	Link L/R
+rlive.align_delay	2	Delay L
+rlive.align_delay	3	Delay R
+rlive.align_delay	4	Samples L
+rlive.align_delay	5	Samples R
+rlive.align_delay	6	Distance L
+rlive.align_delay	7	Distance R
+rlive.align_delay	8	Distance Unit
+rlive.align_delay	9	Temperature
+rlive.align_delay	10	Temperature Unit
+rlive.chorus_ensemble	0	Mode
+rlive.chorus_ensemble	1	High-Pass
+rlive.chorus_ensemble	2	High-Pass Frequency
+rlive.chorus_ensemble	3	Width
+rlive.chorus_ensemble	4	Delay Time
+rlive.chorus_ensemble	5	Two Taps
+rlive.chorus_ensemble	6	Offset
+rlive.chorus_ensemble	7	Shape
+rlive.chorus_ensemble	8	Rate
+rlive.chorus_ensemble	9	Amount
+rlive.chorus_ensemble	10	Feedback
+rlive.chorus_ensemble	11	Feedback Invert
+rlive.chorus_ensemble	12	Output
+rlive.chorus_ensemble	13	Warmth
+rlive.chorus_ensemble	14	Dry/Wet
+rlive.phaser_flanger	0	Mode
+rlive.phaser_flanger	1	Notches
+rlive.phaser_flanger	2	Center
+rlive.phaser_flanger	3	Spread
+rlive.phaser_flanger	4	Blend
+rlive.phaser_flanger	5	Flanger Time
+rlive.phaser_flanger	6	Doubler Time
+rlive.phaser_flanger	7	LFO Sync
+rlive.phaser_flanger	8	LFO Freq
+rlive.phaser_flanger	9	LFO Rate
+rlive.phaser_flanger	10	LFO Waveform
+rlive.phaser_flanger	11	LFO Stereo Mode
+rlive.phaser_flanger	12	LFO Phase
+rlive.phaser_flanger	13	LFO Spin
+rlive.phaser_flanger	14	Duty Cycle
+rlive.phaser_flanger	15	LFO2 Mix
+rlive.phaser_flanger	16	LFO2 Sync
+rlive.phaser_flanger	17	LFO2 Freq
+rlive.phaser_flanger	18	LFO2 Rate
+rlive.phaser_flanger	19	Amount
+rlive.phaser_flanger	20	Feedback
+rlive.phaser_flanger	21	Feedback Invert
+rlive.phaser_flanger	22	Env Fol
+rlive.phaser_flanger	23	Env Amount
+rlive.phaser_flanger	24	Attack
+rlive.phaser_flanger	25	Release
+rlive.phaser_flanger	26	Safe Bass
+rlive.phaser_flanger	27	Output
+rlive.phaser_flanger	28	Warmth
+rlive.phaser_flanger	29	Dry/Wet
+rlive.beat_repeat	0	Interval
+rlive.beat_repeat	1	Offset
+rlive.beat_repeat	2	Chance
+rlive.beat_repeat	3	Gate
+rlive.beat_repeat	4	Grid
+rlive.beat_repeat	5	No Triplets
+rlive.beat_repeat	6	Variation
+rlive.beat_repeat	7	Variation Mode
+rlive.beat_repeat	8	Repeat
+rlive.beat_repeat	9	Pitch
+rlive.beat_repeat	10	Pitch Decay
+rlive.beat_repeat	11	Filter
+rlive.beat_repeat	12	Filter Freq
+rlive.beat_repeat	13	Filter Width
+rlive.beat_repeat	14	Mix Mode
+rlive.beat_repeat	15	Volume
+rlive.beat_repeat	16	Decay
+rlive.grain_delay	0	Sync
+rlive.grain_delay	1	Delay Time
+rlive.grain_delay	2	Beat Delay
+rlive.grain_delay	3	Offset
+rlive.grain_delay	4	Spray
+rlive.grain_delay	5	Frequency
+rlive.grain_delay	6	Pitch
+rlive.grain_delay	7	Random Pitch
+rlive.grain_delay	8	Feedback
+rlive.grain_delay	9	Dry/Wet
+rlive.grain_delay	10	X-Y X Assign
+rlive.grain_delay	11	X-Y Y Assign
+rlive.grain_delay	12	X-Y X
+rlive.grain_delay	13	X-Y Y
+rlive.shifter	0	Mode
+rlive.shifter	1	Coarse
+rlive.shifter	2	Fine
+rlive.shifter	3	Coarse Hz
+rlive.shifter	4	Fine Hz
+rlive.shifter	5	Spread
+rlive.shifter	6	Wide
+rlive.shifter	7	Window
+rlive.shifter	8	Tone
+rlive.shifter	9	Delay
+rlive.shifter	10	Delay Sync
+rlive.shifter	11	Delay Time
+rlive.shifter	12	Delay Division
+rlive.shifter	13	Delay Feedback
+rlive.shifter	14	LFO Wave
+rlive.shifter	15	LFO Sync
+rlive.shifter	16	LFO Rate
+rlive.shifter	17	LFO Division
+rlive.shifter	18	Duty Cycle
+rlive.shifter	19	LFO Stereo
+rlive.shifter	20	LFO Phase
+rlive.shifter	21	LFO Spin
+rlive.shifter	22	LFO Width
+rlive.shifter	23	LFO Offset
+rlive.shifter	24	LFO Amount
+rlive.shifter	25	LFO Amount Hz
+rlive.shifter	26	Env Fol
+rlive.shifter	27	Env Attack
+rlive.shifter	28	Env Release
+rlive.shifter	29	Env Amount
+rlive.shifter	30	Env Amount Hz
+rlive.shifter	31	Drive
+rlive.shifter	32	Drive Level
+rlive.shifter	33	Dry/Wet
+rlive.shifter	34	Pitch Mode
+rlive.shifter	35	Glide
+rlive.shifter	36	PB
+rlive.looper	0	Tempo Control
+rlive.looper	1	Record Length
+rlive.looper	2	Then
+rlive.looper	3	Song Control
+rlive.looper	4	Quantization
+rlive.looper	5	Speed
+rlive.looper	6	Reverse
+rlive.looper	7	Feedback
+rlive.looper	8	Input -> Output
+rlive.looper	9	Record
+rlive.looper	10	Overdub
+rlive.looper	11	Play
+rlive.looper	12	Stop
+rlive.looper	13	Clear
+rlive.looper	14	Undo
+rlive.looper	15	Multi-Purpose
+rlive.looper	16	x2
+rlive.looper	17	/2
+rlive.looper	18	Octave Up
+rlive.looper	19	Octave Down

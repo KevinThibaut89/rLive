@@ -11,6 +11,7 @@ pub static INFO: BuiltinInfo = BuiltinInfo {
     status: Status::Beta,
     desc: || DeviceDesc {
         params: crate::effects::delay_params(),
+        layout: crate::effects::delay::delay_layout(),
         ..Default::default()
     },
     create: |_| Box::<crate::effects::Delay>::default(),
