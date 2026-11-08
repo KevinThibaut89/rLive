@@ -271,6 +271,15 @@ pub(crate) struct BlockCtx<'a> {
 }
 
 impl BlockCtx<'_> {
+    /// The timeline position `offset` frames into the block.
+    pub(crate) fn tick_at(&self, offset: usize) -> f64 {
+        if self.transport.playing {
+            self.time.tick_at(offset).max(0.0)
+        } else {
+            self.transport.tick
+        }
+    }
+
     /// The transport as it stands `offset` frames into the block.
     fn at(&self, offset: usize) -> TransportInfo {
         let mut t = *self.transport;
@@ -384,6 +393,35 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
     input
 }
 
+/// Everything that writes a bus at a control step, in resolve order.
+fn run_writers(
+    hooks: Option<&mut (dyn ControlHooks + 'static)>,
+    routes: Option<&TrackRoutes>,
+    bus: &mut ParamBus,
+    index: u32,
+    offset: usize,
+    ctx: &BlockCtx,
+) {
+    let tick = ctx.tick_at(offset);
+    let Some(hooks) = hooks else {
+        if let Some(routes) = routes {
+            routes.automate(tick, bus);
+        }
+        return;
+    };
+    let step = ControlStep {
+        index,
+        offset: offset as u32,
+        tick,
+    };
+    hooks.macros(step, bus);
+    if let Some(routes) = routes {
+        routes.automate(tick, bus);
+    }
+    hooks.automation(step, bus);
+    hooks.modulation(step, bus);
+}
+
 /// A track: clip slots → device chain → mixer.
 pub struct TrackNode {
     pub id: TrackId,
@@ -393,9 +431,9 @@ pub struct TrackNode {
     pub shared: Arc<TrackShared>,
     /// Every parameter of this track. Devices must be placed in the layout it was built from.
     pub bus: Box<ParamBus>,
-    /// Set by `ParamCmd::SetRoutes`; nothing reads it yet.
+    /// Automation lanes, set by `ParamCmd::SetRoutes`.
     pub routes: Arc<TrackRoutes>,
-    /// Writes the bus at each control step. Unused until automation and modulators exist.
+    /// Writes the bus at each control step, around automation. Unused until modulators exist.
     pub hooks: Option<Box<dyn ControlHooks>>,
 
     pub(crate) player: ClipPlayer,
@@ -574,16 +612,15 @@ impl TrackNode {
         ctx: &BlockCtx,
         on_param: &mut dyn FnMut(TrackId, DeviceId, u32, f64),
     ) {
-        if let Some(hooks) = self.hooks.as_deref_mut() {
-            let step = ControlStep {
-                index,
-                offset: offset as u32,
-                tick: ctx.at(offset).tick,
-            };
-            hooks.macros(step, &mut self.bus);
-            hooks.automation(step, &mut self.bus);
-            hooks.modulation(step, &mut self.bus);
-        }
+        run_writers(
+            self.hooks.as_deref_mut(),
+            // A launched Session clip punches a track's automation out until Back to Arrangement.
+            self.follow.then_some(&*self.routes),
+            &mut self.bus,
+            index,
+            offset,
+            ctx,
+        );
         let resolved = self.bus.resolve();
         if resolved.activators {
             self.render_to(offset, ctx, on_param);
@@ -667,9 +704,9 @@ pub struct MasterNode {
     pub volume_db: f32,
     /// Every parameter of the Master. Devices must be placed in the layout it was built from.
     pub bus: Box<ParamBus>,
-    /// Set by `ParamCmd::SetRoutes`; nothing reads it yet.
+    /// Automation lanes, set by `ParamCmd::SetRoutes`.
     pub routes: Arc<TrackRoutes>,
-    /// Writes the bus at each control step. Unused until automation and modulators exist.
+    /// Writes the bus at each control step, around automation. Unused until modulators exist.
     pub hooks: Option<Box<dyn ControlHooks>>,
     pub(crate) left: Vec<f32>,
     pub(crate) right: Vec<f32>,
@@ -735,16 +772,14 @@ impl MasterNode {
         ctx: &BlockCtx,
         on_param: &mut dyn FnMut(DeviceId, u32, f64),
     ) {
-        if let Some(hooks) = self.hooks.as_deref_mut() {
-            let step = ControlStep {
-                index,
-                offset: offset as u32,
-                tick: ctx.at(offset).tick,
-            };
-            hooks.macros(step, &mut self.bus);
-            hooks.automation(step, &mut self.bus);
-            hooks.modulation(step, &mut self.bus);
-        }
+        run_writers(
+            self.hooks.as_deref_mut(),
+            Some(&*self.routes),
+            &mut self.bus,
+            index,
+            offset,
+            ctx,
+        );
         let resolved = self.bus.resolve();
         if resolved.activators {
             self.render_to(offset, ctx, on_param);

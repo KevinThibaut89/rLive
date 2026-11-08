@@ -14,7 +14,7 @@ pub(crate) use queue::{Action, ActionQueue};
 use super::icons;
 use super::panels::{self, PanelCtx};
 use super::theme::{self, *};
-use super::widgets::{self, info, rgb, ControlState};
+use super::widgets::{self, info, rgb, ControlState, Led};
 use super::{BrowserItem, UiState};
 use crate::session::{ChainRef, DeviceRuntime, Session};
 use egui::{Align2, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, Vec2};
@@ -555,16 +555,22 @@ fn param_control(
     let owned = plan.macro_owned.contains(&ParamId(prm.id));
     let disabled = owned || prm.flags.contains(ParamFlags::READ_ONLY);
     let effective = cx.session.effective_norm(chain, dev.id, prm.id);
-    // A Macro moves the value, not the knob's own setting, so show what it's doing.
-    let shown = if owned {
+    let cell = cx.session.device_cell(chain, dev.id, prm.id);
+    let cell_state = cell.map_or(Default::default(), |c| cx.session.cell_state(chain, c));
+    let automated = cell_state.automated() && !cell_state.overridden();
+    // A Macro or automation moves the value, not the knob's own setting, so show what it's doing.
+    let shown = if owned || automated {
         effective.map_or(base, |e| prm.from_normalized(e as f64))
     } else {
         base
     };
     let text = rt.format_value(prm, shown);
+    let re_enable = std::cell::Cell::new(false);
     let state = ControlState {
-        effective: effective.filter(|_| !owned),
+        effective: effective.filter(|_| !owned && !automated),
         disabled,
+        led: Led::of(cell_state),
+        re_enable: cell_state.overridden().then_some(&re_enable),
     };
     let changed = match item {
         Item::Knob(_) => widgets::knob(ui, prm, shown, &text, state),
@@ -575,6 +581,9 @@ fn param_control(
     };
     if let Some(v) = changed {
         cx.queue.push(chain, Action::Param(dev.id, prm.id, v));
+    }
+    if re_enable.get() {
+        cx.queue.push(chain, Action::ReEnable(dev.id, prm.id));
     }
 }
 

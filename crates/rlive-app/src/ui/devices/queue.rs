@@ -15,6 +15,8 @@ pub(crate) enum Action {
     Bypass(DeviceId, bool),
     Fold(DeviceId, bool),
     Param(DeviceId, u32, f64),
+    /// Hand one overridden parameter back to its automation.
+    ReEnable(DeviceId, u32),
     OpenEditor(DeviceId),
     CloseEditor(DeviceId),
     LoadSample(DeviceId, usize),
@@ -59,6 +61,11 @@ fn apply(
         Action::Bypass(id, b) => session.set_bypass(chain, id, b),
         Action::Fold(id, expanded) => session.set_device_expanded(chain, id, expanded),
         Action::Param(id, p, v) => session.set_param(chain, id, p, v),
+        Action::ReEnable(id, p) => {
+            if let Some(cell) = session.device_cell(chain, id, p) {
+                session.re_enable_cell(chain, cell);
+            }
+        }
         Action::OpenEditor(id) => {
             if let Some(h) = session
                 .runtimes

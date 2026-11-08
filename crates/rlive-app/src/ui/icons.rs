@@ -153,3 +153,41 @@ pub fn keyboard(p: &Painter, rect: Rect, color: Color32) {
         }
     }
 }
+
+/// Automation Arm: a bent envelope line with a point on it.
+pub fn automation_arm(p: &Painter, r: Rect, c: Color32) {
+    let (x, y) = (r.center().x, r.center().y);
+    let stroke = Stroke::new(1.5, c);
+    p.line_segment(
+        [Pos2::new(x - 7.0, y + 5.0), Pos2::new(x - 1.0, y - 3.0)],
+        stroke,
+    );
+    p.line_segment(
+        [Pos2::new(x - 1.0, y - 3.0), Pos2::new(x + 7.0, y + 2.0)],
+        stroke,
+    );
+    p.circle_filled(Pos2::new(x - 1.0, y - 3.0), 2.5, c);
+}
+
+/// Re-Enable Automation: an arrow turning back on itself.
+pub fn re_enable(p: &Painter, r: Rect, c: Color32) {
+    let (x, y) = (r.center().x, r.center().y);
+    let stroke = Stroke::new(1.5, c);
+    p.line_segment(
+        [Pos2::new(x - 5.0, y - 3.0), Pos2::new(x + 6.0, y - 3.0)],
+        stroke,
+    );
+    p.line_segment(
+        [Pos2::new(x + 6.0, y - 3.0), Pos2::new(x + 6.0, y + 4.0)],
+        stroke,
+    );
+    p.line_segment(
+        [Pos2::new(x + 6.0, y + 4.0), Pos2::new(x - 2.0, y + 4.0)],
+        stroke,
+    );
+    p.line_segment(
+        [Pos2::new(x - 5.0, y - 3.0), Pos2::new(x - 2.0, y - 6.0)],
+        stroke,
+    );
+    p.line_segment([Pos2::new(x - 5.0, y - 3.0), Pos2::new(x - 2.0, y)], stroke);
+}

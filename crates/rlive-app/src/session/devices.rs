@@ -192,6 +192,7 @@ impl Session {
         self.park_device(device);
         let mut ids = Vec::new();
         device.for_each(&mut |d| ids.push(d.id));
+        self.forget_device_automation(chain, &ids);
         for id in ids {
             if let Some(mut rt) = self.runtimes.remove(&id) {
                 if let Some(h) = rt.plugin.as_mut() {
@@ -369,13 +370,7 @@ impl Session {
     /// The cell of a mixer control, in O(1). The Master has only volume.
     pub fn mixer_cell(&self, chain: ChainRef, control: ParamId) -> Option<CellIx> {
         self.layouts.get(&chain)?;
-        match (chain, control) {
-            (_, mixer::VOLUME) => Some(mix_cell::VOLUME),
-            (ChainRef::Track(_), mixer::PAN) => Some(mix_cell::PAN),
-            (ChainRef::Track(_), mixer::MUTE) => Some(mix_cell::MUTE),
-            (ChainRef::Track(_), mixer::SOLO) => Some(mix_cell::SOLO),
-            _ => None,
-        }
+        mixer_cell_of(chain, control)
     }
 
     /// The normalized value a parameter is sounding at, after automation and modulation.
@@ -570,6 +565,17 @@ impl Session {
                 .iter()
                 .find_map(|t| find_device(&t.devices, ChainRef::Track(t.id), id))
         })
+    }
+}
+
+/// The cell of a mixer control of a track or the Master. The Master has only volume.
+pub(super) fn mixer_cell_of(chain: ChainRef, control: ParamId) -> Option<CellIx> {
+    match (chain, control) {
+        (_, mixer::VOLUME) => Some(mix_cell::VOLUME),
+        (ChainRef::Track(_), mixer::PAN) => Some(mix_cell::PAN),
+        (ChainRef::Track(_), mixer::MUTE) => Some(mix_cell::MUTE),
+        (ChainRef::Track(_), mixer::SOLO) => Some(mix_cell::SOLO),
+        _ => None,
     }
 }
 

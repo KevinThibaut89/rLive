@@ -4,6 +4,7 @@
 //! so the types are small, `Copy` where possible and never allocate in the hot path.
 
 pub mod device;
+pub mod envelope;
 pub mod ids;
 pub mod midi;
 pub mod mpe;

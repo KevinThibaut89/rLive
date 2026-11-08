@@ -33,7 +33,9 @@ pub fn compile_plan(project: &Project) -> RenderPlan {
 impl Session {
     /// Apply edits to devices and chains, all at once. Only for edits within tracks: the list of
     /// tracks must not change, so the running plan still applies.
-    pub(super) fn send_edits(&mut self, ops: Vec<GraphOp>) {
+    pub(super) fn send_edits(&mut self, mut ops: Vec<GraphOp>) {
+        let routes = self.routes_for_bus_swaps(&ops);
+        ops.extend(routes);
         self.send(EngineCommand::Graph(GraphTxn::new(ops, None)));
     }
 

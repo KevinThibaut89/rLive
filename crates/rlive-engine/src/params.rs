@@ -5,7 +5,7 @@
 //! have changed (manual p. 537: automation is absolute, modulation only influences that value):
 //!
 //! 1. A Macro writes `auto` and owns the parameter ([`ControlHooks::macros`]).
-//! 2. Automation writes `auto` unless overridden ([`ControlHooks::automation`]).
+//! 2. Automation writes `auto` unless overridden ([`TrackRoutes`]).
 //! 3. Modulators and clip envelopes set `add` and `scale` ([`ControlHooks::modulation`]).
 //! 4. `effective = clamp(norm(auto or base) * scale + add)`, converted to plain units and
 //!    delivered if changed.
@@ -23,11 +23,14 @@
 
 use crate::shared::AtomicF32;
 use crate::track::MixSettings;
-use rlive_core::param::{mixer, ModMode, ParamId, ParamRange, ACTIVATOR};
+use rlive_core::param::{mixer, ModMode, ParamFlags, ParamId, ParamRange, ACTIVATOR};
 use rlive_core::{DeviceId, ParamEvent, ParamInfo};
 use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
+
+pub use crate::automation::TrackRoutes;
 
 /// Frames between parameter resolves.
 pub const CONTROL_STEP: usize = 32;
@@ -145,6 +148,59 @@ const MACRO: u8 = 1 << 1;
 const AUTOMATED: u8 = 1 << 2;
 /// The user took over from automation; `base` is the source until re-enabled.
 const OVERRIDDEN: u8 = 1 << 3;
+/// The user is moving the parameter while automation records; `base` is the source until the
+/// gesture ends. The envelope is being replaced, not overridden, so the UI shows nothing unusual.
+const TOUCHED: u8 = 1 << 4;
+/// Not the source of the value: automation has an opinion of it but isn't heard.
+const HOLDS_AUTOMATION: u8 = MACRO | OVERRIDDEN | TOUCHED;
+
+/// What the UI shows about a cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CellState(u8);
+
+impl CellState {
+    const AUTOMATED: u8 = 1;
+    const OVERRIDDEN: u8 = 1 << 1;
+    const MODULATED: u8 = 1 << 2;
+    const MACRO: u8 = 1 << 3;
+
+    fn of(cell: &ParamCell) -> Self {
+        let mut bits = 0;
+        if cell.flags & AUTOMATED != 0 {
+            bits |= Self::AUTOMATED;
+        }
+        if cell.flags & OVERRIDDEN != 0 {
+            bits |= Self::OVERRIDDEN;
+        }
+        if cell.flags & MACRO != 0 {
+            bits |= Self::MACRO;
+        }
+        if cell.add != 0.0 || cell.scale != 1.0 {
+            bits |= Self::MODULATED;
+        }
+        Self(bits)
+    }
+
+    /// An envelope drives this parameter, even if it is overridden right now.
+    pub fn automated(self) -> bool {
+        self.0 & Self::AUTOMATED != 0
+    }
+
+    /// The user took over from the envelope.
+    pub fn overridden(self) -> bool {
+        self.0 & Self::OVERRIDDEN != 0
+    }
+
+    /// A modulator or clip envelope is moving this parameter away from its value.
+    pub fn modulated(self) -> bool {
+        self.0 & Self::MODULATED != 0
+    }
+
+    /// A Macro owns this parameter.
+    pub fn macro_owned(self) -> bool {
+        self.0 & Self::MACRO != 0
+    }
+}
 
 /// One parameter's live state. `base` and `auto` are plain units; everything derived from them
 /// goes through normalized space.
@@ -182,6 +238,8 @@ pub struct CellSpec {
     pub range: ParamRange,
     pub mod_mode: ModMode,
     pub target: CellTarget,
+    /// Whether automation can record it.
+    pub automatable: bool,
 }
 
 impl CellSpec {
@@ -194,6 +252,7 @@ impl CellSpec {
         },
         mod_mode: ModMode::Additive,
         target: CellTarget::Free,
+        automatable: false,
     };
 
     fn of(info: &ParamInfo, target: CellTarget) -> Self {
@@ -201,6 +260,10 @@ impl CellSpec {
             range: info.range(),
             mod_mode: info.mod_mode,
             target,
+            // Solo isn't part of a mix that automation could write.
+            automatable: info.flags.contains(ParamFlags::AUTOMATABLE)
+                && !info.flags.contains(ParamFlags::READ_ONLY)
+                && target != CellTarget::Mixer(mixer::SOLO),
         }
     }
 }
@@ -220,6 +283,10 @@ pub struct ParamBus {
     specs: Box<[CellSpec]>,
     /// Normalized effective values, for the UI.
     effective: Arc<[AtomicF32]>,
+    /// What each cell is doing, for the UI.
+    states: Arc<[AtomicU8]>,
+    /// How many cells are overridden, for the Re-Enable Automation button.
+    overridden: Arc<AtomicU32>,
     /// Cells to resolve, then cells to deliver. Never outgrows `cells`: a cell queues once.
     queue: Box<[u32]>,
     queued: usize,
@@ -256,6 +323,34 @@ impl ParamBus {
         self.effective.get(cell.0 as usize).map(|v| v.load())
     }
 
+    /// The value a cell is sounding at, in plain units.
+    pub fn sounding(&self, cell: CellIx) -> Option<f64> {
+        self.cells.get(cell.0 as usize).map(|c| c.sent)
+    }
+
+    /// What the UI shows about a cell, as of the last resolve.
+    pub fn state(&self, cell: CellIx) -> CellState {
+        self.states
+            .get(cell.0 as usize)
+            .map_or(CellState::default(), |s| {
+                CellState(s.load(Ordering::Relaxed))
+            })
+    }
+
+    fn set_overridden(&mut self, ix: usize, overridden: bool) {
+        let c = &mut self.cells[ix];
+        let was = c.flags & OVERRIDDEN != 0;
+        if was == overridden {
+            return;
+        }
+        c.flags ^= OVERRIDDEN;
+        if overridden {
+            self.overridden.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.overridden.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
     #[inline]
     fn touch(&mut self, ix: usize) {
         let flags = &mut self.cells[ix].flags;
@@ -275,9 +370,42 @@ impl ParamBus {
         let c = &mut self.cells[ix];
         c.base = value;
         if gesture && c.flags & AUTOMATED != 0 {
-            c.flags |= OVERRIDDEN;
+            self.set_overridden(ix, true);
         }
         self.touch(ix);
+    }
+
+    /// The user moved a cell while automation records. The knob is heard until the gesture ends,
+    /// and the value it was sounding at before this comes back.
+    pub fn touch_cell(&mut self, cell: CellIx, value: f64) -> Option<f64> {
+        let ix = cell.0 as usize;
+        if ix >= self.cells.len() || !value.is_finite() {
+            return None;
+        }
+        let c = &mut self.cells[ix];
+        let before = c.sent;
+        c.base = value;
+        c.flags |= TOUCHED;
+        self.touch(ix);
+        Some(before)
+    }
+
+    /// The gesture on a cell ended, so automation has it again. If it was overridden when the
+    /// gesture started it no longer is, as what the gesture recorded has replaced that.
+    pub fn release_touch(&mut self, cell: CellIx) {
+        let ix = cell.0 as usize;
+        if ix < self.cells.len() && self.cells[ix].flags & TOUCHED != 0 {
+            self.cells[ix].flags &= !TOUCHED;
+            self.set_overridden(ix, false);
+            self.touch(ix);
+        }
+    }
+
+    /// Recording ended: every gesture is over.
+    pub fn release_all_touches(&mut self) {
+        for ix in 0..self.cells.len() {
+            self.release_touch(CellIx(ix as u32));
+        }
     }
 
     /// Step 1: a Macro drives this cell and owns it until [`release_macro`](Self::release_macro).
@@ -308,9 +436,14 @@ impl ParamBus {
             return;
         }
         let c = &mut self.cells[ix];
+        let newly = c.flags & AUTOMATED == 0;
         c.flags |= AUTOMATED;
-        if c.flags & (MACRO | OVERRIDDEN) == 0 {
+        let heard = c.flags & HOLDS_AUTOMATION == 0;
+        let moved = heard && c.auto != value;
+        if moved {
             c.auto = value;
+        }
+        if newly || moved {
             self.touch(ix);
         }
     }
@@ -319,7 +452,8 @@ impl ParamBus {
     pub fn clear_automation(&mut self, cell: CellIx) {
         let ix = cell.0 as usize;
         if ix < self.cells.len() && self.cells[ix].flags & (AUTOMATED | OVERRIDDEN) != 0 {
-            self.cells[ix].flags &= !(AUTOMATED | OVERRIDDEN);
+            self.set_overridden(ix, false);
+            self.cells[ix].flags &= !AUTOMATED;
             self.touch(ix);
         }
     }
@@ -346,7 +480,7 @@ impl ParamBus {
         };
         for ix in start..end {
             if self.cells[ix].flags & OVERRIDDEN != 0 {
-                self.cells[ix].flags &= !OVERRIDDEN;
+                self.set_overridden(ix, false);
                 self.touch(ix);
             }
         }
@@ -387,8 +521,9 @@ impl ParamBus {
             if spec.target == CellTarget::Free {
                 continue;
             }
-            let automated =
-                c.flags & MACRO != 0 || (c.flags & AUTOMATED != 0 && c.flags & OVERRIDDEN == 0);
+            self.states[ix].store(CellState::of(c).0, Ordering::Relaxed);
+            let automated = c.flags & MACRO != 0
+                || (c.flags & AUTOMATED != 0 && c.flags & (OVERRIDDEN | TOUCHED) == 0);
             let source = if automated { c.auto } else { c.base };
             let (norm, plain) = if c.add == 0.0 && c.scale == 1.0 {
                 // Without modulation, skip the trip through normalized space: delivered values
@@ -503,6 +638,11 @@ impl ParamBus {
             }
             self.cells[ix] = old.cells[ix];
             self.effective[ix].store(old.effective[ix].load());
+            let state = old.states[ix].load(Ordering::Relaxed);
+            self.states[ix].store(state, Ordering::Relaxed);
+            if self.cells[ix].flags & OVERRIDDEN != 0 {
+                self.overridden.fetch_add(1, Ordering::Relaxed);
+            }
             if self.cells[ix].flags & DIRTY != 0 {
                 self.queue[self.queued] = ix as u32;
                 self.queued += 1;
@@ -522,9 +662,9 @@ pub struct ControlStep {
     pub tick: f64,
 }
 
-/// What writes a bus during its control step, in resolve order. Macros, automation, modulators
-/// and clip envelopes implement these later; nothing does yet. Called on the audio thread,
-/// so no implementation may allocate, lock or free.
+/// What writes a bus during its control step, around the track's automation lanes, in resolve
+/// order. Macros, modulators and clip envelopes implement these later. Called on the audio
+/// thread, so no implementation may allocate, lock or free.
 pub trait ControlHooks: Send {
     /// Step 1 of the resolve order.
     fn macros(&mut self, _step: ControlStep, _bus: &mut ParamBus) {}
@@ -533,10 +673,6 @@ pub trait ControlHooks: Send {
     /// Step 3 of the resolve order.
     fn modulation(&mut self, _step: ControlStep, _bus: &mut ParamBus) {}
 }
-
-/// Which modulation and Macro sources feed a track's cells. Later milestones fill this in.
-#[derive(Debug, Default)]
-pub struct TrackRoutes {}
 
 struct DeviceCells {
     activator: CellIx,
@@ -553,6 +689,8 @@ pub struct BusLayout {
     free: Vec<(u32, u32)>,
     devices: HashMap<DeviceId, DeviceCells>,
     effective: Arc<[AtomicF32]>,
+    states: Arc<[AtomicU8]>,
+    overridden: Arc<AtomicU32>,
     /// Largest block the bus will run in, which sizes its parameter queues.
     max_block: usize,
 }
@@ -570,6 +708,8 @@ impl BusLayout {
             free: Vec::new(),
             devices: HashMap::new(),
             effective: Arc::from([]),
+            states: Arc::from([]),
+            overridden: Arc::new(AtomicU32::new(0)),
             max_block: 0,
         }
     }
@@ -713,6 +853,25 @@ impl BusLayout {
         self.effective.get(cell.0 as usize).map(|v| v.load())
     }
 
+    /// What the UI shows about a cell, as last resolved.
+    pub fn state(&self, cell: CellIx) -> CellState {
+        self.states
+            .get(cell.0 as usize)
+            .map_or(CellState::default(), |s| {
+                CellState(s.load(Ordering::Relaxed))
+            })
+    }
+
+    /// Whether any parameter of this track is overridden.
+    pub fn any_overridden(&self) -> bool {
+        self.overridden.load(Ordering::Relaxed) > 0
+    }
+
+    /// Who owns a cell and how it converts its value.
+    pub fn spec(&self, cell: CellIx) -> Option<CellSpec> {
+        self.specs.get(cell.0 as usize).copied()
+    }
+
     /// Build a bus of this layout, seeded with the current values. The engine keeps the live
     /// state of cells it already had. Call on the UI thread.
     pub fn build(&mut self) -> Box<ParamBus> {
@@ -723,6 +882,10 @@ impl BusLayout {
             .map(|(spec, value)| AtomicF32::new(spec.range.to_normalized(*value) as f32))
             .collect();
         self.effective = effective.clone();
+        let states: Arc<[AtomicU8]> = self.specs.iter().map(|_| AtomicU8::new(0)).collect();
+        self.states = states.clone();
+        let overridden = Arc::new(AtomicU32::new(0));
+        self.overridden = overridden.clone();
         let cells: Box<[ParamCell]> = self
             .specs
             .iter()
@@ -776,6 +939,8 @@ impl BusLayout {
             owner_of_cell,
             inboxes,
             effective,
+            states,
+            overridden,
             cells,
         })
     }
@@ -846,6 +1011,61 @@ mod tests {
         bus.re_enable(Some(cell));
         bus.write_automation(cell, 9.0);
         assert_eq!(resolve(&mut bus)[0].1, 9.0);
+    }
+
+    #[test]
+    fn a_flat_envelope_asks_for_nothing_after_its_first_write() {
+        let (mut l, _, cell) = layout();
+        let mut bus = l.build();
+        bus.write_automation(cell, 8.0);
+        assert_eq!(resolve(&mut bus)[0].1, 8.0);
+        bus.write_automation(cell, 8.0);
+        assert_eq!(bus.queued, 0, "same value, nothing to resolve");
+    }
+
+    #[test]
+    fn a_touched_cell_follows_the_knob_until_it_is_released() {
+        let (mut l, _, cell) = layout();
+        let mut bus = l.build();
+        bus.write_automation(cell, 8.0);
+        resolve(&mut bus);
+        assert_eq!(bus.touch_cell(cell, 2.0), Some(8.0), "what it was at");
+        assert_eq!(resolve(&mut bus)[0].1, 2.0);
+        bus.write_automation(cell, 9.0);
+        assert!(resolve(&mut bus).is_empty(), "automation waits");
+        assert!(!bus.state(cell).overridden());
+
+        bus.release_touch(cell);
+        bus.write_automation(cell, 9.0);
+        assert_eq!(resolve(&mut bus)[0].1, 9.0);
+    }
+
+    #[test]
+    fn releasing_a_touch_clears_an_override_recording_replaced() {
+        let (mut l, _, cell) = layout();
+        let mut bus = l.build();
+        bus.write_automation(cell, 8.0);
+        bus.set_base(cell, 3.0, true);
+        resolve(&mut bus);
+        assert!(l.any_overridden());
+        bus.touch_cell(cell, 2.0);
+        bus.release_touch(cell);
+        assert!(!l.any_overridden());
+    }
+
+    #[test]
+    fn overrides_are_counted_across_a_bus_swap() {
+        let (mut l, _, cell) = layout();
+        let mut bus = l.build();
+        bus.write_automation(cell, 8.0);
+        bus.set_base(cell, 3.0, true);
+        resolve(&mut bus);
+        let mut next = l.build();
+        next.adopt(&bus);
+        assert!(l.any_overridden(), "the layout now reads the new bus");
+        assert!(next.state(cell).overridden());
+        next.re_enable(None);
+        assert!(!l.any_overridden());
     }
 
     #[test]

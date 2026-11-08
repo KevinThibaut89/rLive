@@ -6,7 +6,7 @@
 
 use super::{ChainRef, Session};
 use rlive_core::{ChainId, DeviceId, TrackId};
-use rlive_engine::{mix_cell, EngineCommand, TransportCmd};
+use rlive_engine::{mix_cell, EngineCommand, TrackRef, TransportCmd};
 use rlive_project::history::{
     ChainSnap, DeviceSnap, ParkedDevice, ParkedTrack, Snapshot, TrackSnap,
 };
@@ -185,10 +185,14 @@ impl Session {
             t.arrangement = s.lane.iter().map(|c| (**c).clone()).collect();
         }
         adopt_track_shell(t, &s.shell);
+        let automation_changed = t.automation != *s.automation;
         t.automation = (*s.automation).clone();
         t.take_lanes = (*s.take_lanes).clone();
         self.push_mix(id, false);
         self.restore_chain(ChainRef::Track(id), &s.devices);
+        if automation_changed {
+            self.send_routes(TrackRef::Track(id));
+        }
         for slot in changed {
             self.sync_clip(id, slot);
         }
@@ -200,6 +204,7 @@ impl Session {
     fn restore_master(&mut self, s: &TrackSnap) {
         let master = &mut self.project.master;
         adopt_track_shell(master, &s.shell);
+        let automation_changed = master.automation != *s.automation;
         master.automation = (*s.automation).clone();
         master.take_lanes = (*s.take_lanes).clone();
         let db = self.project.master.volume_db as f64;
@@ -211,6 +216,9 @@ impl Session {
             self.set_cell(ChainRef::Master, mix_cell::VOLUME, db, false);
         }
         self.restore_chain(ChainRef::Master, &s.devices);
+        if automation_changed {
+            self.send_routes(TrackRef::Master);
+        }
     }
 
     /// Return tracks have no engine side yet, so this only has to get the project right.

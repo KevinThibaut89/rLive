@@ -188,11 +188,63 @@ pub fn mod_ring_span(base: f32, effective: f32) -> Option<(f32, f32)> {
 
 /// What a device control knows beyond its value.
 #[derive(Clone, Copy, Default)]
-pub struct ControlState {
+pub struct ControlState<'a> {
     /// The normalized value it is sounding at, which modulation can move off the control.
     pub effective: Option<f32>,
     /// A Macro owns the value, so the control is greyed out and can't be moved.
     pub disabled: bool,
+    /// What the LED beside the control shows.
+    pub led: Led,
+    /// Set when the user chooses Re-Enable Automation. Present only while the control is
+    /// overridden, which is the only time that makes sense.
+    pub re_enable: Option<&'a std::cell::Cell<bool>>,
+}
+
+/// The LED beside a control: red for automated, gray once the user overrides it, blue for
+/// modulated. Automation outranks modulation, which only moves what automation sets.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Led {
+    #[default]
+    Off,
+    Automated,
+    Overridden,
+    Modulated,
+}
+
+impl Led {
+    pub fn of(state: rlive_engine::CellState) -> Self {
+        if state.overridden() {
+            Self::Overridden
+        } else if state.automated() {
+            Self::Automated
+        } else if state.modulated() {
+            Self::Modulated
+        } else {
+            Self::Off
+        }
+    }
+
+    pub fn paint(self, p: &egui::Painter, at: Pos2) {
+        let color = match self {
+            Self::Off => return,
+            Self::Automated => ARM_RED,
+            Self::Overridden => hex(0x8a8a8a),
+            Self::Modulated => SOLO_BLUE,
+        };
+        p.circle_filled(at, 2.5, color);
+    }
+}
+
+/// Offers Re-Enable Automation on a control's context menu, while it applies.
+fn re_enable_menu(resp: &Response, state: ControlState) {
+    if let Some(flag) = state.re_enable {
+        resp.context_menu(|ui| {
+            if ui.button("Re-Enable Automation").clicked() {
+                flag.set(true);
+                ui.close();
+            }
+        });
+    }
 }
 
 /// Device parameter knob: name above, value below (Live style). The ring around the knob shows
@@ -312,6 +364,8 @@ pub fn knob(
     } else {
         "drag to change, Shift = fine, double-click resets"
     };
+    state.led.paint(&p, rect.left_top() + Vec2::new(4.0, 6.0));
+    re_enable_menu(&resp, state);
     info(resp, format!("{}: {display}  —  {hint}", param.name));
     changed
 }
@@ -401,6 +455,8 @@ pub fn slider(
     } else {
         "drag to change, Shift = fine, double-click resets"
     };
+    state.led.paint(p, rect.left_top() + Vec2::new(-5.0, 6.0));
+    re_enable_menu(&resp, state);
     info(resp, format!("{}: {display}  —  {hint}", param.name));
     changed
 }
@@ -437,6 +493,8 @@ pub fn toggle(ui: &mut Ui, param: &ParamInfo, value: f64, state: ControlState) -
         "click to switch"
     };
     let word = if on { "On" } else { "Off" };
+    state.led.paint(p, rect.left_top() + Vec2::new(4.0, 9.0));
+    re_enable_menu(&resp, state);
     let resp = info(resp, format!("{}: {word}  —  {hint}", param.name));
     (resp.clicked() && !state.disabled).then_some(if on { param.min } else { param.max })
 }
@@ -452,7 +510,7 @@ pub fn menu(ui: &mut Ui, param: &ParamInfo, value: f64, state: ControlState) -> 
     } else {
         hex(0xb8b8b8)
     };
-    ui.add_enabled_ui(!state.disabled, |ui| {
+    let outer = ui.add_enabled_ui(!state.disabled, |ui| {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 1.0;
             ui.label(
@@ -470,6 +528,11 @@ pub fn menu(ui: &mut Ui, param: &ParamInfo, value: f64, state: ControlState) -> 
                 });
         });
     });
+    let rect = outer.response.rect;
+    state
+        .led
+        .paint(ui.painter(), rect.left_top() + Vec2::new(-5.0, 6.0));
+    re_enable_menu(&outer.response, state);
     (chosen != selected && !state.disabled).then_some(chosen as f64 + offset)
 }
 

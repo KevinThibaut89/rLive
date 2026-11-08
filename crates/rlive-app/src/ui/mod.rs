@@ -316,7 +316,7 @@ impl RliveApp {
         } else if self.session.start_recording() {
             self.ui.main_view = MainView::Arrangement;
         } else {
-            self.ui.status = "Arm a MIDI track to record".into();
+            self.ui.status = "Arm a MIDI track, or Automation Arm, to record".into();
         }
     }
 
@@ -592,7 +592,7 @@ impl RliveApp {
 
         // ---- centre: transport + position
         let playing = self.session.is_playing();
-        let centre = Rect::from_center_size(Pos2::new(rect.center().x, cy), Vec2::new(330.0, h));
+        let centre = Rect::from_center_size(Pos2::new(rect.center().x, cy), Vec2::new(390.0, h));
         let mut cu = ui.new_child(
             UiBuilder::new()
                 .max_rect(centre)
@@ -625,6 +625,39 @@ impl RliveApp {
         );
         if info(r, "Record MIDI onto armed tracks in the Arrangement (F9)").clicked() {
             self.toggle_recording();
+        }
+        let armed = self.session.automation_arm();
+        let r = widgets::icon_button(
+            &mut cu,
+            Vec2::new(26.0, h),
+            armed,
+            ARM_RED,
+            icons::automation_arm,
+        );
+        if info(
+            r,
+            "Automation Arm — while recording, moving a control records it as automation",
+        )
+        .clicked()
+        {
+            self.session.set_automation_arm(!armed);
+        }
+        let overridden = self.session.any_overridden();
+        let r = widgets::icon_button(
+            &mut cu,
+            Vec2::new(26.0, h),
+            overridden,
+            ACCENT,
+            icons::re_enable,
+        );
+        if info(
+            r,
+            "Re-Enable Automation — hand every overridden control back to its envelope",
+        )
+        .clicked()
+            && overridden
+        {
+            self.session.re_enable_all();
         }
         cu.add_space(6.0);
         let tick = self.session.engine.shared.tick.load();
@@ -664,7 +697,7 @@ impl RliveApp {
 
         // ---- right: quantize, MIDI LED, keys, CPU
         let right = Rect::from_min_max(
-            Pos2::new(rect.center().x + 170.0, cy - h / 2.0),
+            Pos2::new(rect.center().x + 200.0, cy - h / 2.0),
             Pos2::new(rect.right() - 8.0, cy + h / 2.0),
         );
         let mut ru = ui.new_child(
@@ -1201,9 +1234,9 @@ impl eframe::App for RliveApp {
                 MainView::Arrangement => arrangement::show(ui, &mut self.session, &mut self.ui),
             });
         self.track_edit_focus(&ctx, detail_rect);
-        let busy = ctx.input(|i| i.pointer.any_down())
-            || ctx.text_edit_focused()
-            || self.session.is_recording();
+        let pointer_down = ctx.input(|i| i.pointer.any_down());
+        self.session.pointer_frame(pointer_down);
+        let busy = pointer_down || ctx.text_edit_focused() || self.session.is_recording();
         self.session.commit_edits(busy);
         self.ui.devices.end_frame();
         #[cfg(target_os = "macos")]

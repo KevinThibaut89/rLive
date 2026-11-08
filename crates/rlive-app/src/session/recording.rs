@@ -12,15 +12,15 @@ impl Session {
         self.recording.is_some()
     }
 
-    /// Starts recording MIDI onto armed tracks, starting the transport if needed.
-    /// Returns false if no MIDI track is armed.
+    /// Starts recording MIDI onto armed tracks and, with Automation Arm on, automation on every
+    /// track, starting the transport if needed. Returns false if that leaves nothing to record.
     pub fn start_recording(&mut self) -> bool {
         let armed = self
             .project
             .tracks
             .iter()
             .any(|t| t.arm && t.kind == TrackKind::Midi);
-        if !armed {
+        if !armed && !self.automation_arm() {
             return false;
         }
         let at = if self.is_playing() {

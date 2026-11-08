@@ -1,7 +1,9 @@
 //! Builds engine nodes from project data.
 
+use super::automation::routes_for;
 use super::ChainRef;
 use crate::peaks::Peaks;
+use rlive_core::envelope::segment_value;
 use rlive_core::time::{BarMap, TempoMap, TempoPoint, TimeMaps};
 use rlive_core::warp::{self, WarpMap};
 use rlive_core::{DeviceId, ParamInfo, Ports, Processor, Section, ViewChannel};
@@ -15,8 +17,8 @@ use rlive_engine::{
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
 use rlive_project::{
-    ArrangementClip, Chain, Clip, ClipContent, Device, DeviceKind, Project, RackKind, Track, Warp,
-    WarpMode as ProjectWarpMode,
+    ArrangementClip, Breakpoint, Chain, Clip, ClipContent, Device, DeviceKind, Project, RackKind,
+    Track, Warp, WarpMode as ProjectWarpMode,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -51,6 +53,9 @@ impl DeviceRuntime {
     }
 }
 
+/// How many linear ramps a curved segment of the tempo envelope is drawn with.
+const CURVED_TEMPO_STEPS: usize = 32;
+
 /// The song's tempo and meter for the engine.
 pub fn time_maps(project: &Project) -> TimeMaps {
     let tempo = &project.arrangement.tempo.points;
@@ -58,8 +63,7 @@ pub fn time_maps(project: &Project) -> TimeMaps {
         tempo: if tempo.is_empty() {
             TempoMap::constant(project.tempo)
         } else {
-            // The curve of a segment is ignored for now: the envelope's shape belongs to A2.
-            TempoMap::new(tempo.iter().map(|p| TempoPoint::new(p.time, p.value)))
+            TempoMap::new(tempo_points(tempo))
         },
         bars: BarMap::new(
             project.time_signature,
@@ -70,6 +74,23 @@ pub fn time_maps(project: &Project) -> TimeMaps {
                 .map(|m| (m.tick, m.signature)),
         ),
     }
+}
+
+/// A tempo map only ramps linearly, so a curved segment becomes a run of short ones.
+fn tempo_points(points: &[Breakpoint]) -> Vec<TempoPoint> {
+    let mut out = Vec::with_capacity(points.len());
+    for (i, p) in points.iter().enumerate() {
+        out.push(TempoPoint::new(p.time, p.value));
+        let Some(next) = points.get(i + 1).filter(|_| p.curve != 0.0) else {
+            continue;
+        };
+        for step in 1..CURVED_TEMPO_STEPS {
+            let x = step as f64 / CURVED_TEMPO_STEPS as f64;
+            let bpm = segment_value(p.value, next.value, x, p.curve);
+            out.push(TempoPoint::new(p.time + (next.time - p.time) * x, bpm));
+        }
+    }
+    out
 }
 
 fn warp_map(warp: &Warp, sample_rate: f64) -> Option<WarpMap> {
@@ -448,6 +469,7 @@ impl Builder<'_> {
             place_device_tree(&mut layout, d, runtimes);
         }
         node.bus = layout.build();
+        node.routes = routes_for(&track.automation, ChainRef::Track(track.id), &layout);
         layouts.insert(ChainRef::Track(track.id), layout);
         for (i, c) in track.clips.iter().enumerate() {
             if let Some(c) = c {
@@ -478,6 +500,7 @@ impl Builder<'_> {
             place_device_tree(&mut layout, d, runtimes);
         }
         node.bus = layout.build();
+        node.routes = routes_for(&project.master.automation, ChainRef::Master, &layout);
         layouts.insert(ChainRef::Master, layout);
         Box::new(node)
     }
@@ -571,7 +594,7 @@ mod tests {
     use super::*;
     use rlive_core::warp::{BeatsLoop, BeatsPreserve, WarpMode as CoreWarpMode};
     use rlive_core::{TimeSignature, PPQ};
-    use rlive_project::{Breakpoint, SignatureMarker, WarpMarker as ProjectMarker, WarpParams};
+    use rlive_project::{SignatureMarker, WarpMarker as ProjectMarker, WarpParams};
     use std::path::Path;
 
     fn sig(numerator: u8, denominator: u8) -> TimeSignature {
@@ -612,6 +635,18 @@ mod tests {
         assert_eq!(maps.tempo.bpm_at(1920.0), 60.0);
         assert_eq!(maps.bars.bar_at(2.0 * 3840.0).index, 2);
         assert_eq!(maps.bars.signature_at(2.0 * 3840.0), sig(3, 4));
+    }
+
+    #[test]
+    fn a_curved_tempo_segment_follows_the_shared_curve() {
+        let mut p = Project::empty();
+        let mut start = Breakpoint::new(0.0, 100.0);
+        start.curve = 1.0;
+        p.arrangement.tempo.points = vec![start, Breakpoint::new(1920.0, 200.0)];
+        let maps = time_maps(&p);
+        let want = segment_value(100.0, 200.0, 0.5, 1.0);
+        assert!((maps.tempo.bpm_at(960.0) - want).abs() < 0.5);
+        assert_eq!(maps.tempo.bpm_at(1920.0), 200.0);
     }
 
     #[test]

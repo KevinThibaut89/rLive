@@ -10,6 +10,7 @@
 
 #![allow(clippy::vec_box)] // nodes are boxed so the audio thread only moves pointers
 
+pub mod automation;
 pub mod clip;
 mod commands;
 pub mod graph;
@@ -19,6 +20,7 @@ pub mod rack;
 pub mod shared;
 pub mod track;
 
+pub use automation::AutomationLane;
 use clip::BlockTime;
 pub use clip::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
 pub use commands::{ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, RecordCmd, TransportCmd};
@@ -28,8 +30,8 @@ pub use graph::{
 };
 pub use lane::{ArrangementLane, LaneClip};
 pub use params::{
-    mix_cell, BusLayout, CellIx, CellSpec, CellTarget, ControlHooks, ControlStep, ParamBus,
-    TrackRoutes, CONTROL_STEP,
+    mix_cell, BusLayout, CellIx, CellSpec, CellState, CellTarget, ControlHooks, ControlStep,
+    ParamBus, TrackRoutes, CONTROL_STEP,
 };
 pub use rack::{ChainNode, RackKind, RackNode, Zones, MAX_CHAINS};
 use rlive_core::{
@@ -115,6 +117,20 @@ pub enum EngineEvent {
     Jumped { from: f64, to: f64 },
     /// Recording ended with the playhead at `tick`. Follows every note it recorded.
     RecordingStopped { tick: f64 },
+    /// The user moved a parameter while automation records. `before` is what it was sounding at.
+    AutomationMoved {
+        target: TrackRef,
+        cell: CellIx,
+        value: f64,
+        before: f64,
+        tick: f64,
+    },
+    /// The user let go of a parameter whose automation is being recorded.
+    AutomationReleased {
+        target: TrackRef,
+        cell: CellIx,
+        tick: f64,
+    },
 }
 
 /// UI-side handle to a running engine.
@@ -262,6 +278,10 @@ pub struct Engine {
     /// since only the former wraps.
     reached_loop_end: bool,
     recording: bool,
+    /// Parameter gestures are recorded as automation while recording.
+    automation_arm: bool,
+    /// Where on the timeline commands being handled now take effect.
+    command_tick: f64,
     /// Backdated recorded notes never land before this tick.
     record_floor: f64,
     metronome: Metronome,
@@ -306,6 +326,8 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         loop_range: None,
         reached_loop_end: false,
         recording: false,
+        automation_arm: false,
+        command_tick: 0.0,
         record_floor: 0.0,
         metronome: Metronome {
             enabled: false,
@@ -479,6 +501,7 @@ impl Engine {
     }
 
     fn drain_input(&mut self) {
+        self.command_tick = self.tick;
         // MIDI first: a note played just before a stop or seek belongs before it.
         while let Ok((track, message, at)) = self.midi.pop() {
             self.play_midi(track, message, at);
@@ -709,6 +732,7 @@ impl Engine {
         let mut offset = 0;
         while offset < ctx.frames {
             if take_commands && offset > 0 {
+                self.command_tick = ctx.tick_at(offset);
                 self.drain_param_commands();
             }
             let events = &mut self.events;

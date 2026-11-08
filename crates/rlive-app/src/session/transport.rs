@@ -51,6 +51,7 @@ impl Session {
     }
 
     pub fn launch_clip(&mut self, track: TrackId, slot: usize) {
+        self.re_enable_clip_automation(track, slot);
         self.send(EngineCommand::Launch(LaunchCmd::LaunchClip { track, slot }));
     }
 
@@ -59,6 +60,10 @@ impl Session {
     }
 
     pub fn launch_scene(&mut self, scene: usize) {
+        let tracks: Vec<TrackId> = self.project.tracks.iter().map(|t| t.id).collect();
+        for track in tracks {
+            self.re_enable_clip_automation(track, scene);
+        }
         self.send(EngineCommand::Launch(LaunchCmd::LaunchScene(scene)));
     }
 

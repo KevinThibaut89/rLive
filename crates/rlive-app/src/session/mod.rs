@@ -4,6 +4,7 @@
 //! you hear) never drift apart.
 
 mod arrangement;
+mod automation;
 mod build;
 mod clips;
 mod devices;
@@ -14,6 +15,8 @@ mod tracks;
 mod transport;
 mod undo;
 
+#[cfg(test)]
+mod automation_tests;
 #[cfg(test)]
 mod golden;
 #[cfg(test)]
@@ -56,6 +59,7 @@ pub struct Session {
     pub dirty: bool,
     pub history: History,
     recording: Option<Recording>,
+    automation: automation::AutomationRecorder,
 }
 
 impl Session {
@@ -75,6 +79,7 @@ impl Session {
             dirty: false,
             history,
             recording: None,
+            automation: automation::AutomationRecorder::default(),
         };
         s.rebuild();
         s
@@ -84,6 +89,9 @@ impl Session {
     pub(super) fn set_cell(&mut self, chain: ChainRef, cell: CellIx, value: f64, gesture: bool) {
         if let Some(l) = self.layouts.get_mut(&chain.owner()) {
             l.note_value(cell, value);
+        }
+        if gesture {
+            self.note_gesture(chain, cell);
         }
         self.send(EngineCommand::Param(ParamCmd::Set {
             track: chain.into(),
@@ -123,6 +131,7 @@ impl Session {
     /// Re-create every engine object from the project (load, new, sample-rate change).
     pub fn rebuild(&mut self) {
         self.recording = None;
+        self.automation.abandon();
         self.capture_plugin_states();
         self.runtimes.clear();
         self.project.normalize();
@@ -155,6 +164,7 @@ impl Session {
         for c in cmds {
             self.send(c);
         }
+        self.send_automation_arm();
         self.sync_loop();
         self.update_midi_targets();
     }
@@ -265,6 +275,7 @@ impl Session {
                         r.jumped(from, to);
                     }
                     self.flush_recording();
+                    self.automation_jumped(from, to);
                 }
                 EngineEvent::RecordingStopped { tick } => {
                     if let Some(r) = self.recording.as_mut() {
@@ -272,6 +283,17 @@ impl Session {
                     }
                     self.flush_recording();
                     self.recording = None;
+                    self.finish_automation_pass(tick);
+                }
+                EngineEvent::AutomationMoved {
+                    target,
+                    cell,
+                    value,
+                    before,
+                    tick,
+                } => self.automation_moved(target, cell, value, before, tick),
+                EngineEvent::AutomationReleased { target, cell, tick } => {
+                    self.automation_released(target, cell, tick)
                 }
             }
         }

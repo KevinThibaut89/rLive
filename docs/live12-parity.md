@@ -789,19 +789,19 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** A2, C3
 
-- `[ ]` Breakpoint envelopes on nearly all mixer and device controls including tempo; LED states (automated, modulated, overridden). L
-- `[ ]` Automation Arm. S
+- `[~]` Breakpoint envelopes on nearly all mixer and device controls including tempo; LED states (automated, modulated, overridden). L
+- `[~]` Automation Arm. S
 - `[ ]` Session clip automation recording, armed tracks or All Tracks setting. L
 - `[ ]` Session-to-Arrangement capture becomes track automation; copying clips transfers automation. L
-- `[ ]` Arrangement automation records on all tracks. M
-- `[ ]` Overwrite: mouse is touch; hardware is latch; first pass in a clip always latch. M
-- `[ ]` Override by manual change; Re-Enable global button and per parameter; relaunching clip restores. M
+- `[x]` Arrangement automation records on all tracks. M
+- `[~]` Overwrite: mouse is touch; hardware is latch; first pass in a clip always latch. M
+- `[~]` Override by manual change; Re-Enable global button and per parameter; relaunching clip restores. M
 - `[ ]` Clip Envelope Editor with Automation toggle and Device/Control choosers; Show Adjusted Only merges choosers. M
 - `[ ]` Automation Mode (A), main lane, Add Lane; hide additional lanes; duplicates limited to two; Add Lane for Each Automated Envelope; remove with modifiers; arrow navigation. L
 - `[ ]` Show Automation and Show in New Lane from parameter context menu. S
 - `[ ]` Dashed line for unautomated control; clicking a control shows its envelope. S
 - `[ ]` Breakpoint creation: click line, double-click off-line, Add Value, snap bypass. M
-- `[ ]` Stepped envelopes for discrete parameters. S
+- `[x]` Stepped envelopes for discrete parameters. S
 - `[ ]` Draw Mode (B, momentary hold), grid-width steps; Snap to Grid off for smooth. M
 - `[ ]` Shapes: sine, triangle, saw, inverse saw, square; ramps relative to neighbours; ADSR; only square for discrete. M
 - `[ ]` Edit breakpoints and segments, selections, fine drag, axis constrain, drag-through overwrite only on drop. L

@@ -4,11 +4,12 @@
 //! never see a track without its plan, or a device without its parameter cells.
 
 use crate::graph::{ChainAddr, RenderPlan, TrackRef, MAX_RACK_DEPTH};
-use crate::params::ParamBus;
+use crate::params::{ParamBus, TrackRoutes};
 use crate::rack::ChainNode;
 use crate::track::bind_chain;
 use crate::{retire, DeviceSlot, Engine, Garbage, MasterNode, TrackNode};
 use rlive_core::{ChainId, DeviceId, Resource, TrackId};
+use std::sync::Arc;
 
 pub enum GraphOp {
     AddTrack {
@@ -59,6 +60,11 @@ pub enum GraphOp {
     SwapBus {
         target: TrackRef,
         bus: Box<ParamBus>,
+    },
+    /// Replace what feeds a track's cells, for when an edit moved the cells its lanes address.
+    SetRoutes {
+        target: TrackRef,
+        routes: Arc<TrackRoutes>,
     },
     /// Hand a device a shared resource, such as a sample. Playing voices carry on. What it
     /// replaces is retired, never freed here.
@@ -249,6 +255,7 @@ impl Engine {
                 }
                 None => retire(&mut self.garbage, Garbage::Boxed(bus)),
             },
+            C::SetRoutes { target, routes } => self.set_routes(target, routes),
             C::SetResource {
                 target,
                 device,

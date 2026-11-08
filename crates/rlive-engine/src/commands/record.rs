@@ -7,6 +7,8 @@ use std::time::Instant;
 pub enum RecordCmd {
     /// Arm or disarm recording of played MIDI.
     SetRecording(bool),
+    /// Automation Arm: while recording, parameter gestures are recorded as automation.
+    SetAutomationArm(bool),
 
     /// Live MIDI (keyboard input) for a track. Never recorded, e.g. piano-roll previews.
     Midi {
@@ -27,6 +29,7 @@ impl Engine {
         match cmd {
             C::SetRecording(true) => self.recording = true,
             C::SetRecording(false) => self.finish_recording(),
+            C::SetAutomationArm(on) => self.automation_arm = on,
             C::Midi { track, message } => {
                 if let Some(t) = self.track_mut(track) {
                     if t.live.len() < t.live.capacity() {
@@ -43,6 +46,10 @@ impl Engine {
         if self.recording && self.playing {
             let tick = self.tick;
             let _ = self.events.push(EngineEvent::RecordingStopped { tick });
+            for t in self.tracks.iter_mut() {
+                t.bus.release_all_touches();
+            }
+            self.master.bus.release_all_touches();
         }
         self.recording = false;
     }

@@ -12,13 +12,14 @@
 
 use super::icons;
 use super::theme::{self, *};
-use super::widgets::{self, info, rgb};
+use super::widgets::{self, info, rgb, Led};
 use super::{BrowserItem, Detail, UiState};
 use crate::session::{ChainRef, ClipRef, Session};
 use egui::{
     Align2, Color32, Layout, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, UiBuilder, Vec2,
 };
 use rlive_core::TrackId;
+use rlive_engine::mix_cell;
 use rlive_engine::shared::{NO_SLOT, STOP_QUEUED};
 use rlive_project::{ArrangementClip, Clip, TrackKind, PALETTE};
 use std::sync::atomic::Ordering;
@@ -599,6 +600,7 @@ fn mixer_strip(
     };
     let (vol, pan, mute, solo, arm, color) =
         (t.volume_db, t.pan, t.mute, t.solo, t.arm, rgb(t.color));
+    let chain = ChainRef::Track(id);
     let meter = state.meters.get(&id).copied().unwrap_or_default();
     let p = ui.painter().clone();
     p.rect_filled(rect, 0.0, if selected { hex(0x363636) } else { PANEL });
@@ -627,9 +629,14 @@ fn mixer_strip(
         let knob_r =
             Rect::from_center_size(Pos2::new(inner.center().x, y + 13.0), Vec2::new(28.0, 26.0));
         let mut ku = ui.new_child(UiBuilder::new().max_rect(knob_r));
-        if let Some(v) = widgets::pan_knob(&mut ku, pan) {
+        let shown = session
+            .automated_cell_value(chain, mix_cell::PAN)
+            .map_or(pan, |v| v as f32);
+        if let Some(v) = widgets::pan_knob(&mut ku, shown) {
             new_mix.1 = v;
         }
+        Led::of(session.cell_state(chain, mix_cell::PAN))
+            .paint(&p, knob_r.left_top() + Vec2::new(2.0, 2.0));
         y += 30.0;
     }
 
@@ -641,18 +648,23 @@ fn mixer_strip(
         Pos2::new(inner.center().x + fader_w / 2.0, fader_bottom.max(y + 20.0)),
     );
     let mut fu = ui.new_child(UiBuilder::new().max_rect(fader_r));
-    if let Some(db) = widgets::fader(&mut fu, fader_r.size(), vol, meter.get(), ACCENT) {
+    let shown_vol = session
+        .automated_cell_value(chain, mix_cell::VOLUME)
+        .map_or(vol, |v| v as f32);
+    if let Some(db) = widgets::fader(&mut fu, fader_r.size(), shown_vol, meter.get(), ACCENT) {
         new_mix.0 = db;
     }
+    Led::of(session.cell_state(chain, mix_cell::VOLUME))
+        .paint(&p, fader_r.left_top() + Vec2::new(-5.0, 4.0));
     let db_r = Rect::from_center_size(
         Pos2::new(inner.center().x, fader_r.bottom() + 9.0),
         Vec2::new(inner.width().min(54.0), 14.0),
     );
     p.rect_filled(db_r, 1.0, FIELD_BG);
-    let db_text = if vol <= -70.0 {
+    let db_text = if shown_vol <= -70.0 {
         "-inf".to_string()
     } else {
-        format!("{vol:.1}")
+        format!("{shown_vol:.1}")
     };
     p.text(
         db_r.center(),
@@ -663,6 +675,9 @@ fn mixer_strip(
     );
 
     // Activator / Solo / Arm
+    let shown_mute = session
+        .automated_cell_value(chain, mix_cell::MUTE)
+        .map_or(mute, |v| v >= 0.5);
     let bw = ((inner.width() - 4.0) / 3.0).floor();
     let row = Rect::from_min_size(
         Pos2::new(inner.left(), inner.bottom() - buttons_h),
@@ -677,12 +692,12 @@ fn mixer_strip(
     let r = widgets::state_button(
         &mut bu,
         Vec2::new(bw, buttons_h),
-        !mute,
+        !shown_mute,
         ACTIVATOR,
         &(index + 1).to_string(),
     );
     if info(r, "Track Activator — click to mute/unmute").clicked() {
-        new_mix.2 = !mute;
+        new_mix.2 = !shown_mute;
     }
     let r = widgets::state_button(&mut bu, Vec2::new(bw, buttons_h), solo, SOLO_BLUE, "S");
     if info(r, "Solo — Cmd-click to solo several tracks").clicked() {
@@ -948,7 +963,11 @@ fn master_column(
             Pos2::new(inner.center().x + 22.0, inner.bottom() - 20.0),
         );
         let mut fu = ui.new_child(UiBuilder::new().max_rect(fader_r));
-        let vol = session.project.master.volume_db;
+        let vol = session
+            .automated_cell_value(ChainRef::Master, mix_cell::VOLUME)
+            .map_or(session.project.master.volume_db, |v| v as f32);
+        Led::of(session.cell_state(ChainRef::Master, mix_cell::VOLUME))
+            .paint(&p, fader_r.left_top() + Vec2::new(-5.0, 4.0));
         if let Some(db) = widgets::fader(
             &mut fu,
             fader_r.size(),
