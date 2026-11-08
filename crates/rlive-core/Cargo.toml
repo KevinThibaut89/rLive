@@ -1,0 +1,9 @@
+[package]
+name = "rlive-core"
+description = "Shared types for the rLive DAW: musical time, MIDI events, parameters, and the Processor trait"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true

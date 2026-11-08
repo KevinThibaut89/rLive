@@ -1,0 +1,4 @@
+[package]
+name = "rlive-test-clap"
+version.workspace = true
+edition.workspace = true

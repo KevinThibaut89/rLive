@@ -1,0 +1,4 @@
+[package]
+name = "rlive-devices"
+version.workspace = true
+edition.workspace = true

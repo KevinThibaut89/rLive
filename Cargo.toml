@@ -1,0 +1,57 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rlive-core",
+    "crates/rlive-engine",
+    "crates/rlive-devices",
+    "crates/rlive-project",
+    "crates/rlive-plugin-host",
+    "crates/rlive-app",
+    "crates/rlive-test-clap",
+]
+default-members = [
+    "crates/rlive-core",
+    "crates/rlive-engine",
+    "crates/rlive-devices",
+    "crates/rlive-project",
+    "crates/rlive-plugin-host",
+    "crates/rlive-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/KevinThibaut89/rLive"
+rust-version = "1.85"
+
+[workspace.dependencies]
+rlive-core = { path = "crates/rlive-core" }
+rlive-engine = { path = "crates/rlive-engine" }
+rlive-devices = { path = "crates/rlive-devices" }
+rlive-project = { path = "crates/rlive-project" }
+rlive-plugin-host = { path = "crates/rlive-plugin-host" }
+
+rtrb = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ron = "0.12"
+hound = "3.5"
+thiserror = "2"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+libloading = "0.9"
+clap-sys = "0.5"
+vst3 = "0.3"
+
+[profile.release]
+debug = 1
+lto = "thin"
+
+# Audio code must be fast even in debug builds or it glitches.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
