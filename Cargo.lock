@@ -2619,6 +2619,7 @@ dependencies = [
  "rlive-plugin-host",
  "rlive-project",
  "rlive-testkit",
+ "rtrb",
  "serde",
  "serde_json",
 ]

@@ -5,11 +5,16 @@ use crate::session::{ChainRef, ClipRef};
 use crate::ui::automation::{self, EnvelopeClipboard};
 use crate::ui::{piano_roll, session_view, Detail, MainView, RliveApp};
 use rlive_core::TrackId;
-use rlive_project::{ArrangementClip, Clip, NoteData, TrackKind};
+use rlive_project::{ArrangementClip, Clip, NoteData, RecordQuantize, TrackKind};
 
 super::domain! {
     /// The Edit menu.
-    Edit { Undo, Redo, Cut, Copy, Paste, Duplicate, Delete, SelectAll, Rename, ReturnToDefault, DeleteEnvelope }
+    Edit {
+        Undo, Redo, Cut, Copy, Paste, Duplicate, Delete, SelectAll, Rename, ReturnToDefault, DeleteEnvelope,
+        RecordQuantizeOff, RecordQuantizeQuarter, RecordQuantizeEighth, RecordQuantizeEighthTriplet,
+        RecordQuantizeEighthPlus, RecordQuantizeSixteenth, RecordQuantizeSixteenthTriplet,
+        RecordQuantizeSixteenthPlus, RecordQuantizeThirtySecond,
+    }
 }
 
 pub const MENU: &[Entry] = &[
@@ -25,6 +30,62 @@ pub const MENU: &[Entry] = &[
     Item("Return to Default", M::Edit(Edit::ReturnToDefault)),
     Separator,
     Item("Select All", M::Edit(Edit::SelectAll)),
+    Separator,
+    Item("Record Quantize: None", M::Edit(Edit::RecordQuantizeOff)),
+    Item("Record Quantize: 1/4", M::Edit(Edit::RecordQuantizeQuarter)),
+    Item("Record Quantize: 1/8", M::Edit(Edit::RecordQuantizeEighth)),
+    Item(
+        "Record Quantize: 1/8 Triplet",
+        M::Edit(Edit::RecordQuantizeEighthTriplet),
+    ),
+    Item(
+        "Record Quantize: 1/8 + Triplet",
+        M::Edit(Edit::RecordQuantizeEighthPlus),
+    ),
+    Item(
+        "Record Quantize: 1/16",
+        M::Edit(Edit::RecordQuantizeSixteenth),
+    ),
+    Item(
+        "Record Quantize: 1/16 Triplet",
+        M::Edit(Edit::RecordQuantizeSixteenthTriplet),
+    ),
+    Item(
+        "Record Quantize: 1/16 + Triplet",
+        M::Edit(Edit::RecordQuantizeSixteenthPlus),
+    ),
+    Item(
+        "Record Quantize: 1/32",
+        M::Edit(Edit::RecordQuantizeThirtySecond),
+    ),
+];
+
+/// The Record Quantization menu items and what they set.
+const RECORD_QUANTIZE: [(Edit, RecordQuantize); 9] = [
+    (Edit::RecordQuantizeOff, RecordQuantize::Off),
+    (Edit::RecordQuantizeQuarter, RecordQuantize::Quarter),
+    (Edit::RecordQuantizeEighth, RecordQuantize::Eighth),
+    (
+        Edit::RecordQuantizeEighthTriplet,
+        RecordQuantize::EighthTriplet,
+    ),
+    (
+        Edit::RecordQuantizeEighthPlus,
+        RecordQuantize::EighthPlusTriplet,
+    ),
+    (Edit::RecordQuantizeSixteenth, RecordQuantize::Sixteenth),
+    (
+        Edit::RecordQuantizeSixteenthTriplet,
+        RecordQuantize::SixteenthTriplet,
+    ),
+    (
+        Edit::RecordQuantizeSixteenthPlus,
+        RecordQuantize::SixteenthPlusTriplet,
+    ),
+    (
+        Edit::RecordQuantizeThirtySecond,
+        RecordQuantize::ThirtySecond,
+    ),
 ];
 
 /// The unadorned title of an item whose title otherwise changes.
@@ -182,9 +243,21 @@ impl RliveApp {
         };
         s.enable(on(Edit::Undo), undo);
         s.enable(on(Edit::Redo), redo);
+        for (cmd, q) in RECORD_QUANTIZE {
+            s.check(on(cmd), self.session.project.record_quantize == q);
+            s.enable(on(cmd), !self.session.is_recording());
+        }
     }
 
     pub(super) fn edit_dispatch(&mut self, ctx: &egui::Context, c: Edit) {
+        if let Some(q) = RECORD_QUANTIZE
+            .iter()
+            .find(|(cmd, _)| *cmd == c)
+            .map(|(_, q)| *q)
+        {
+            self.session.set_record_quantize(q);
+            return;
+        }
         match c {
             Edit::Undo | Edit::Redo => self.undo_redo(ctx, c),
             Edit::Rename if self.rename_in_rack() => {}

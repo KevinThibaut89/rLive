@@ -11,6 +11,7 @@
 #![allow(clippy::vec_box)] // nodes are boxed so the audio thread only moves pointers
 
 pub mod automation;
+pub mod capture;
 pub mod clip;
 mod commands;
 pub mod delay;
@@ -24,6 +25,8 @@ pub mod track;
 
 pub use automation::AutomationLane;
 pub use automation::MacroRoute;
+pub use capture::{capture_pair, CaptureSink, CaptureTail, Chunk as CaptureChunk};
+use capture::{CaptureBlock, CaptureMode, InputSource};
 use clip::BlockTime;
 pub use clip::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
 pub use commands::{
@@ -46,7 +49,7 @@ pub use rack::{
 use rlive_core::{
     db_to_gain,
     time::{BarMap, TempoRun, TimeMaps},
-    DeviceId, MidiMessage, Quantize, TrackId, TransportInfo,
+    DeviceId, MidiMessage, Quantize, TimeSignature, TrackId, TransportInfo,
 };
 use shared::EngineShared;
 use std::sync::atomic::Ordering;
@@ -62,6 +65,7 @@ const COMMAND_CAPACITY: usize = 4096;
 const GARBAGE_CAPACITY: usize = 4096;
 const EVENT_CAPACITY: usize = 8192;
 const MIDI_CAPACITY: usize = 2048;
+const PLAYED_CAPACITY: usize = 2048;
 
 /// Sends live MIDI straight to the audio thread (e.g. from a MIDI-input callback thread),
 /// bypassing the UI. Messages are timestamped here, so recording can place them where they
@@ -131,6 +135,46 @@ pub enum EngineEvent {
     Jumped { from: f64, to: f64 },
     /// Recording ended with the playhead at `tick`. Follows every note it recorded.
     RecordingStopped { tick: f64 },
+    /// A take's file position `frame` is at timeline `tick`: where it started, re-entered its
+    /// window, jumped, or the tempo changed.
+    CaptureSegment {
+        track: TrackId,
+        frame: u64,
+        tick: f64,
+        /// The take did not carry on from where it was: a jump or a return to its window.
+        jump: bool,
+        ticks_per_frame: f64,
+    },
+    /// A take ended, having taken `frames` frames.
+    CaptureClosed { track: TrackId, frames: u64 },
+    /// A note landed in the clip a track is overdubbing, at `position` in it.
+    OverdubMidi {
+        track: TrackId,
+        slot: usize,
+        position: f64,
+        tick: f64,
+        message: MidiMessage,
+    },
+    /// Recording into a slot has reached its launch point.
+    SlotRecordStarted {
+        track: TrackId,
+        slot: usize,
+        tick: f64,
+    },
+    /// A slot's recording will end at `at`, which by then should have taken `frames` frames.
+    SlotClosing {
+        track: TrackId,
+        slot: usize,
+        at: f64,
+        launch: bool,
+        frames: Option<u64>,
+    },
+    /// A slot's recording is over.
+    SlotRecordEnded {
+        track: TrackId,
+        slot: usize,
+        tick: f64,
+    },
     /// The user moved a parameter while automation records. `before` is what it was sounding at.
     AutomationMoved {
         target: TrackRef,
@@ -147,11 +191,23 @@ pub enum EngineEvent {
     },
 }
 
+/// A note played on a track, armed or not, for the buffer Capture MIDI reads. `seconds` is on the
+/// engine's own clock, so it means something with the transport stopped; `tick` is set while it
+/// runs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlayedNote {
+    pub track: TrackId,
+    pub seconds: f64,
+    pub tick: Option<f64>,
+    pub message: MidiMessage,
+}
+
 /// UI-side handle to a running engine.
 pub struct EngineHandle {
     commands: rtrb::Producer<EngineCommand>,
     garbage: rtrb::Consumer<Garbage>,
     events: rtrb::Consumer<EngineEvent>,
+    played: rtrb::Consumer<PlayedNote>,
     pub shared: Arc<EngineShared>,
     pub sample_rate: f64,
     pub max_block: usize,
@@ -186,6 +242,11 @@ impl EngineHandle {
     pub fn poll_event(&mut self) -> Option<EngineEvent> {
         self.events.pop().ok()
     }
+
+    /// The next note played since the last call.
+    pub fn poll_played(&mut self) -> Option<PlayedNote> {
+        self.played.pop().ok()
+    }
 }
 
 /// The plans the engine can run.
@@ -203,8 +264,60 @@ impl Plans {
     }
 }
 
+/// The metronome's options that shape what it plays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MetronomeConfig {
+    /// Which click sound, an index into its table.
+    pub sound: u8,
+    /// Ticks between clicks; `None` follows the time signature's denominator.
+    pub division: Option<u32>,
+    /// Audible only while recording.
+    pub only_while_recording: bool,
+}
+
+/// A click sound: down and up frequencies, and how long it rings.
+#[derive(Clone, Copy)]
+struct Click {
+    down: f32,
+    up: f32,
+    seconds: f64,
+}
+
+const CLICKS: [Click; 4] = [
+    Click {
+        down: 1760.0,
+        up: 880.0,
+        seconds: 0.03,
+    },
+    Click {
+        down: 2500.0,
+        up: 1800.0,
+        seconds: 0.012,
+    },
+    Click {
+        down: 1100.0,
+        up: 780.0,
+        seconds: 0.02,
+    },
+    Click {
+        down: 1046.5,
+        up: 784.0,
+        seconds: 0.09,
+    },
+];
+
+/// The beat the count-in is on, and how far through it.
+pub(crate) struct CountIn {
+    pub(crate) frames_left: u64,
+    pub(crate) frames_total: u64,
+    /// How long the whole count-in is, in ticks.
+    pub(crate) ticks: f64,
+    pub(crate) sig: TimeSignature,
+}
+
 struct Metronome {
     enabled: bool,
+    config: MetronomeConfig,
     phase: f32,
     remaining: usize,
     freq: f32,
@@ -212,12 +325,44 @@ struct Metronome {
 }
 
 impl Metronome {
-    fn render(&mut self, time: BlockTime, bars: &BarMap, left: &mut [f32], right: &mut [f32]) {
+    /// The next click at or after `tick`, at the chosen division if it fits in the bar. A
+    /// division that doesn't fit falls back to the denominator until one that does comes along.
+    fn click_after(&self, bars: &BarMap, tick: f64) -> rlive_core::time::Beat {
+        let Some(step) = self.config.division.map(|s| s as f64) else {
+            return bars.first_beat(tick);
+        };
+        let bar = bars.bar_at(tick);
+        let bar_len = bar.signature.ticks_per_bar() as f64;
+        if step <= 0.0 || (bar_len / step).fract() != 0.0 {
+            return bars.first_beat(tick);
+        }
+        let n = ((tick.max(bar.start) - bar.start) / step - 1e-6)
+            .ceil()
+            .max(0.0);
+        let at = bar.start + n * step;
+        if at >= bar.end {
+            let next = bars.bar_at(bar.end + 1e-6);
+            return rlive_core::time::Beat::at(next.start, true);
+        }
+        rlive_core::time::Beat::at(at, n == 0.0)
+    }
+
+    /// Clicks in this block, from song position `from` on (Punch-In holds an
+    /// Enable-Only-While-Recording metronome back).
+    fn render(
+        &mut self,
+        time: BlockTime,
+        bars: &BarMap,
+        left: &mut [f32],
+        right: &mut [f32],
+        from: f64,
+    ) {
         if !self.enabled {
             return;
         }
-        let click_len = (time.sample_rate * 0.03) as usize;
-        let mut beat = bars.first_beat(time.t0);
+        let sound = CLICKS[self.config.sound as usize % CLICKS.len()];
+        let click_len = (time.sample_rate * sound.seconds) as usize;
+        let mut beat = self.click_after(bars, time.t0);
         let t1 = time.t1();
         let mut start = 0;
         loop {
@@ -237,12 +382,63 @@ impl Metronome {
             );
             match click_at {
                 Some(off) => {
-                    self.freq = if beat.downbeat { 1760.0 } else { 880.0 };
-                    self.amp = if beat.downbeat { 0.5 } else { 0.3 };
+                    if beat.tick >= from {
+                        self.freq = if beat.downbeat { sound.down } else { sound.up };
+                        self.amp = if beat.downbeat { 0.5 } else { 0.3 };
+                        self.phase = 0.0;
+                        self.remaining = click_len;
+                    }
+                    start = off;
+                    beat = if self.config.division.is_some() {
+                        self.click_after(bars, beat.tick + 1e-3)
+                    } else {
+                        bars.next_beat(beat)
+                    };
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// The count-in's clicks in this block, which sound whether or not the metronome is on.
+    fn render_count_in(
+        &mut self,
+        count: &CountIn,
+        frames: usize,
+        sample_rate: f64,
+        left: &mut [f32],
+        right: &mut [f32],
+    ) {
+        let sound = CLICKS[self.config.sound as usize % CLICKS.len()];
+        let click_len = (sample_rate * sound.seconds) as usize;
+        let beats = count.sig.numerator.max(1) as u64;
+        let frames_per_beat = count.frames_total as f64
+            / ((count.ticks / count.sig.ticks_per_beat() as f64)
+                .round()
+                .max(1.0));
+        let elapsed = (count.frames_total - count.frames_left) as f64;
+        let mut n = (elapsed / frames_per_beat - 1e-6).ceil().max(0.0) as u64;
+        let mut start = 0;
+        loop {
+            let off = n as f64 * frames_per_beat - elapsed;
+            let click_at = (off < frames as f64).then_some(off.max(0.0) as usize);
+            self.write(
+                left,
+                right,
+                start,
+                click_at.unwrap_or(frames),
+                sample_rate as f32,
+                click_len,
+            );
+            match click_at {
+                Some(off) => {
+                    let downbeat = n.is_multiple_of(beats);
+                    self.freq = if downbeat { sound.down } else { sound.up };
+                    self.amp = if downbeat { 0.5 } else { 0.3 };
                     self.phase = 0.0;
                     self.remaining = click_len;
                     start = off;
-                    beat = bars.next_beat(beat);
+                    n += 1;
                 }
                 None => break,
             }
@@ -293,6 +489,18 @@ pub struct Engine {
     /// since only the former wraps.
     reached_loop_end: bool,
     recording: bool,
+    /// Where the current recording started on the timeline.
+    rec_from: f64,
+    punch_in: Option<f64>,
+    punch_out: Option<f64>,
+    /// The count-in in progress: the transport starts when it ends.
+    count_in: Option<CountIn>,
+    /// Bars of count-in before recording.
+    count_in_bars: u8,
+    /// Frames rendered so far, transport or no transport.
+    clock: u64,
+    /// Read when a block must offer a sink nothing.
+    silence: Vec<f32>,
     /// Parameter gestures are recorded as automation while recording.
     automation_arm: bool,
     /// Where on the timeline commands being handled now take effect.
@@ -318,6 +526,7 @@ pub struct Engine {
     commands: rtrb::Consumer<EngineCommand>,
     garbage: rtrb::Producer<Garbage>,
     events: rtrb::Producer<EngineEvent>,
+    played: rtrb::Producer<PlayedNote>,
     midi: rtrb::Consumer<(TrackId, MidiMessage, Instant)>,
     shared: Arc<EngineShared>,
 }
@@ -327,6 +536,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
     let (cmd_tx, cmd_rx) = rtrb::RingBuffer::new(COMMAND_CAPACITY);
     let (gb_tx, gb_rx) = rtrb::RingBuffer::new(GARBAGE_CAPACITY);
     let (ev_tx, ev_rx) = rtrb::RingBuffer::new(EVENT_CAPACITY);
+    let (played_tx, played_rx) = rtrb::RingBuffer::new(PLAYED_CAPACITY);
     let (midi_tx, midi_rx) = rtrb::RingBuffer::new(MIDI_CAPACITY);
     let shared = Arc::new(EngineShared::default());
     shared.sample_rate.store(sample_rate);
@@ -352,11 +562,19 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         loop_range: None,
         reached_loop_end: false,
         recording: false,
+        rec_from: 0.0,
+        punch_in: None,
+        punch_out: None,
+        count_in: None,
+        count_in_bars: 0,
+        clock: 0,
+        silence: vec![0.0; max_block],
         automation_arm: false,
         command_tick: 0.0,
         record_floor: 0.0,
         metronome: Metronome {
             enabled: false,
+            config: MetronomeConfig::default(),
             phase: 0.0,
             remaining: 0,
             freq: 880.0,
@@ -374,6 +592,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         commands: cmd_rx,
         garbage: gb_tx,
         events: ev_tx,
+        played: played_tx,
         midi: midi_rx,
         shared: shared.clone(),
     };
@@ -381,6 +600,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         commands: cmd_tx,
         garbage: gb_rx,
         events: ev_rx,
+        played: played_rx,
         shared,
         sample_rate,
         max_block,
@@ -506,6 +726,14 @@ impl Engine {
         if self.recording && self.playing {
             let from = self.tick;
             let _ = self.events.push(EngineEvent::Jumped { from, to });
+            self.rec_from = self.rec_from.min(to);
+        }
+        for t in self.tracks.iter_mut() {
+            if let Some(sink) = t.capture.as_mut() {
+                if sink.is_running() {
+                    sink.jumped(self.clock, to);
+                }
+            }
         }
         let delta = to - self.tick;
         self.tick = to;
@@ -626,14 +854,25 @@ impl Engine {
     }
 
     /// Render as many frames as the shortest output has. Handles any buffer size by splitting
-    /// into `max_block` chunks, and at the loop end. Inputs are accepted but nothing reads them
-    /// yet.
+    /// into `max_block` chunks, and at the loop end. An input channel missing or shorter than
+    /// the block reads as silence.
     pub fn process(&mut self, io: AudioIo<'_>) {
         let started = std::time::Instant::now();
         let total = io.outputs.iter().map(|o| o.len()).min().unwrap_or(0);
+        for (meter, input) in self.shared.input_meters.iter().zip(io.inputs) {
+            meter.store_max(input.iter().fold(0f32, |m, s| m.max(s.abs())));
+        }
         let mut done = 0;
         while done < total {
             self.drain_input();
+            if let Some(left) = self.count_in.as_ref().map(|c| c.frames_left) {
+                let n = (total - done).min(self.max_block).min(left as usize).max(1);
+                let run = self.tempo_run();
+                self.process_block(io.inputs, io.outputs, done, n, run, None);
+                self.count_in_advance(n);
+                done += n;
+                continue;
+            }
             let mut run = self.tempo_run();
             self.wrap_at_loop_end(&mut run);
             let mut n = self.limit_to_tempo_point(&mut run, (total - done).min(self.max_block));
@@ -643,7 +882,7 @@ impl Engine {
             if let Some(end) = loop_end {
                 n = self.frames_until(end, &run).max(1);
             }
-            self.process_block(io.outputs, done, n, run, loop_end);
+            self.process_block(io.inputs, io.outputs, done, n, run, loop_end);
             done += n;
         }
         if total > 0 {
@@ -662,8 +901,25 @@ impl Engine {
         });
     }
 
+    /// Move the count-in along, starting the transport when it's over.
+    fn count_in_advance(&mut self, frames: usize) {
+        let Some(count) = self.count_in.as_mut() else {
+            return;
+        };
+        count.frames_left = count.frames_left.saturating_sub(frames as u64);
+        let left = count.frames_left;
+        self.shared
+            .count_in_left
+            .store(count.ticks * left as f64 / count.frames_total.max(1) as f64);
+        if left == 0 {
+            self.begin_playing();
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn process_block(
         &mut self,
+        inputs: &[&[f32]],
         outputs: &mut [&mut [f32]],
         start: usize,
         frames: usize,
@@ -685,6 +941,9 @@ impl Engine {
         // keeps its own reference, so this never frees them.
         let maps = Arc::clone(&self.maps);
 
+        let plan_for_takes = std::mem::take(&mut self.plans);
+        self.step_slot_records(plan_for_takes.active(), time);
+        self.plans = plan_for_takes;
         let garbage = &mut self.garbage;
         let mut retire_clip = |c: Arc<ClipData>| retire(garbage, Garbage::Shared(c));
         let smooth = self.smooth_coeff;
@@ -710,13 +969,15 @@ impl Engine {
         for (level, steps) in plan.levels.iter().enumerate() {
             let steps = &plan.steps[steps.start as usize..steps.end as usize];
             for step in steps {
-                self.gather_inputs(plan, step, time, &transport, &maps.bars);
+                self.gather_inputs(plan, step, inputs, start, time, &transport, &maps.bars);
             }
             self.run_control_steps(plan, steps, level == 0, &ctx);
             self.finish_steps(plan, steps, time, &ctx);
         }
+        self.run_captures(plan, inputs, start, time);
         self.write_outputs(plan, outputs, start, frames);
         self.plans = plans;
+        self.clock += frames as u64;
 
         if self.playing {
             self.tick = time.t1();
@@ -779,13 +1040,132 @@ impl Engine {
         }
     }
 
+    /// Start and end the slot recordings that reach their launch point in this block, and work
+    /// out what takes in progress silence.
+    fn step_slot_records(&mut self, plan: &RenderPlan, time: BlockTime) {
+        for t in self.tracks.iter_mut() {
+            let Some(rec) = t.slot_rec.as_mut() else {
+                continue;
+            };
+            if !rec.started && self.playing && rec.from < time.t1() {
+                rec.started = true;
+                t.shared
+                    .record_queued_slot
+                    .store(shared::NO_SLOT, Ordering::Relaxed);
+                t.shared
+                    .recording_slot
+                    .store(rec.slot as i32, Ordering::Relaxed);
+                let _ = self.events.push(EngineEvent::SlotRecordStarted {
+                    track: t.id,
+                    slot: rec.slot,
+                    tick: rec.from,
+                });
+            }
+        }
+        // Under a take, what's on the timeline is on its way out.
+        let window = self.arrangement_window();
+        let in_take = window.is_some_and(|(from, until)| time.t0 >= from && time.t0 < until);
+        for (i, t) in self.tracks.iter_mut().enumerate() {
+            let arrangement_take = t
+                .capture
+                .as_ref()
+                .is_some_and(|c| c.mode == CaptureMode::Arrangement);
+            t.lane_muted = in_take && (arrangement_take || t.replacing);
+            t.silenced = t.capture.is_some() && plan.input_of(i) == InputSource::Main;
+        }
+    }
+
+    /// Hand each take its share of this block, and end the slot recordings that have finished.
+    fn run_captures(
+        &mut self,
+        plan: &RenderPlan,
+        inputs: &[&[f32]],
+        start: usize,
+        time: BlockTime,
+    ) {
+        if !self.playing {
+            return;
+        }
+        let frames = time.frames;
+        let arrangement = self.arrangement_window();
+        for i in 0..self.tracks.len() {
+            let window = match self.tracks[i].capture.as_ref().map(|c| c.mode) {
+                None => continue,
+                Some(CaptureMode::Arrangement) => arrangement,
+                Some(CaptureMode::Slot) => self.tracks[i]
+                    .slot_rec
+                    .map(|r| (r.from, r.close.map_or(f64::INFINITY, |c| c.0))),
+            };
+            let silence = &self.silence[..frames];
+            let (left, right): (&[f32], &[f32]) = match plan.input_of(i) {
+                InputSource::Hardware { channel, stereo } => {
+                    let channel = channel as usize;
+                    let read = |c: usize| {
+                        inputs
+                            .get(c)
+                            .and_then(|s| s.get(start..start + frames))
+                            .unwrap_or(silence)
+                    };
+                    (
+                        read(channel),
+                        if stereo {
+                            read(channel + 1)
+                        } else {
+                            read(channel)
+                        },
+                    )
+                }
+                InputSource::Main => self.master.output(frames),
+                InputSource::None => {
+                    let tap = plan
+                        .steps
+                        .iter()
+                        .find(|s| s.track as usize == i)
+                        .and_then(|s| s.inputs.iter().find_map(|i| i.bus))
+                        .filter(|b| b.monitored)
+                        .and_then(|b| self.buses.get(b.bus as usize))
+                        .map(|bus| bus.input(0, frames));
+                    match tap {
+                        Some(input) => (input.left, input.right),
+                        None => (silence, silence),
+                    }
+                }
+            };
+            let block = CaptureBlock {
+                left,
+                right,
+                clock: self.clock,
+                t0: time.t0,
+                ticks_per_sample: time.ticks_per_sample,
+                window,
+            };
+            let track = self.tracks[i].id;
+            if let Some(sink) = self.tracks[i].capture.as_mut() {
+                sink.run(block, track, &mut self.events);
+            }
+        }
+        for i in 0..self.tracks.len() {
+            let t = &self.tracks[i];
+            let Some((at, _)) = t.slot_rec.and_then(|r| r.close) else {
+                continue;
+            };
+            let reached = t.capture.as_ref().map_or(time.t1(), |c| c.clock());
+            if reached >= at {
+                self.end_slot_recording(i, at);
+            }
+        }
+    }
+
     /// Sum what a step takes as input into its track, before its devices run. Track `tracks.len()`
     /// is the Master, and the metronome joins it there. A group or return track's buffer holds
-    /// nothing else; a clip track's holds its clips, and takes no inputs yet.
+    /// nothing else; a clip track's holds its clips and whatever input is monitored.
+    #[allow(clippy::too_many_arguments)]
     fn gather_inputs(
         &mut self,
         plan: &RenderPlan,
         step: &Step,
+        hw_inputs: &[&[f32]],
+        start: usize,
         time: BlockTime,
         transport: &TransportInfo,
         bars: &BarMap,
@@ -794,6 +1174,7 @@ impl Engine {
         let coeff = self.smooth_coeff;
         let to = step.track as usize;
         if to == self.tracks.len() {
+            let click_from = self.click_from();
             let t = &mut *self.master;
             let (l, r) = (&mut t.left[..frames], &mut t.right[..frames]);
             for input in &step.inputs {
@@ -801,8 +1182,21 @@ impl Engine {
                     add_input(from, input, l, r, frames, coeff);
                 }
             }
-            self.click
-                .render(&mut self.metronome, time, bars, l, r, transport.playing);
+            if let Some(count) = &self.count_in {
+                self.metronome
+                    .render_count_in(count, frames, self.sample_rate, l, r);
+                return;
+            }
+            let from = click_from;
+            self.click.render(
+                &mut self.metronome,
+                time,
+                bars,
+                l,
+                r,
+                transport.playing && from.is_some(),
+                from.unwrap_or(f64::INFINITY),
+            );
             return;
         }
         if to > self.tracks.len() {
@@ -810,6 +1204,25 @@ impl Engine {
         }
         self.tracks[to].prepare_own(frames, coeff);
         let open = self.tracks[to].monitoring();
+        if open {
+            if let InputSource::Hardware { channel, stereo } = plan.input_of(to) {
+                let read = |c: usize| hw_inputs.get(c).and_then(|s| s.get(start..start + frames));
+                let t = &mut self.tracks[to];
+                let channel = channel as usize;
+                let (left, right) = (read(channel), read(channel + stereo as usize));
+                if let Some(left) = left {
+                    let right = right.unwrap_or(left);
+                    for ((d, l), (e, r)) in t.left[..frames]
+                        .iter_mut()
+                        .zip(left)
+                        .zip(t.right[..frames].iter_mut().zip(right))
+                    {
+                        *d += l;
+                        *e += r;
+                    }
+                }
+            }
+        }
         self.deliver_midi(plan, to, open);
         for sc in plan.sidechains_into(step.track) {
             fetch_sidechain(&mut self.buses, sc, frames);
@@ -1081,6 +1494,10 @@ impl Engine {
             t.prepare_sends(time.frames, coeff);
             t.cue_into((&mut cue_l[..], &mut cue_r[..]), time.frames, coeff);
             t.apply_mix(time.frames, coeff);
+            if t.silenced {
+                t.left[..time.frames].fill(0.0);
+                t.right[..time.frames].fill(0.0);
+            }
             t.write_post_mix(&mut self.buses, time.frames);
             t.feed_lines(time.frames);
             for out in plan.taps_of(step.track) {
@@ -1216,6 +1633,24 @@ struct ClickDelay {
     buf: [Vec<f32>; 2],
 }
 
+impl Engine {
+    /// Where the metronome may click from, or `None` if it may not. With Enable Only While
+    /// Recording it sounds only while recording, and not before Punch-In.
+    fn click_from(&self) -> Option<f64> {
+        if !self.metronome.config.only_while_recording {
+            return Some(f64::NEG_INFINITY);
+        }
+        let recording = self.recording || self.tracks.iter().any(|t| t.slot_rec.is_some());
+        recording.then(|| {
+            if self.recording {
+                self.punch_in.unwrap_or(f64::NEG_INFINITY)
+            } else {
+                f64::NEG_INFINITY
+            }
+        })
+    }
+}
+
 impl ClickDelay {
     fn new(max_block: usize) -> Self {
         Self {
@@ -1225,6 +1660,7 @@ impl ClickDelay {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render(
         &mut self,
         metronome: &mut Metronome,
@@ -1233,10 +1669,11 @@ impl ClickDelay {
         left: &mut [f32],
         right: &mut [f32],
         playing: bool,
+        from: f64,
     ) {
         let Some(line) = &mut self.line else {
             if playing {
-                metronome.render(time, bars, left, right);
+                metronome.render(time, bars, left, right, from);
             }
             return;
         };
@@ -1246,7 +1683,7 @@ impl ClickDelay {
         bl.fill(0.0);
         br.fill(0.0);
         if playing {
-            metronome.render(time, bars, bl, br);
+            metronome.render(time, bars, bl, br, from);
         }
         line.push(bl, br);
         self.delay.read(line, bl, br);

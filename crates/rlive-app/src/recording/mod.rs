@@ -1,4 +1,8 @@
-//! Collects played MIDI into clips while recording onto the timeline.
+//! Recording: collects played MIDI into clips while recording onto the timeline, and the parts
+//! that get audio to disk and find phrases in what was played.
+
+pub mod capture_midi;
+pub mod disk;
 
 use rlive_core::{ArrClipId, MidiMessage, TimeSignature, TrackId};
 use rlive_project::{Clip, ClipContent, NoteData};
@@ -16,6 +20,8 @@ struct Take {
     notes: Vec<NoteData>,
     /// The timeline clip holding this take, once it's been placed.
     clip: Option<ArrClipId>,
+    /// With Overdub on, what was already on the timeline, by absolute tick.
+    base: Vec<NoteData>,
 }
 
 impl Take {
@@ -89,6 +95,16 @@ impl Recording {
         }
     }
 
+    /// Starts a take for `track` holding what `base` plays, so a new clip keeps it.
+    pub fn overdub_onto(&mut self, track: TrackId, base: Vec<NoteData>) {
+        self.takes.entry(track).or_default().base = base;
+    }
+
+    /// Whether anything has been recorded for this track.
+    pub fn has_notes(&self, track: TrackId) -> bool {
+        self.takes.get(&track).is_some_and(|t| !t.notes.is_empty())
+    }
+
     /// Remembers which timeline clip a take went into.
     pub fn set_clip(&mut self, track: TrackId, id: ArrClipId) {
         if let Some(t) = self.takes.get_mut(&track) {
@@ -111,10 +127,12 @@ impl Recording {
                     .max()
                     .unwrap_or(start);
                 let length = last.saturating_sub(start).div_ceil(bar).max(1) * bar;
+                let end = start + length;
                 let notes = take
                     .notes
                     .iter()
                     .filter(|n| n.start >= start)
+                    .chain(take.base.iter().filter(|n| (start..end).contains(&n.start)))
                     .map(|n| NoteData {
                         start: n.start - start,
                         ..n.clone()

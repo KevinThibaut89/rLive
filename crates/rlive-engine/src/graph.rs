@@ -4,6 +4,7 @@
 //! A [`RenderPlan`] is compiled on the UI thread (`rlive-app/src/session/graph.rs`) and handed to
 //! the engine inside a [`GraphTxn`](crate::GraphTxn), together with the edits it was compiled for.
 
+use crate::capture::InputSource;
 use crate::params::CellIx;
 use rlive_core::{ChainId, CrossfadeCurve, DeviceId, TrackId};
 use std::ops::Range;
@@ -150,6 +151,8 @@ pub struct RenderPlan {
     /// Frames from the playhead to the Master's output, however the Master got its input. Not
     /// used to render: offline rendering and input monitoring need to know it.
     pub output_latency: u32,
+    /// Where each track takes its audio input from, by track. Empty is no input at all.
+    pub inputs: Vec<InputSource>,
 }
 
 /// One track's turn.
@@ -344,6 +347,7 @@ impl RenderPlan {
             solo_in_place: true,
             click_delay: 0,
             output_latency: 0,
+            inputs: Vec::new(),
         };
         plan.steps.push(Step {
             track: 0,
@@ -400,6 +404,7 @@ impl RenderPlan {
             || self.returns.start > self.returns.end
             || self.returns.end > tracks as u32
             || !(self.io.is_empty() || self.io.len() == tracks)
+            || !(self.inputs.is_empty() || self.inputs.len() == tracks)
         {
             return false;
         }
@@ -482,13 +487,18 @@ impl RenderPlan {
         self.sidechains.iter().filter(move |s| s.to == track)
     }
 
+    pub(crate) fn input_of(&self, track: usize) -> InputSource {
+        self.inputs.get(track).copied().unwrap_or_default()
+    }
+
     pub(crate) fn io_of(&self, track: u32) -> TrackIo {
         self.io.get(track as usize).copied().unwrap_or_default()
     }
 }
 
 /// The engine's audio channels for one call. Which channels carry what is up to the plan: the
-/// Main output is on its `main_out`, 0 and 1 unless told otherwise. Inputs are not read yet.
+/// Main output is on its `main_out`, 0 and 1 unless told otherwise. An input channel may be
+/// shorter than the block (or missing), which reads as silence.
 pub struct AudioIo<'a> {
     pub inputs: &'a [&'a [f32]],
     pub outputs: &'a mut [&'a mut [f32]],

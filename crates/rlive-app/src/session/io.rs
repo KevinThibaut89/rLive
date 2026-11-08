@@ -349,6 +349,16 @@ impl Session {
         self.mark_edit("Cue Out");
     }
 
+    /// Whether a track's recordings keep the timing of its monitoring path (manual p. 374).
+    pub fn set_keep_monitor_latency(&mut self, tracks: &[TrackId], keep: bool) {
+        for id in tracks {
+            if let Some(t) = self.project.track_mut(*id) {
+                t.keep_monitor_latency = keep;
+            }
+        }
+        self.mark_edit("Keep Monitoring Latency");
+    }
+
     pub fn set_main_out(&mut self, out: ExternalRoute) {
         self.project.master.routing.output = Route::External(out);
         self.send_track_edits(Vec::new());

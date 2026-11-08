@@ -579,9 +579,9 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 - `[~]` In/Out section with type and channel chooser pairs for input and output; show/hide; applies across multi-selected tracks. M
 - `[~]` Monitor modes In, Auto, Off. Delete or Return to Default resets to Off on audio tracks and Auto on MIDI tracks. In state tints the Activator blue. S
-- `[ ]` Keep Monitoring Latency in Recorded Audio, on by default for In and Auto; right-click toggle. M. Depends on PDC.
+- `[~]` Keep Monitoring Latency in Recorded Audio, on by default for In and Auto; right-click toggle. M. Depends on PDC.
 - `[ ]` External audio I/O: per-channel meters with overload, Configure shortcut, mono/stereo pair configuration, channel renaming stored per audio device. M
-- `[ ]` Mono input records mono files; device chains are always stereo; mono to stereo duplicates; stereo to mono output sums with -6 dB. S
+- `[x]` Mono input records mono files; device chains are always stereo; mono to stereo duplicates; stereo to mono output sums with -6 dB. S
 - `[ ]` External MIDI input: one port or All Ins, one channel or All Channels, activity meters. S
 - `[ ]` Per-port switches: Track, Sync, Remote, separately for input and output. M
 - `[ ]` Sync: MIDI Clock in and out, MIDI Timecode in. L
@@ -591,7 +591,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Computer MIDI keyboard: home row white keys from C3, top row black keys, Z/X octave, C/V velocity in steps of 20; steals single-key shortcuts, Shift reaches them. S
 - `[ ]` MIDI out to external synths by port and channel. S
 - `[ ]` Control Bar MIDI LEDs, three in/out pairs: sync, remote, track. Sync pair shows only when a sync source is enabled. S
-- `[ ]` Resampling input type records Main output; the recording track's own output is excluded. Files go to Samples/Recorded, or the Temporary Folder until saved. M
+- `[x]` Resampling input type records Main output; the recording track's own output is excluded. Files go to Samples/Recorded, or the Temporary Folder until saved. M
 - `[x]` Track-to-track routing from either end (output to track, or input from track). L
 - `[x]` Tap points Pre FX, Post FX, Post Mixer, each with defined solo behaviour. L
 - `[x]` Tap points for every Rack chain and Drum Rack return chain. M. Depends on Racks.
@@ -636,28 +636,28 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** A11
 
-- `[ ]` Defaults: audio from mono ext input 1 or 2; MIDI from all active inputs. S
-- `[ ]` Arm in either view; exclusive unless modified; arming selects the track and locks a native control surface. S. [H] for lock.
-- `[ ]` Arrangement Record; Start Playback with Record preference, inverted by Shift. M
-- `[ ]` MIDI Arrangement Overdub (MIDI only). M
-- `[ ]` Punch-In and Punch-Out tied to Arrangement Loop edges. M
-- `[ ]` Loop recording keeps all passes in one sample; loop brace selects last pass; undo unrolls. L
-- `[ ]` Session recording into slots, single-slot or Session Record across armed tracks; pressing again goes straight to loop playback. L. Depends on launch quantization.
-- `[ ]` New button: stops armed clips, finds or creates a scene; available only through key/MIDI mapping. S
-- `[ ]` Start Recording on Scene Launch option. S
-- `[ ]` MIDI pattern overdub in looping clip; toggle overdub; Alt-double-click creates, arms and launches. M
-- `[ ]` Undo removes last overdub take. M
-- `[ ]` Step recording: hold notes, right arrow advances by grid, extends held notes, left arrow deletes; mappable. M
-- `[ ]` Tempo may change during recording, with sync retained. L. Depends on warp.
-- `[ ]` Metronome: count-in, sound, beat division (Auto follows denominator), fallback when division stops fitting, Enable Only While Recording, respects punch-in. M
-- `[ ]` Record Quantization: separate undo step in Arrangement; locked mid-record; immediate in looped overdub. M
-- `[ ]` Count-in displayed in blue as negative bars-beats. S
-- `[ ]` File Type, Bit Depth and default Warp Mode preferences. S
-- `[ ]` Temporary Folder until saved. S
+- `[x]` Defaults: audio from mono ext input 1 or 2; MIDI from all active inputs. S
+- `[~]` Arm in either view; exclusive unless modified; arming selects the track and locks a native control surface. S. [H] for lock.
+- `[x]` Arrangement Record; Start Playback with Record preference, inverted by Shift. M
+- `[x]` MIDI Arrangement Overdub (MIDI only). M
+- `[x]` Punch-In and Punch-Out tied to Arrangement Loop edges. M
+- `[x]` Loop recording keeps all passes in one sample; loop brace selects last pass; undo unrolls. L
+- `[x]` Session recording into slots, single-slot or Session Record across armed tracks; pressing again goes straight to loop playback. L. Depends on launch quantization.
+- `[~]` New button: stops armed clips, finds or creates a scene; available only through key/MIDI mapping. S
+- `[x]` Start Recording on Scene Launch option. S
+- `[x]` MIDI pattern overdub in looping clip; toggle overdub; Alt-double-click creates, arms and launches. M
+- `[x]` Undo removes last overdub take. M
+- `[~]` Step recording: hold notes, right arrow advances by grid, extends held notes, left arrow deletes; mappable. M
+- `[~]` Tempo may change during recording, with sync retained. L. Depends on warp.
+- `[x]` Metronome: count-in, sound, beat division (Auto follows denominator), fallback when division stops fitting, Enable Only While Recording, respects punch-in. M
+- `[x]` Record Quantization: separate undo step in Arrangement; locked mid-record; immediate in looped overdub. M
+- `[x]` Count-in displayed in blue as negative bars-beats. S
+- `[x]` File Type, Bit Depth and default Warp Mode preferences. S
+- `[x]` Temporary Folder until saved. S
 - `[ ]` All record controls are mappable. S
-- `[ ]` Capture MIDI: constant retrospective buffer on armed and monitored tracks. L
-- `[ ]` Capture on empty stopped Set: detects tempo (80-160 BPM), loop and grid; starts transport; keeps pre-phrase notes before start marker; single-note special case. L
-- `[ ]` Capture with running transport or existing clips: keeps tempo, detects phrase, overdubs a playing clip. M
+- `[x]` Capture MIDI: constant retrospective buffer on armed and monitored tracks. L
+- `[x]` Capture on empty stopped Set: detects tempo (80-160 BPM), loop and grid; starts transport; keeps pre-phrase notes before start marker; single-note special case. L
+- `[x]` Capture with running transport or existing clips: keeps tempo, detects phrase, overdubs a playing clip. M
 - `[ ]` Capture button on Push. [H]
 
 
@@ -1254,7 +1254,7 @@ No Ableton hardware, runtime or service is required. This chapter is an acceptan
 No Ableton dependency; behaviour depends on OS drivers and MIDI hardware. All achievable.
 
 - `[ ]` Consistent latency preferred over jitter [M]
-- `[ ]` Driver timestamps on input; record what is heard when monitoring by adding buffer-based delay [M]
+- `[~]` Driver timestamps on input; record what is heard when monitoring by adding buffer-based delay [M]
 - `[ ]` Timestamped output scheduling; internal scheduling where MME lacks timestamps [M]
 - `[ ]` Keep capturing MIDI through audio dropouts [M]
 - `[ ]` Published rig: split MIDI to a zero-latency MIDI-to-audio path; 36 configurations; most events ±1 ms; rare outliers to ±11 ms [M]
@@ -1328,7 +1328,6 @@ Requirement: Cmd+Shift+F, Cmd+Shift+E, Cmd+I, Cmd+E and Z/X all change meaning b
 Shortcuts declared in the keymap that do nothing yet, by milestone. This list is generated from `crates/rlive-app/src/ui/keymap/bindings.rs`.
 
 <!-- pending-shortcuts:begin -->
-- `[ ]` **A11:** Arm recording in Arrangement; Record to Session View
 - `[ ]` **A12:** Bounce to new track; Freeze or unfreeze tracks; Paste bounced audio
 - `[ ]` **A14:** Focus Groove Pool; Hide/show Groove Pool
 - `[ ]` **A17:** Hide/show plug-in windows; Keep several plug-in windows open

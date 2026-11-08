@@ -1,6 +1,7 @@
 use crate::defaults::is_default;
 use crate::id_walk::walk_ids;
 use crate::migrate;
+use crate::recording::{MetronomeOptions, RecordQuantize};
 use crate::{
     Arrangement, Clip, ClipContent, Device, DeviceKind, ExternalRoute, FileRef, GroovePool,
     KeyMapping, MidiMapping, NoteData, Scene, Track, TrackKind, Tuning,
@@ -107,6 +108,15 @@ pub struct Project {
     /// Tracks with input monitoring on skip compensation for the lowest possible latency.
     #[serde(default, skip_serializing_if = "is_default")]
     pub reduced_latency_when_monitoring: bool,
+    /// The metronome's menu.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub metronome_options: MetronomeOptions,
+    /// New MIDI takes are snapped to this grid as they are recorded.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub record_quantize: RecordQuantize,
+    /// MIDI recorded into the Arrangement mixes with what is there, rather than replacing it.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub midi_arrangement_overdub: bool,
 }
 
 impl Default for Project {
@@ -184,6 +194,9 @@ impl Project {
             solo_in_place: true,
             delay_compensation: true,
             reduced_latency_when_monitoring: false,
+            metronome_options: MetronomeOptions::default(),
+            record_quantize: RecordQuantize::default(),
+            midi_arrangement_overdub: false,
         }
     }
 

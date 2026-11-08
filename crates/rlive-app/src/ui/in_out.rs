@@ -223,8 +223,24 @@ fn monitor_row(ui: &mut egui::Ui, session: &mut Session, state: &UiState, id: Tr
         let resp =
             widgets::state_button(&mut child, r.size(), monitor == mode, pal().accent, label);
         hovered |= resp.hovered();
-        if info(resp, "Monitor — when this track's input is heard").clicked() {
+        let resp = info(resp, "Monitor — when this track's input is heard");
+        if resp.clicked() {
             session.set_monitor(&targets(state, id), mode);
+        }
+        if mode != Monitor::Off {
+            resp.context_menu(|ui| {
+                let keep = session
+                    .project
+                    .track(id)
+                    .is_some_and(|t| t.keep_monitor_latency);
+                if ui
+                    .selectable_label(keep, "Keep Monitoring Latency in Recorded Audio")
+                    .clicked()
+                {
+                    session.set_keep_monitor_latency(&targets(state, id), !keep);
+                    ui.close();
+                }
+            });
         }
     }
     let delete =

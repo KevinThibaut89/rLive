@@ -210,6 +210,33 @@ fn grid_label(g: u64) -> String {
     }
 }
 
+/// Step recording: with the track armed and the transport stopped, the arrow keys step the insert
+/// marker by the grid and write or take back whichever keys are held.
+fn step_record_keys(ui: &egui::Ui, session: &mut Session, state: &mut UiState, cref: ClipRef) {
+    if session.is_playing() || ui.ctx().text_edit_focused() {
+        return;
+    }
+    if !session.project.track(cref.track()).is_some_and(|t| t.arm) {
+        return;
+    }
+    let (right, left) = ui.input(|i| {
+        (
+            i.key_pressed(egui::Key::ArrowRight),
+            i.key_pressed(egui::Key::ArrowLeft),
+        )
+    });
+    let ps = &mut state.piano;
+    if !ps.selected.is_empty() {
+        return;
+    }
+    let at = ps.insert_tick.unwrap_or(0);
+    if right {
+        ps.insert_tick = Some(session.step_forward(cref, at, ps.grid));
+    } else if left {
+        ps.insert_tick = Some(session.step_back(cref, at, ps.grid));
+    }
+}
+
 pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let Some(cref) = state.selected_clip else {
         return;
@@ -416,6 +443,7 @@ fn note_editor(
         Pos2::new(grid.left(), grid.bottom()),
     );
 
+    step_record_keys(ui, session, state, cref);
     let ps = &mut state.piano;
     // Fit the clip to the width the first time it is shown.
     let beats = clip.length as f32 / PPQ as f32;

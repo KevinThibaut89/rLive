@@ -1,6 +1,7 @@
 //! Tracks, device chains and the mixer stage.
 #![allow(clippy::vec_box)]
 
+use crate::capture::{CaptureSink, SlotRec};
 use crate::clip::{BlockTime, ClipData, ClipPlayer, Pending};
 use crate::delay::{offer_line, FadingDelay, StereoLine, TapLines};
 use crate::graph::{BusIn, InputGate, Tap, TrackIo};
@@ -1017,6 +1018,18 @@ pub struct TrackNode {
     cue_gain: GainStage,
     /// This track's crossfader gain at the current control step.
     crossfade_gain: f32,
+    /// Where this track's take goes, while it has one.
+    pub(crate) capture: Option<Box<CaptureSink>>,
+    /// The Session slot this track is recording into.
+    pub(crate) slot_rec: Option<SlotRec>,
+    /// Notes played on this track go into its playing clip.
+    pub(crate) overdub: bool,
+    /// The track's Arrangement clips stay silent under a take.
+    pub(crate) lane_muted: bool,
+    /// A MIDI take replaces what's on the timeline, rather than overdubbing it.
+    pub(crate) replacing: bool,
+    /// The track is resampling: its own output stays out of what it records.
+    pub(crate) silenced: bool,
 }
 
 impl TrackNode {
@@ -1072,6 +1085,12 @@ impl TrackNode {
             cue_on: false,
             cue_gain: GainStage::new(max_block),
             crossfade_gain: 1.0,
+            capture: None,
+            slot_rec: None,
+            overdub: false,
+            lane_muted: false,
+            replacing: false,
+            silenced: false,
         }
     }
 
@@ -1138,7 +1157,7 @@ impl TrackNode {
         self.direct.clear();
 
         if transport.playing {
-            if self.follow {
+            if self.follow && !self.lane_muted {
                 // A launch due in this block ends the lane at its launch point.
                 let launch_at = match self.player.pending {
                     Some(Pending::Launch { at, .. }) if at < time.t1() => Some(at.max(time.t0)),
@@ -1261,7 +1280,7 @@ impl TrackNode {
             InputGate::Always => true,
             InputGate::WhenIdle => {
                 self.player.playing.is_none()
-                    && !(self.follow && self.lane.current_clip().is_some())
+                    && !(self.follow && !self.lane_muted && self.lane.current_clip().is_some())
             }
         }
     }

@@ -94,6 +94,16 @@ pub fn time_maps(project: &Project) -> TimeMaps {
     }
 }
 
+/// The engine's copy of the metronome's menu.
+pub(super) fn metronome_config(project: &Project) -> rlive_engine::MetronomeConfig {
+    let o = project.metronome_options;
+    rlive_engine::MetronomeConfig {
+        sound: o.sound.index(),
+        division: o.division.ticks(),
+        only_while_recording: o.only_while_recording,
+    }
+}
+
 /// A tempo map only ramps linearly, so a curved segment becomes a run of short ones.
 fn tempo_points(points: &[Breakpoint]) -> Vec<TempoPoint> {
     let mut out = Vec::with_capacity(points.len());
@@ -469,11 +479,12 @@ impl Builder<'_> {
         Some(Arc::new(match &clip.content {
             ClipContent::Midi { notes, .. } => {
                 // Deactivated notes never reach the engine.
+                // Only what's inside the loop plays: a captured clip keeps earlier notes before it.
                 let notes: Vec<Note> = notes
                     .iter()
-                    .filter(|n| !n.muted)
+                    .filter(|n| !n.muted && n.start >= clip.loop_start)
                     .map(|n| Note {
-                        start: n.start,
+                        start: n.start - clip.loop_start,
                         length: n.length,
                         key: n.key,
                         velocity: n.velocity,

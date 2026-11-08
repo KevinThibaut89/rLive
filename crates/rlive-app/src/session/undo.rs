@@ -299,6 +299,9 @@ impl Session {
             solo_in_place,
             delay_compensation,
             reduced_latency_when_monitoring,
+            metronome_options,
+            record_quantize,
+            midi_arrangement_overdub,
         } = shell;
         let mut commands = Vec::new();
         let p = &mut self.project;
@@ -327,6 +330,9 @@ impl Session {
         p.solo_in_place = *solo_in_place;
         p.delay_compensation = *delay_compensation;
         p.reduced_latency_when_monitoring = *reduced_latency_when_monitoring;
+        p.metronome_options = *metronome_options;
+        p.record_quantize = *record_quantize;
+        p.midi_arrangement_overdub = *midi_arrangement_overdub;
         for c in commands {
             self.send(EngineCommand::Transport(c));
         }

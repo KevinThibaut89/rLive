@@ -9,6 +9,11 @@ super::domain! {
         PlayStop,
         Continue,
         Record,
+        RecordInverted,
+        SessionRecord,
+        NewTake,
+        CaptureMidi,
+        ToggleMidiOverdub,
         BackToArrangement,
         ToggleMetronome,
         InsertMarkerToStart,
@@ -32,7 +37,20 @@ impl RliveApp {
                 }
             }
             Transport::Continue => self.session.play(),
-            Transport::Record => self.toggle_recording(),
+            Transport::Record => self.toggle_recording(false),
+            Transport::RecordInverted => self.toggle_recording(true),
+            Transport::SessionRecord => self.session_record(),
+            Transport::NewTake => {
+                let from = self.selected_scene();
+                if let Some(scene) = self.session.new_take(from) {
+                    self.select_scene(scene);
+                }
+            }
+            Transport::CaptureMidi => self.capture_midi(),
+            Transport::ToggleMidiOverdub => {
+                let on = !self.session.project.midi_arrangement_overdub;
+                self.session.set_midi_arrangement_overdub(on);
+            }
             Transport::BackToArrangement => self.session.back_to_arrangement(),
             Transport::ToggleMetronome => {
                 self.session.set_metronome(!self.session.project.metronome)

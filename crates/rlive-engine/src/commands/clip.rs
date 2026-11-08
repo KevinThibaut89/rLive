@@ -1,5 +1,6 @@
 //! Replacing clip content.
 
+use crate::clip::{AudioCursor, Playing, SESSION_VOICE};
 use crate::{retire, ArrangementLane, ClipData, Engine, Garbage};
 use rlive_core::TrackId;
 use std::sync::Arc;
@@ -53,6 +54,18 @@ impl Engine {
                                 t.player.release_all(0, &mut t.live);
                             }
                         }
+                    }
+                }
+                // A recording closed before its clip was ready: it starts now, in position.
+                if let (Some((want, at)), Some(new)) = (t.player.late, &clip) {
+                    if want == slot {
+                        t.player.late = None;
+                        t.player.playing = Some(Playing {
+                            slot,
+                            clip: new.clone(),
+                            start_tick: at,
+                            audio: AudioCursor::new(SESSION_VOICE),
+                        });
                     }
                 }
                 if let Some(old) = std::mem::replace(entry, clip) {

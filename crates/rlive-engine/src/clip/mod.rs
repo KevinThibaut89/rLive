@@ -7,9 +7,9 @@ mod following_tests;
 mod launcher;
 mod midi;
 
-pub(crate) use audio::{AudioCursor, LANE_VOICE};
+pub(crate) use audio::{AudioCursor, LANE_VOICE, SESSION_VOICE};
 pub use data::{AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, WarpedClip};
-pub(crate) use launcher::{ClipPlayer, Pending};
+pub(crate) use launcher::{ClipPlayer, Pending, Playing};
 pub(crate) use midi::{chase, Voices};
 
 use audio::render_audio;

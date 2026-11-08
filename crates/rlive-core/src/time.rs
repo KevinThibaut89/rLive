@@ -430,6 +430,18 @@ pub struct Beat {
     n: u64,
 }
 
+impl Beat {
+    /// A beat placed by hand, for clicks that don't follow the denominator's grid.
+    pub fn at(tick: f64, downbeat: bool) -> Self {
+        Self {
+            tick,
+            downbeat,
+            seg: 0,
+            n: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct BarSeg {
     tick: f64,

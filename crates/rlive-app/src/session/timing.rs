@@ -244,6 +244,11 @@ impl Timing {
         slots
     }
 
+    /// How long a track's own chain takes, in frames.
+    pub(super) fn own_latency(&self, track: usize) -> u32 {
+        self.own.get(track).copied().unwrap_or(0)
+    }
+
     /// Whether a device is known to be an instrument, once it has been built.
     pub(super) fn instrument(&self, device: &Device) -> Option<bool> {
         self.instruments.get(&device.id).copied()

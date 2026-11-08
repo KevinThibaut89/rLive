@@ -449,6 +449,14 @@ fn paint_clips(
                 rect,
             });
         }
+        if let Some(from) = session.take_recording_from(t.id) {
+            let now = session.engine.shared.tick.load();
+            let bar = Rect::from_min_max(
+                Pos2::new(axis.x(from).max(lanes.left()), lane.top() + 1.0),
+                Pos2::new(axis.x(now).min(lanes.right()), lane.bottom() - 1.0),
+            );
+            p.rect_filled(bar, 0.0, pal().arm_red.linear_multiply(0.4));
+        }
     }
     hits
 }
@@ -1730,8 +1738,9 @@ fn track_header(
                 icons::record,
             );
             if info(r, "Arm — record onto this track (Cmd-click to arm several)").clicked() {
-                let exclusive = !bu.input(|i| i.modifiers.command);
+                let exclusive = session.record.exclusive_arm && !bu.input(|i| i.modifiers.command);
                 session.set_arm(id, !arm, exclusive);
+                state.selected = Some(ChainRef::Track(id));
             }
         }
     }

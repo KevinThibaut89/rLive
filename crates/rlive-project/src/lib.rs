@@ -13,6 +13,7 @@ mod id_walk;
 mod mapping;
 mod migrate;
 mod project;
+mod recording;
 mod routing;
 mod scene;
 mod track;
@@ -36,6 +37,7 @@ pub use groove::{Groove, GroovePool, Tuning};
 pub use id_walk::walk_ids;
 pub use mapping::{CcEncoding, KeyMapping, MapTarget, MidiMapping, MidiSource};
 pub use project::{Crossfader, Project, ProjectError, FILE_EXTENSION, FORMAT_VERSION, PALETTE};
+pub use recording::{BeatDivision, MetronomeOptions, MetronomeSound, RecordQuantize};
 pub use routing::SEND_OFF_DB;
 pub use scene::Scene;
 pub use track::{

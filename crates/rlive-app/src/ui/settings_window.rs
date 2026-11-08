@@ -8,9 +8,10 @@ use super::theme::{pal, Appearance, ThemeName, ThemeSettings, Tone};
 use super::{sample_editor, session_view, widgets, RliveApp};
 use crate::audio;
 use crate::midi_input::{self, MidiInput};
-use crate::session::{ShortSampleMode, WarpDefaults};
-use crate::settings::{ChannelBank, ClipColor, ScrollBars};
+use crate::session::ShortSampleMode;
+use crate::settings::{ChannelBank, ClipColor, InputDevice, ScrollBars, Settings};
 use egui::{Color32, RichText, Sense, Stroke, StrokeKind, Vec2};
+use rlive_audio_io::{BitDepth, FileType};
 use rlive_project::WarpMode;
 
 /// A page of the Settings window.
@@ -137,9 +138,7 @@ impl RliveApp {
                             Tab::FileFolder => self.file_folder_tab(ui),
                             Tab::Library => self.library_tab(ui),
                             Tab::PlugIns => self.plugins_tab(ui),
-                            Tab::RecordWarpLaunch => {
-                                record_warp_launch_tab(ui, &mut self.settings.warp)
-                            }
+                            Tab::RecordWarpLaunch => record_warp_launch_tab(ui, &mut self.settings),
                             Tab::Licenses => licenses_tab(ui),
                         });
                     });
@@ -343,9 +342,41 @@ impl RliveApp {
             .unwrap_or_else(|| "System default".into());
         let mut choice = self.settings.audio_device.clone();
         let mut refresh = false;
+        let mut input_changed = false;
         grid(ui, "audio", |ui| {
             soon(ui, "Driver Type", "Default", "A5");
-            soon(ui, "Audio Input Device", "None", "A11");
+            label(ui, "Audio Input Device");
+            let names = self
+                .ui
+                .audio_inputs
+                .get_or_insert_with(crate::audio::input_device_names)
+                .clone();
+            let shown = match &self.settings.audio_input {
+                InputDevice::None => "None".to_string(),
+                InputDevice::SystemDefault => "System default".to_string(),
+                InputDevice::Named(name) => name.clone(),
+            };
+            let before = self.settings.audio_input.clone();
+            egui::ComboBox::from_id_salt("audio_in")
+                .width(200.0)
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.settings.audio_input, InputDevice::None, "None");
+                    ui.selectable_value(
+                        &mut self.settings.audio_input,
+                        InputDevice::SystemDefault,
+                        "System default",
+                    );
+                    for name in names {
+                        ui.selectable_value(
+                            &mut self.settings.audio_input,
+                            InputDevice::Named(name.clone()),
+                            name,
+                        );
+                    }
+                });
+            ui.end_row();
+            input_changed = self.settings.audio_input != before;
             label(ui, "Audio Output Device");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_id_salt("audio_dev")
@@ -367,8 +398,9 @@ impl RliveApp {
         });
         if refresh {
             self.ui.audio_devices = None;
+            self.ui.audio_inputs = None;
         }
-        if choice != self.settings.audio_device {
+        if choice != self.settings.audio_device || input_changed {
             self.settings.audio_device = choice;
             self.settings.save();
             self.restart_audio();
@@ -499,7 +531,25 @@ impl RliveApp {
             ui.checkbox(&mut samples.create_analysis_files, "");
             ui.end_row();
             soon(ui, "Sample Editor", "None", "C13");
-            soon(ui, "Temporary Folder", "Default", "A11");
+            label(ui, "Temporary Folder");
+            ui.horizontal(|ui| {
+                let shown = self
+                    .settings
+                    .record
+                    .temp_folder
+                    .as_ref()
+                    .map_or_else(|| "Default".to_string(), |p| p.display().to_string());
+                ui.label(shown);
+                if ui.small_button("Browse").clicked() {
+                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                        self.settings.record.temp_folder = Some(folder);
+                    }
+                }
+                if ui.small_button("Reset").clicked() {
+                    self.settings.record.temp_folder = None;
+                }
+            });
+            ui.end_row();
         });
         ui.add_space(10.0);
         widgets::section_label(ui, "DECODING CACHE");
@@ -674,14 +724,38 @@ fn link_tab(ui: &mut egui::Ui) {
     });
 }
 
-fn record_warp_launch_tab(ui: &mut egui::Ui, warp: &mut WarpDefaults) {
+fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
+    let warp = &mut settings.warp;
+    let record = &mut settings.record;
     widgets::section_label(ui, "RECORD");
     grid(ui, "record", |ui| {
-        soon(ui, "File Type", "WAV", "A11");
-        soon(ui, "Bit Depth", "24", "A11");
-        soon(ui, "Count-In", "None", "A11");
-        soon_check(ui, "Start Recording on Scene Launch", false, "A11");
-        soon_check(ui, "Exclusive Arm", true, "A11");
+        label(ui, "File Type");
+        egui::ComboBox::from_id_salt("record_file_type")
+            .selected_text(record.file_type.label())
+            .show_ui(ui, |ui| {
+                for kind in FileType::ALL {
+                    ui.selectable_value(&mut record.file_type, kind, kind.label());
+                }
+            });
+        ui.end_row();
+        label(ui, "Bit Depth");
+        egui::ComboBox::from_id_salt("record_bit_depth")
+            .selected_text(record.bit_depth.label())
+            .show_ui(ui, |ui| {
+                for depth in BitDepth::ALL {
+                    ui.selectable_value(&mut record.bit_depth, depth, depth.label());
+                }
+            });
+        ui.end_row();
+        label(ui, "Start Playback with Record");
+        ui.checkbox(&mut record.start_playback_with_record, "");
+        ui.end_row();
+        label(ui, "Start Recording on Scene Launch");
+        ui.checkbox(&mut record.start_recording_on_scene_launch, "");
+        ui.end_row();
+        label(ui, "Exclusive Arm");
+        ui.checkbox(&mut record.exclusive_arm, "");
+        ui.end_row();
         soon_check(ui, "Exclusive Solo", true, "A1");
     });
     ui.add_space(10.0);

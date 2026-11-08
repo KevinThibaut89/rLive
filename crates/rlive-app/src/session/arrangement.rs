@@ -201,5 +201,6 @@ impl Session {
             .loop_enabled
             .then_some((a.loop_start as f64, a.loop_end as f64));
         self.send(EngineCommand::Transport(TransportCmd::SetLoop(range)));
+        self.send_punch();
     }
 }

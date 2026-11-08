@@ -280,6 +280,7 @@ fn track_shell(t: &Track) -> Track {
         bypass_tuning: t.bypass_tuning,
         automation: Vec::new(),
         take_lanes: Vec::new(),
+        keep_monitor_latency: t.keep_monitor_latency,
         info: t.info.clone(),
         ui: TrackUi::default(),
     }
@@ -368,6 +369,9 @@ pub fn capture(project: &Project, prev: Option<&Snapshot>) -> (Snapshot, usize) 
         solo_in_place: project.solo_in_place,
         delay_compensation: project.delay_compensation,
         reduced_latency_when_monitoring: project.reduced_latency_when_monitoring,
+        metronome_options: project.metronome_options,
+        record_quantize: project.record_quantize,
+        midi_arrangement_overdub: project.midi_arrangement_overdub,
     };
     let snapshot = Snapshot {
         shell: share(

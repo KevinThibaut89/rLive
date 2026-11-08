@@ -8,6 +8,7 @@ use super::timing::{bus_shape, buses_op, compensation_ops, RuntimeLatency, Timin
 use super::Session;
 use rlive_core::{CrossfadeCurve, DeviceId, TrackId};
 use rlive_devices::DeviceRole;
+use rlive_engine::capture::InputSource;
 use rlive_engine::{
     mix_cell, BusIn, BusRead, EngineCommand, GraphOp, GraphTxn, HardwareOut, InputGate, MidiRoute,
     OutputPair, RackOuts, RenderPlan, SidechainIn, Step, Tap as EngineTap, TapOut, TrackIo,
@@ -582,6 +583,7 @@ pub(super) fn compile_with(project: &Project, timing: &Timing) -> RenderPlan {
             own_delay: 0,
         })
         .collect();
+    let input_sources = all.iter().map(|t| input_source(t)).collect();
     let aligned = timing.align(&mut steps, &mut sc_inputs, &mut hardware, &mut io, master);
     let groups = all
         .iter()
@@ -627,6 +629,27 @@ pub(super) fn compile_with(project: &Project, timing: &Timing) -> RenderPlan {
         solo_in_place: project.solo_in_place,
         click_delay: aligned.click_delay,
         output_latency: aligned.output_latency,
+        inputs: input_sources,
+    }
+}
+
+/// Where an audio track takes its input. The caller decides whether it is heard.
+fn input_source(t: &Track) -> InputSource {
+    if t.kind != TrackKind::Audio {
+        return InputSource::None;
+    }
+    match &t.routing.input {
+        Route::External(ExternalRoute::Audio { channel, stereo }) => InputSource::Hardware {
+            channel: *channel,
+            stereo: *stereo,
+        },
+        // An audio track's default input is the first external input, in mono (manual p. 412).
+        Route::Default => InputSource::Hardware {
+            channel: 0,
+            stereo: false,
+        },
+        Route::Resampling => InputSource::Main,
+        _ => InputSource::None,
     }
 }
 

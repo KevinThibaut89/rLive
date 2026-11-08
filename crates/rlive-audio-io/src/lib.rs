@@ -11,6 +11,7 @@ pub mod decoding_cache;
 pub mod fingerprint;
 pub mod peaks;
 pub mod sample_cache;
+pub mod writer;
 
 pub use analysis::{Analysis, AnalysisExtras};
 pub use decode::{probe, AudioInfo, DecodeError, DecodedAudio, Decoder};
@@ -18,6 +19,7 @@ pub use decoding_cache::{CacheConfig, Cleanup, DecodingCache, Stored};
 pub use fingerprint::{fingerprint, Fingerprint};
 pub use peaks::Peaks;
 pub use sample_cache::{LoaderConfig, SampleCache, SampleEvent, SampleStatus};
+pub use writer::{AudioWriter, BitDepth, FileType};
 
 /// The file extensions the decoders are built for.
 pub const AUDIO_EXTENSIONS: &[&str] = &[

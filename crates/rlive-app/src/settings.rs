@@ -2,7 +2,7 @@
 
 use crate::session::WarpDefaults;
 use crate::ui::theme::ThemeSettings;
-use rlive_audio_io::{CacheConfig, LoaderConfig};
+use rlive_audio_io::{BitDepth, CacheConfig, FileType, LoaderConfig};
 use rlive_project::{ExternalRoute, Project, PALETTE};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -218,10 +218,51 @@ pub struct DeviceChannels {
     pub outputs: ChannelBank,
 }
 
+/// Which input device rLive listens to.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum InputDevice {
+    /// Nothing: no stream is opened, so the system never asks about the microphone.
+    #[default]
+    None,
+    SystemDefault,
+    Named(String),
+}
+
+/// The Record, Warp & Launch settings that shape recording.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecordSettings {
+    pub file_type: FileType,
+    pub bit_depth: BitDepth,
+    /// Pressing Record starts playback; Shift inverts it.
+    pub start_playback_with_record: bool,
+    /// Launching a scene records into its empty slots on armed tracks.
+    pub start_recording_on_scene_launch: bool,
+    /// Arming a track disarms the others unless Cmd is held.
+    pub exclusive_arm: bool,
+    /// Where recordings go until the Set is saved; `None` is a folder in the system's.
+    pub temp_folder: Option<PathBuf>,
+}
+
+impl Default for RecordSettings {
+    fn default() -> Self {
+        Self {
+            file_type: FileType::default(),
+            bit_depth: BitDepth::default(),
+            start_playback_with_record: true,
+            start_recording_on_scene_launch: false,
+            exclusive_arm: true,
+            temp_folder: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub audio_device: Option<String>,
+    /// The device audio is recorded from. Off until someone picks one.
+    pub audio_input: InputDevice,
     /// Channel Configuration, by audio device name.
     pub audio_channels: BTreeMap<String, DeviceChannels>,
     pub midi_input: Option<String>,
@@ -239,12 +280,14 @@ pub struct Settings {
     pub scroll_bars: ScrollBars,
     pub samples: SampleSettings,
     pub warp: WarpDefaults,
+    pub record: RecordSettings,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             audio_device: None,
+            audio_input: InputDevice::None,
             audio_channels: BTreeMap::new(),
             midi_input: None,
             sample_dir: None,
@@ -259,6 +302,7 @@ impl Default for Settings {
             scroll_bars: ScrollBars::default(),
             samples: SampleSettings::default(),
             warp: WarpDefaults::default(),
+            record: RecordSettings::default(),
         }
     }
 }
@@ -355,6 +399,15 @@ mod tests {
                     },
                 },
             )]),
+            audio_input: InputDevice::Named("Line In".into()),
+            record: RecordSettings {
+                file_type: FileType::Aiff,
+                bit_depth: BitDepth::Bits16,
+                start_playback_with_record: false,
+                start_recording_on_scene_launch: true,
+                exclusive_arm: false,
+                temp_folder: Some(PathBuf::from("/tmp/recordings")),
+            },
             midi_input: Some("Keys".into()),
             sample_dir: Some(PathBuf::from("/samples")),
             plugin_dirs: vec![PathBuf::from("/plugins")],

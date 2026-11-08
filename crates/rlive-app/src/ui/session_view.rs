@@ -524,6 +524,12 @@ fn track_column(
     let queued_slot = shared
         .as_ref()
         .map_or(NO_SLOT, |s| s.queued_slot.load(Ordering::Relaxed));
+    let recording_slot = session.recording_slot(id);
+    let rec_queued = shared
+        .as_ref()
+        .map(|s| s.record_queued_slot.load(Ordering::Relaxed))
+        .filter(|s| *s != NO_SLOT)
+        .map(|s| s as usize);
     let position = shared.as_ref().map_or(0.0, |s| s.clip_position.load());
     let selected = state.selected == Some(ChainRef::Track(id));
     let has_rack_mixer = rack_mixer::track_has_mixer(&t.devices);
@@ -709,6 +715,7 @@ fn track_column(
         let over_launch = resp.hover_pos().is_some_and(|pos| launch.contains(pos));
         let is_playing = playing_slot == slot as i32;
         let is_queued = queued_slot == slot as i32;
+        let recording_here = recording_slot == Some(slot);
         let waiting_for_sample = session.clip_waiting_for_sample(id, slot);
 
         match &clip_info {
@@ -779,7 +786,17 @@ fn track_column(
                 } else {
                     shade(0x6a6a6a)
                 };
-                if arm {
+                if recording_here {
+                    p.rect_filled(rect, 0.0, shade(0x6a2020));
+                    icons::record(&p, launch.shrink(2.0), pal().arm_red);
+                } else if rec_queued == Some(slot) {
+                    let color = if blink {
+                        pal().arm_red
+                    } else {
+                        shade(0x8a4a4a)
+                    };
+                    icons::record_ring(&p, launch, color);
+                } else if arm {
                     icons::record_ring(
                         &p,
                         launch,
@@ -807,8 +824,13 @@ fn track_column(
             state.selected = Some(ChainRef::Track(id));
             state.group_slot = None;
             if over_launch {
+                let queued = rec_queued == Some(slot);
                 if clip_info.is_some() {
                     session.launch_clip(id, slot);
+                } else if recording_here || queued {
+                    session.close_slot_recording(id);
+                } else if arm {
+                    session.record_slot(id, slot);
                 } else {
                     session.stop_track(id);
                 }
@@ -823,7 +845,14 @@ fn track_column(
             }
         }
         if resp.double_clicked() && !over_launch {
-            if clip_info.is_none() && kind == TrackKind::Midi {
+            let alt = ui.input(|i| i.modifiers.alt);
+            if clip_info.is_none() && kind == TrackKind::Midi && alt {
+                session.create_arm_and_launch(id, slot);
+                state.selected_clip = Some(ClipRef::slot(id, slot));
+                state.detail = Detail::Clip;
+                state.show_detail = true;
+                state.piano.reset_view = true;
+            } else if clip_info.is_none() && kind == TrackKind::Midi {
                 let color = session.new_clip_color(id);
                 let c = Clip::new_midi("MIDI Clip", color, 1, session.project.time_signature);
                 session.set_clip(id, slot, Some(c));
@@ -1304,14 +1333,17 @@ fn mixer_strip(
             pal().arm_red,
             icons::record,
         );
-        if info(
-            r,
-            "Arm — route MIDI input to this track (Cmd-click to arm several)",
-        )
-        .clicked()
-        {
-            let exclusive = !bu.input(|i| i.modifiers.command);
-            session.set_arm(id, !arm, exclusive);
+        if info(r, "Arm — record onto this track (Cmd-click to arm several)").clicked() {
+            let exclusive = session.record.exclusive_arm && !bu.input(|i| i.modifiers.command);
+            let selection = if state.selected_tracks.contains(&id) {
+                state.selected_tracks.clone()
+            } else {
+                vec![id]
+            };
+            for (i, track) in selection.iter().enumerate() {
+                session.set_arm(*track, !arm, exclusive && i == 0);
+            }
+            state.selected = Some(ChainRef::Track(id));
         }
     }
 

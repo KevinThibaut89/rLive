@@ -40,6 +40,11 @@ impl Pending {
 pub(crate) struct ClipPlayer {
     pub playing: Option<Playing>,
     pub pending: Option<Pending>,
+    /// The next launch, if its clip isn't there, waits for it rather than doing nothing.
+    pub hold_for_arrival: bool,
+    /// A launch whose clip hadn't arrived when its time came, as `(slot, song tick of position 0)`.
+    /// The clip starts from wherever that puts it the moment it does.
+    pub late: Option<(usize, f64)>,
     voices: Voices,
 }
 
@@ -48,6 +53,8 @@ impl ClipPlayer {
         Self {
             playing: None,
             pending: None,
+            hold_for_arrival: false,
+            late: None,
             voices: Voices::new(NoteSpace::Session),
         }
     }
@@ -82,6 +89,7 @@ impl ClipPlayer {
                 if let Some(old) = self.playing.take() {
                     retired(old.clip);
                 }
+                self.late = None;
                 if let Pending::Launch { slot, .. } = p {
                     if let Some(Some(clip)) = slots.get(slot) {
                         self.playing = Some(Playing {
@@ -90,8 +98,11 @@ impl ClipPlayer {
                             start_tick: at,
                             audio: AudioCursor::new(SESSION_VOICE),
                         });
+                    } else if self.hold_for_arrival {
+                        self.late = Some((slot, at));
                     }
                 }
+                self.hold_for_arrival = false;
                 self.pending = None;
                 seg_start = at;
             }

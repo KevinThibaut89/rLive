@@ -234,6 +234,12 @@ pub struct Track {
     pub automation: Vec<Envelope>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub take_lanes: Vec<TakeLane>,
+    /// Keep the monitoring path's timing in what is recorded, so it lands where it was heard.
+    #[serde(
+        default = "crate::defaults::yes",
+        skip_serializing_if = "crate::defaults::is_true"
+    )]
+    pub keep_monitor_latency: bool,
     /// The user's info text.
     #[serde(default, skip_serializing_if = "is_default")]
     pub info: String,
@@ -266,6 +272,7 @@ impl Track {
             bypass_tuning: false,
             automation: Vec::new(),
             take_lanes: Vec::new(),
+            keep_monitor_latency: true,
             info: String::new(),
             ui: TrackUi::default(),
         }

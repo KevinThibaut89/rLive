@@ -7,6 +7,7 @@ mod arrangement;
 mod automation;
 pub mod automation_edit;
 mod build;
+mod capture;
 mod clips;
 mod devices;
 mod export;
@@ -18,6 +19,7 @@ mod racks;
 mod recording;
 mod routing;
 mod samples;
+mod takes;
 mod timing;
 mod tracks;
 mod transport;
@@ -43,6 +45,8 @@ mod routing_tests;
 #[cfg(test)]
 mod sample_tests;
 #[cfg(test)]
+mod takes_tests;
+#[cfg(test)]
 mod tests;
 
 pub use arrangement::{ArrMove, TrimEdge};
@@ -58,18 +62,22 @@ pub use racks::{ExtractNotes, MacroDisplay, ZoneKind};
 pub use rlive_audio_io::SampleCache;
 pub use warping::{ShortSampleMode, WarpDefaults, WarpView, LONG_SAMPLE_SECONDS};
 
+use crate::recording::capture_midi::CaptureBuffer;
+use crate::recording::disk::DiskWriter;
 use crate::recording::Recording;
-use crate::settings::ColorSettings;
+use crate::settings::{ColorSettings, RecordSettings};
 use rlive_core::{ChainId, DeviceId, PluginFormat, TrackId};
 use rlive_engine::shared::{ChainShared, TrackShared};
 use rlive_engine::{
-    BusLayout, CellIx, EngineCommand, EngineEvent, EngineHandle, GraphOp, ParamCmd, TrackRef,
-    TransportCmd, MAX_TRACKS,
+    BusLayout, CellIx, EngineCommand, EngineEvent, EngineHandle, GraphOp, ParamCmd, RecordCmd,
+    TrackRef, TransportCmd, MAX_TRACKS,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{HostNotification, PluginDescriptor};
 use rlive_project::history::History;
-use rlive_project::{Device, DeviceKind, Project, TrackKind};
+#[cfg(test)]
+use rlive_project::TrackKind;
+use rlive_project::{Device, DeviceKind, Project};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -94,7 +102,28 @@ pub struct Session {
     /// How new tracks and clips are coloured.
     pub colors: ColorSettings,
     pub warp_defaults: WarpDefaults,
+    /// The Record, Warp & Launch options that recording follows.
+    pub record: RecordSettings,
     recording: Option<Recording>,
+    disk: Option<DiskWriter>,
+    /// Audio takes in progress, by track.
+    takes: HashMap<TrackId, takes::AudioTake>,
+    /// Session takes that are waiting for the disk to catch up.
+    next_take: u64,
+    /// MIDI takes going into Session slots, by track.
+    slot_takes: HashMap<TrackId, takes::MidiSlotTake>,
+    /// Keys held on a track being overdubbed.
+    overdubs: takes::OverdubState,
+    /// The last few minutes of what was played on each armed or monitored track.
+    captures: HashMap<TrackId, CaptureBuffer>,
+    /// Keys held right now for step recording, by track.
+    step_keys: HashMap<TrackId, std::collections::BTreeMap<u8, f32>>,
+    /// Recorded files waiting for the Set to be saved.
+    temp_recordings: Vec<PathBuf>,
+    /// Audio the disk couldn't keep up with, in frames.
+    pub dropped_frames: u64,
+    /// How much a take's ring holds, in seconds of audio.
+    take_ring_seconds: f64,
     automation: automation::AutomationRecorder,
     /// The compensation the running plan was compiled for.
     timing: timing::Timing,
@@ -131,7 +160,18 @@ impl Session {
             history,
             colors: ColorSettings::default(),
             warp_defaults: WarpDefaults::default(),
+            record: RecordSettings::default(),
             recording: None,
+            disk: None,
+            takes: HashMap::new(),
+            next_take: 0,
+            slot_takes: HashMap::new(),
+            overdubs: takes::OverdubState::default(),
+            captures: HashMap::new(),
+            step_keys: HashMap::new(),
+            temp_recordings: Vec::new(),
+            dropped_frames: 0,
+            take_ring_seconds: takes::RING_SECONDS,
             automation: automation::AutomationRecorder::default(),
             timing: timing::Timing::default(),
             bus_shape: Vec::new(),
@@ -193,6 +233,7 @@ impl Session {
 
     /// Re-create every engine object from the project (load, new, sample-rate change).
     pub fn rebuild(&mut self) {
+        self.abandon_takes();
         self.recording = None;
         self.automation.abandon();
         self.capture_plugin_states();
@@ -232,6 +273,8 @@ impl Session {
             EngineCommand::Transport(TransportCmd::SetTimeMaps(Arc::new(build::time_maps(p)))),
             EngineCommand::Transport(TransportCmd::SetQuantize(p.quantize)),
             EngineCommand::Transport(TransportCmd::SetMetronome(p.metronome)),
+            EngineCommand::Transport(TransportCmd::SetMetronomeConfig(build::metronome_config(p))),
+            EngineCommand::Record(RecordCmd::SetCountIn(p.metronome_options.count_in)),
         ];
         for c in cmds {
             self.send(c);
@@ -307,6 +350,7 @@ impl Session {
         } else {
             path.to_path_buf()
         };
+        self.adopt_temp_recordings(&path);
         self.project.save(&path).map_err(|e| e.to_string())?;
         self.path = Some(path);
         self.commit_now();
@@ -322,6 +366,9 @@ impl Session {
         self.engine.collect_garbage();
         self.poll_samples();
         self.poll_preview();
+        while let Some(note) = self.engine.poll_played() {
+            self.played_midi(note);
+        }
         while let Some(ev) = self.engine.poll_event() {
             match ev {
                 EngineEvent::ParamChanged {
@@ -341,14 +388,34 @@ impl Session {
                     track,
                     tick,
                     message,
-                } => {
-                    let armed = self
-                        .project
-                        .track(track)
-                        .is_some_and(|t| t.arm && t.kind == TrackKind::Midi);
-                    if let (true, Some(r)) = (armed, self.recording.as_mut()) {
-                        r.message(track, tick, message);
-                    }
+                } => self.recorded_midi(track, tick, message),
+                EngineEvent::OverdubMidi {
+                    track,
+                    slot,
+                    position,
+                    tick,
+                    message,
+                } => self.overdub_midi(track, slot, position, tick, message),
+                EngineEvent::CaptureSegment {
+                    track,
+                    frame,
+                    tick,
+                    jump,
+                    ticks_per_frame,
+                } => self.capture_segment(track, frame, tick, jump, ticks_per_frame),
+                EngineEvent::CaptureClosed { track, frames } => self.capture_closed(track, frames),
+                EngineEvent::SlotRecordStarted { track, tick, .. } => {
+                    self.slot_record_started(track, tick)
+                }
+                EngineEvent::SlotClosing {
+                    track,
+                    slot,
+                    at,
+                    launch,
+                    frames,
+                } => self.slot_closing(track, slot, at, launch, frames),
+                EngineEvent::SlotRecordEnded { track, slot, tick } => {
+                    self.slot_record_ended(track, slot, tick)
                 }
                 EngineEvent::Jumped { from, to } => {
                     if let Some(r) = self.recording.as_mut() {
@@ -358,11 +425,7 @@ impl Session {
                     self.automation_jumped(from, to);
                 }
                 EngineEvent::RecordingStopped { tick } => {
-                    if let Some(r) = self.recording.as_mut() {
-                        r.finish(tick);
-                    }
-                    self.flush_recording();
-                    self.recording = None;
+                    self.recording_stopped(tick);
                     self.finish_automation_pass(tick);
                 }
                 EngineEvent::AutomationMoved {
@@ -413,6 +476,7 @@ impl Session {
                 HostNotification::EditorClosed => {}
             }
         }
+        self.poll_disk();
         self.follow_latency();
     }
 

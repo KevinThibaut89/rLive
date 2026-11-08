@@ -191,3 +191,40 @@ pub fn re_enable(p: &Painter, r: Rect, c: Color32) {
     );
     p.line_segment([Pos2::new(x - 5.0, y - 3.0), Pos2::new(x - 2.0, y)], stroke);
 }
+
+/// Session Record: a dot inside a square.
+pub fn session_record(p: &Painter, rect: Rect, color: Color32) {
+    let r = rect.shrink(rect.width().min(rect.height()) * 0.2);
+    p.rect_stroke(r, 1.0, Stroke::new(1.2, color), egui::StrokeKind::Inside);
+    p.circle_filled(r.center(), r.width().min(r.height()) * 0.28, color);
+}
+
+/// Capture MIDI: a circle with a note inside.
+pub fn capture_midi(p: &Painter, rect: Rect, color: Color32) {
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.36;
+    p.circle_stroke(c, r, Stroke::new(1.2, color));
+    let head = c + Vec2::new(-1.0, r * 0.4);
+    p.circle_filled(head, r * 0.28, color);
+    p.line_segment(
+        [
+            head + Vec2::new(r * 0.26, 0.0),
+            head + Vec2::new(r * 0.26, -r * 1.05),
+        ],
+        Stroke::new(1.2, color),
+    );
+}
+
+/// The small downward arrow that opens a menu.
+pub fn menu_arrow(p: &Painter, rect: Rect, color: Color32) {
+    let c = rect.center();
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            c + Vec2::new(-3.0, -1.5),
+            c + Vec2::new(3.0, -1.5),
+            c + Vec2::new(0.0, 2.5),
+        ],
+        color,
+        Stroke::NONE,
+    ));
+}

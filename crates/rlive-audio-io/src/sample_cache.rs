@@ -178,6 +178,27 @@ impl SampleCache {
         self.status(path).expect("just inserted")
     }
 
+    /// Makes audio available under `path` without loading anything, for a take still being
+    /// finished. Called again it replaces what is there.
+    pub fn install(&mut self, path: &Path, buffer: Arc<SampleBuffer>) {
+        self.entries.insert(
+            path.to_path_buf(),
+            Entry {
+                state: State::Ready(buffer),
+                peaks: None,
+                fingerprint: None,
+                transients: None,
+            },
+        );
+    }
+
+    /// The file moved from `from` to `to`. Keeps what is known about it.
+    pub fn rename(&mut self, from: &Path, to: &Path) {
+        if let Some(entry) = self.entries.remove(from) {
+            self.entries.insert(to.to_path_buf(), entry);
+        }
+    }
+
     /// The state of `path`, if anyone has asked for it.
     pub fn status(&self, path: &Path) -> Option<SampleStatus> {
         Some(match &self.entries.get(path)?.state {

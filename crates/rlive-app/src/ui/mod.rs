@@ -112,6 +112,7 @@ pub struct UiState {
     pub request_scan: bool,
     /// Device lists are slow to enumerate; refreshed only when Preferences opens.
     audio_devices: Option<Vec<String>>,
+    audio_inputs: Option<Vec<String>>,
     midi_ports: Option<Vec<String>>,
     tap_times: Vec<f64>,
     /// The hardware channels the In/Out choosers offer, from the Channel Configuration.
@@ -148,6 +149,23 @@ const MENU_H: f32 = 22.0;
 const CONTROL_BAR_H: f32 = 34.0;
 const STATUS_H: f32 = 22.0;
 
+/// The count-in as negative bars, beats and sixteenths: `-2.1.1.` for two bars to go, up to
+/// `1.1.1.` when recording starts.
+fn count_in_label(left: f64, sig: rlive_core::TimeSignature) -> String {
+    let bar = sig.ticks_per_bar() as f64;
+    let beat = sig.ticks_per_beat() as f64;
+    let bars = (left / bar).ceil().max(1.0);
+    let elapsed = bars * bar - left;
+    let beat_n = (elapsed / beat).floor();
+    let sixteenth = ((elapsed - beat_n * beat) / (rlive_core::PPQ as f64 / 4.0)).floor();
+    format!(
+        "-{}.  {}.  {}",
+        bars as u32,
+        beat_n as u32 + 1,
+        sixteenth as u32 + 1
+    )
+}
+
 impl RliveApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
         theme::apply(&cc.egui_ctx);
@@ -155,7 +173,8 @@ impl RliveApp {
         theme::begin_frame(&cc.egui_ctx, &settings.theme);
         settings_window::apply_scroll_bars(&cc.egui_ctx, settings.scroll_bars);
         cc.egui_ctx.set_zoom_factor(settings.zoom());
-        let (audio, mut handle) = audio::start(settings.audio_device.as_deref());
+        let (audio, mut handle) =
+            audio::start(settings.audio_device.as_deref(), &settings.audio_input);
         let sender = handle.take_midi_sender();
         let plugins = PluginCache::load(&PluginCache::default_path());
         let mut session = Session::new(handle, Project::new_default(), plugins);
@@ -223,6 +242,7 @@ impl RliveApp {
             sample_files: Vec::new(),
             request_scan: false,
             audio_devices: None,
+            audio_inputs: None,
             midi_ports: None,
             tap_times: Vec::new(),
             hardware: AudioHardware::default(),
@@ -253,7 +273,10 @@ impl RliveApp {
     fn restart_audio(&mut self) {
         // Drop the old stream first so the device is free.
         self.audio = AudioOutput::stopped();
-        let (audio, mut handle) = audio::start(self.settings.audio_device.as_deref());
+        let (audio, mut handle) = audio::start(
+            self.settings.audio_device.as_deref(),
+            &self.settings.audio_input,
+        );
         *self.routing.sender.lock().unwrap() = handle.take_midi_sender();
         self.audio = audio;
         self.session.replace_engine(handle);
@@ -392,14 +415,54 @@ impl RliveApp {
         }
     }
 
-    fn toggle_recording(&mut self) {
+    /// The Arrangement Record button. `inverted` is Shift held: the opposite of the Start
+    /// Playback with Record preference.
+    fn toggle_recording(&mut self, inverted: bool) {
         if self.session.is_recording() {
             self.session.stop_recording();
-        } else if self.session.start_recording() {
+            return;
+        }
+        let started = if inverted {
+            self.session.start_recording_inverted()
+        } else {
+            self.session.start_recording()
+        };
+        if started {
             self.ui.main_view = MainView::Arrangement;
         } else {
-            self.ui.status = "Arm a MIDI track, or Automation Arm, to record".into();
+            self.ui.status = "Arm a track, or Automation Arm, to record".into();
         }
+    }
+
+    /// The scene Session recording and New work from: the selected clip's.
+    fn selected_scene(&self) -> usize {
+        self.ui
+            .selected_clip
+            .and_then(ClipRef::as_slot)
+            .map_or(0, |(_, slot)| slot)
+    }
+
+    /// Selects a scene by selecting a slot in it on the track already selected.
+    fn select_scene(&mut self, scene: usize) {
+        if let Some(track) = self
+            .ui
+            .selected_clip
+            .map(ClipRef::track)
+            .or_else(|| self.session.project.tracks.first().map(|t| t.id))
+        {
+            self.ui.selected_clip = Some(ClipRef::slot(track, scene));
+        }
+    }
+
+    fn session_record(&mut self) {
+        let scene = self.selected_scene();
+        self.session.session_record(scene);
+    }
+
+    fn capture_midi(&mut self) {
+        let arrangement = self.ui.main_view == MainView::Arrangement;
+        let scene = self.selected_scene();
+        self.session.capture_midi(arrangement, scene);
     }
 
     fn shutdown(&mut self) {
@@ -614,6 +677,33 @@ impl RliveApp {
         };
     }
 
+    /// The menu next to the metronome.
+    fn metronome_menu(&mut self, ui: &mut egui::Ui) {
+        let session = &mut self.session;
+        let mut o = session.project.metronome_options;
+        let sig = session.project.time_signature;
+        ui.label("Count-In");
+        for (bars, label) in [(0u8, "None"), (1, "1 Bar"), (2, "2 Bars"), (4, "4 Bars")] {
+            ui.selectable_value(&mut o.count_in, bars, label);
+        }
+        ui.separator();
+        ui.label("Sound");
+        for sound in rlive_project::MetronomeSound::ALL {
+            ui.selectable_value(&mut o.sound, sound, sound.label());
+        }
+        ui.separator();
+        ui.label("Rhythm");
+        for division in rlive_project::BeatDivision::ALL {
+            let fits = division.fits(sig);
+            ui.add_enabled_ui(fits, |ui| {
+                ui.selectable_value(&mut o.division, division, division.label());
+            });
+        }
+        ui.separator();
+        ui.checkbox(&mut o.only_while_recording, "Enable Only While Recording");
+        session.set_metronome_options(o);
+    }
+
     /// Live-style control bar: tempo & signature left, transport centre, status right.
     fn control_bar(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
@@ -692,6 +782,15 @@ impl RliveApp {
         if info(r, "Metronome — click on every beat while playing (O)").clicked() {
             self.session.set_metronome(!metro);
         }
+        let r = widgets::icon_button(
+            &mut lu,
+            Vec2::new(14.0, h),
+            false,
+            pal().accent,
+            icons::menu_arrow,
+        );
+        let r = info(r, "Metronome Settings — count-in, sound and beat division");
+        egui::Popup::menu(&r).show(|ui| self.metronome_menu(ui));
         let draw = self.ui.arr.auto.draw;
         let r = widgets::state_button(&mut lu, Vec2::new(38.0, h), draw, pal().accent, "Draw");
         if info(
@@ -747,11 +846,87 @@ impl RliveApp {
         );
         if info(
             r,
-            "Record — record MIDI onto armed tracks in the Arrangement (F9)",
+            "Arrangement Record — record onto armed tracks in the Arrangement (F9). Shift: the \
+             opposite of Start Playback with Record",
         )
         .clicked()
         {
-            self.toggle_recording();
+            let shift = cu.input(|i| i.modifiers.shift);
+            self.toggle_recording(shift);
+        }
+        let overdub = self.session.project.midi_arrangement_overdub;
+        let r = widgets::state_button(&mut cu, Vec2::new(22.0, h), overdub, pal().accent, "OD");
+        if info(
+            r,
+            "MIDI Arrangement Overdub — recorded MIDI mixes with what is already on the track",
+        )
+        .clicked()
+        {
+            self.session.set_midi_arrangement_overdub(!overdub);
+        }
+        let a = self.session.project.arrangement.clone();
+        let r = widgets::state_button(&mut cu, Vec2::new(22.0, h), a.punch_in, pal().accent, "In");
+        if info(
+            r,
+            "Punch-In — keep recording out of everything before the loop start",
+        )
+        .clicked()
+        {
+            self.session.set_punch(!a.punch_in, a.punch_out);
+        }
+        let r = widgets::state_button(
+            &mut cu,
+            Vec2::new(24.0, h),
+            a.punch_out,
+            pal().accent,
+            "Out",
+        );
+        if info(
+            r,
+            "Punch-Out — keep recording out of everything after the loop end",
+        )
+        .clicked()
+        {
+            self.session.set_punch(a.punch_in, !a.punch_out);
+        }
+        cu.add_space(4.0);
+        let session_rec = self.session.any_slot_recording() || self.session.any_overdubbing();
+        let r = widgets::icon_button(
+            &mut cu,
+            Vec2::new(26.0, h),
+            session_rec,
+            pal().arm_red,
+            icons::session_record,
+        );
+        if info(
+            r,
+            "Session Record — record the selected scene on armed tracks; again to play the \
+             new clips (Cmd+Shift+F9)",
+        )
+        .clicked()
+        {
+            self.session_record();
+        }
+        let can_capture = self.session.can_capture();
+        let r = widgets::icon_button(
+            &mut cu,
+            Vec2::new(26.0, h),
+            false,
+            if can_capture {
+                pal().accent
+            } else {
+                pal().text_dim
+            },
+            icons::capture_midi,
+        );
+        if info(
+            r,
+            "Capture MIDI — make a clip of what you just played on armed or monitored tracks",
+        )
+        .clicked()
+            && can_capture
+        {
+            self.capture_midi();
         }
         let armed = self.session.automation_arm();
         let r = widgets::icon_button(
@@ -788,12 +963,13 @@ impl RliveApp {
         }
         cu.add_space(6.0);
         let tick = self.session.engine.shared.tick.load();
-        let pos = self
-            .session
-            .project
-            .time_signature
-            .format_position(tick)
-            .replace('.', ".  ");
+        let sig = self.session.project.time_signature;
+        let counting = self.session.engine.shared.count_in_left.load();
+        let pos = if counting > 0.0 {
+            count_in_label(counting, sig)
+        } else {
+            sig.format_position(tick).replace('.', ".  ")
+        };
         let (pr, r) = cu.allocate_exact_size(Vec2::new(96.0, h), Sense::hover());
         cu.painter().rect_filled(pr, 1.0, pal().field_bg);
         cu.painter().text(
@@ -801,7 +977,9 @@ impl RliveApp {
             Align2::CENTER_CENTER,
             pos,
             egui::FontId::monospace(13.0),
-            if playing {
+            if counting > 0.0 {
+                pal().accent
+            } else if playing {
                 pal().play_green
             } else {
                 pal().text
@@ -809,7 +987,6 @@ impl RliveApp {
         );
         info(r, "Song Position — the playhead, as bar . beat . sixteenth");
         cu.add_space(6.0);
-        let a = self.session.project.arrangement.clone();
         let r = widgets::state_button(
             &mut cu,
             Vec2::new(40.0, h),
@@ -1000,8 +1177,14 @@ impl RliveApp {
         let right_w = 330.0;
         let avail = (u.available_width() - right_w).max(50.0);
         let (ir, _) = u.allocate_exact_size(Vec2::new(avail, 18.0), Sense::hover());
+        let dropped = self.session.take_dropped();
         let msg = if !info_text.is_empty() {
             (info_text, pal().text)
+        } else if dropped > 0 {
+            (
+                format!("Recording: {dropped} frames lost to a slow disk"),
+                pal().arm_red,
+            )
         } else if !self.ui.status.is_empty() {
             (self.ui.status.clone(), pal().text_dim)
         } else {
@@ -1165,6 +1348,7 @@ impl eframe::App for RliveApp {
         widgets::info_begin_frame(ctx);
         self.session.colors = self.settings.colors;
         self.session.warp_defaults = self.settings.warp;
+        self.session.record = self.settings.record.clone();
         self.session.idle();
         self.poll_scan();
         if std::mem::take(&mut self.ui.request_scan) && self.ui.scan_rx.is_none() {
@@ -1294,7 +1478,10 @@ impl eframe::App for RliveApp {
         self.paint_focus_outline(&ctx, &rects);
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         self.session.pointer_frame(pointer_down);
-        let busy = pointer_down || ctx.text_edit_focused() || self.session.is_recording();
+        let busy = pointer_down
+            || ctx.text_edit_focused()
+            || self.session.is_recording()
+            || self.session.any_overdubbing();
         self.session.commit_edits(busy);
         self.ui.devices.end_frame();
         #[cfg(target_os = "macos")]
@@ -1317,5 +1504,21 @@ impl eframe::App for RliveApp {
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         pal().app_bg.to_normalized_gamma_f32()
+    }
+}
+
+#[cfg(test)]
+mod count_in_tests {
+    use super::count_in_label;
+    use rlive_core::{TimeSignature, PPQ};
+
+    #[test]
+    fn the_count_in_reads_from_negative_bars_up_to_the_first() {
+        let bar = 4 * PPQ;
+        let sig = TimeSignature::default();
+        assert_eq!(count_in_label(2.0 * bar as f64, sig), "-2.  1.  1");
+        assert_eq!(count_in_label(bar as f64, sig), "-1.  1.  1");
+        assert_eq!(count_in_label(bar as f64 * 1.5, sig), "-2.  3.  1");
+        assert_eq!(count_in_label(120.0, sig), "-1.  4.  4", "almost there");
     }
 }

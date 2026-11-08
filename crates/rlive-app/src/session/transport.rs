@@ -2,7 +2,8 @@
 
 use super::Session;
 use rlive_core::{Quantize, TimeSignature, TrackId};
-use rlive_engine::{EngineCommand, LaunchCmd, TransportCmd};
+use rlive_engine::{EngineCommand, LaunchCmd, RecordCmd, TransportCmd};
+use rlive_project::MetronomeOptions;
 
 impl Session {
     // ------------------------------------------------------------- transport
@@ -50,6 +51,21 @@ impl Session {
         self.mark_edit("Metronome");
     }
 
+    /// The metronome's menu: count-in, sound, rhythm and when it sounds.
+    pub fn set_metronome_options(&mut self, options: MetronomeOptions) {
+        if self.project.metronome_options == options {
+            return;
+        }
+        self.project.metronome_options = options;
+        self.send(EngineCommand::Transport(TransportCmd::SetMetronomeConfig(
+            super::build::metronome_config(&self.project),
+        )));
+        self.send(EngineCommand::Record(RecordCmd::SetCountIn(
+            options.count_in,
+        )));
+        self.mark_edit("Metronome Settings");
+    }
+
     pub fn launch_clip(&mut self, track: TrackId, slot: usize) {
         // Its sample isn't ready: the slot is empty as far as the engine knows, and launching an
         // empty slot would stop the track.
@@ -68,6 +84,19 @@ impl Session {
         let tracks: Vec<TrackId> = self.project.tracks.iter().map(|t| t.id).collect();
         for track in tracks.iter().copied() {
             self.re_enable_clip_automation(track, scene);
+        }
+        let record_empty = self.record.start_recording_on_scene_launch;
+        let to_record: Vec<TrackId> = if record_empty {
+            self.armed_empty_slots(scene)
+        } else {
+            Vec::new()
+        };
+        if !to_record.is_empty() {
+            self.send(EngineCommand::Launch(LaunchCmd::LaunchScene(scene)));
+            for track in to_record {
+                self.record_slot(track, scene);
+            }
+            return;
         }
         if tracks
             .iter()

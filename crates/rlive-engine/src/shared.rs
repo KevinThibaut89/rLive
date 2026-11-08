@@ -91,6 +91,12 @@ pub struct TrackShared {
     pub clip_position: AtomicF64,
     /// Whether the track plays its Arrangement lane rather than a launched Session clip.
     pub follow_arrangement: AtomicBool,
+    /// The Session slot being recorded into, or [`NO_SLOT`].
+    pub recording_slot: AtomicI32,
+    /// Waiting to start recording: the slot, or [`NO_SLOT`].
+    pub record_queued_slot: AtomicI32,
+    /// Notes played on this track are going into its playing clip.
+    pub overdubbing: AtomicBool,
 }
 
 impl Default for TrackShared {
@@ -101,6 +107,9 @@ impl Default for TrackShared {
             queued_slot: AtomicI32::new(NO_SLOT),
             clip_position: AtomicF64::new(0.0),
             follow_arrangement: AtomicBool::new(true),
+            recording_slot: AtomicI32::new(NO_SLOT),
+            record_queued_slot: AtomicI32::new(NO_SLOT),
+            overdubbing: AtomicBool::new(false),
         }
     }
 }
@@ -116,6 +125,14 @@ pub struct EngineShared {
     pub cpu_load: AtomicF32,
     pub master_meter: PeakMeter,
     pub sample_rate: AtomicF64,
+    /// Ticks left of the count-in; 0 when there is none.
+    pub count_in_left: AtomicF64,
+    /// Frames between the input converter and the block that receives them.
+    pub input_latency: AtomicU32,
+    /// Frames between a block and the output converter.
+    pub output_latency: AtomicU32,
+    /// Peak of each hardware input since the UI last looked. Index by channel, up to 64.
+    pub input_meters: [AtomicF32; 64],
 }
 
 impl Default for EngineShared {
@@ -128,6 +145,10 @@ impl Default for EngineShared {
             cpu_load: AtomicF32::new(0.0),
             master_meter: PeakMeter::default(),
             sample_rate: AtomicF64::new(48_000.0),
+            count_in_left: AtomicF64::new(0.0),
+            input_latency: AtomicU32::new(0),
+            output_latency: AtomicU32::new(0),
+            input_meters: std::array::from_fn(|_| AtomicF32::new(0.0)),
         }
     }
 }
