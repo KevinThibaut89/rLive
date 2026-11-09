@@ -154,6 +154,26 @@ impl UserLibrary {
         dropping_in(&self.defaults_dir(), target)
     }
 
+    /// Where Save Live Set As Template puts Sets.
+    pub fn templates_dir(&self) -> PathBuf {
+        self.root.join("Templates")
+    }
+
+    /// The Set every new Set starts as, if one has been saved.
+    pub fn default_set_path(&self) -> PathBuf {
+        self.defaults_dir()
+            .join("Default Set")
+            .join("Default Set.rlive")
+    }
+
+    /// Whether a path is a template in this library.
+    pub fn is_template(&self, path: &Path) -> bool {
+        path.strip_prefix(&self.root).is_ok_and(|rel| {
+            rel.components()
+                .any(|c| c.as_os_str().eq_ignore_ascii_case("Templates"))
+        })
+    }
+
     pub fn slicing_dir(&self) -> PathBuf {
         self.defaults_dir().join("Slicing")
     }

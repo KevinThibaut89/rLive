@@ -46,6 +46,7 @@ impl Session {
         self.messages.extend(notices);
         match result {
             Ok(sample) => {
+                self.missing.remove(&path);
                 self.record_fingerprint(&path);
                 self.external_edit_arrived(&path, &sample);
                 self.swap_in_sample(&path, &sample);
@@ -58,6 +59,7 @@ impl Session {
             }
             Err(reason) => {
                 log::warn!("{reason}");
+                self.missing.insert(path.clone());
                 self.note_sample_failed(&path, &reason);
                 self.messages.push(reason);
             }
@@ -298,29 +300,37 @@ fn devices_using(devices: &[Device], path: &Path, out: &mut Vec<DeviceId>) {
 impl Session {
     /// Writes down where each file is relative to the Set, for when the folder moves.
     pub(super) fn note_relative_paths(&mut self, project_file: &Path) {
-        let Some(dir) = project_file.parent() else {
+        let Some(dir) = rlive_project::project_folder::root_or_parent(project_file) else {
             return;
         };
         self.project
             .for_each_file_ref_mut(&mut |file: &mut FileRef| {
-                file.relative = file.path.strip_prefix(dir).ok().map(Path::to_path_buf);
+                file.relative = file.path.strip_prefix(&dir).ok().map(Path::to_path_buf);
             });
     }
 
     /// A Set that has moved finds its files through where they were relative to it.
     pub(super) fn find_relative_paths(&mut self, project_file: &Path) {
-        let Some(dir) = project_file.parent() else {
+        let Some(parent) = project_file.parent().map(Path::to_path_buf) else {
             return;
         };
+        let root = rlive_project::project_folder::root_or_parent(project_file);
         self.project
             .for_each_file_ref_mut(&mut |file: &mut FileRef| {
                 if file.path.exists() {
                     return;
                 }
-                if let Some(found) = file.relative.as_ref().map(|r| dir.join(r)) {
-                    if found.exists() {
-                        file.path = found;
-                    }
+                let Some(rel) = file.relative.clone() else {
+                    return;
+                };
+                // A Set saved before Projects existed is relative to its own folder.
+                let found = root
+                    .iter()
+                    .map(|r| r.join(&rel))
+                    .chain([parent.join(&rel)])
+                    .find(|p| p.exists());
+                if let Some(found) = found {
+                    file.path = found;
                 }
             });
     }

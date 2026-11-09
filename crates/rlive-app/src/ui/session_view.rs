@@ -924,8 +924,12 @@ fn track_column(
                     Pos2::new(launch.right() + 4.0, rect.top()),
                     Pos2::new(rect.right() - 3.0, rect.bottom()),
                 );
-                let galley =
-                    p.layout_no_wrap(cname.clone(), theme::font(11.0), theme::text_on(fill));
+                let shown = if session.clip_is_offline(ClipRef::slot(id, slot)) {
+                    format!("{cname} (Offline)")
+                } else {
+                    cname.clone()
+                };
+                let galley = p.layout_no_wrap(shown, theme::font(11.0), theme::text_on(fill));
                 p.with_clip_rect(text_r.intersect(cu.clip_rect())).galley(
                     Pos2::new(text_r.left(), rect.center().y - galley.size().y / 2.0),
                     galley,
@@ -2323,6 +2327,14 @@ fn clip_menu(
     );
     if ui.button("Launch").clicked() {
         session.launch_clip(id, slot);
+        ui.close();
+    }
+    if session.clip(id, slot).is_some_and(|c| !c.is_midi())
+        && ui.button("Slice to New MIDI Track…").clicked()
+    {
+        state.files.slice = Some(crate::ui::slice_dialog::SliceDialog::new(ClipRef::slot(
+            id, slot,
+        )));
         ui.close();
     }
     if ui.button("Extract Groove").clicked() {

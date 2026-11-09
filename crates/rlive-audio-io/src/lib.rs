@@ -8,7 +8,9 @@
 pub mod analysis;
 pub mod decode;
 pub mod decoding_cache;
+pub mod export;
 pub mod fingerprint;
+pub mod flac;
 pub mod peaks;
 pub mod sample_cache;
 pub mod writer;
@@ -16,6 +18,10 @@ pub mod writer;
 pub use analysis::{Analysis, AnalysisExtras};
 pub use decode::{decode, probe, AudioInfo, DecodeError, DecodedAudio, Decoder};
 pub use decoding_cache::{CacheConfig, Cleanup, DecodingCache, Stored};
+pub use export::{
+    apply_dither, mp3_rate_for, normalize, resample, write_mp3, write_pcm, Dither, ExportType,
+    PcmFormat, MP3_AVAILABLE,
+};
 pub use fingerprint::{fingerprint, Fingerprint};
 pub use peaks::Peaks;
 pub use sample_cache::{LoaderConfig, SampleCache, SampleEvent, SampleStatus, LONG_SAMPLE_SECONDS};

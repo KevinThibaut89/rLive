@@ -97,6 +97,7 @@ fn mix(s: &mut Session, start: u64, ticks: u64) -> Rendered {
         start,
         ticks,
         tail: false,
+        rate: None,
     })
     .unwrap()
 }
@@ -108,6 +109,7 @@ fn launched(s: &mut Session, track: TrackId, slot: usize, ticks: u64) -> Rendere
         start: 0,
         ticks,
         tail: false,
+        rate: None,
     })
     .unwrap()
 }

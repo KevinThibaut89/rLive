@@ -368,8 +368,8 @@ pub fn drop_item(
             load_chord_bank(state, path);
             return;
         }
-        BrowserItem::Clip(path) => match rlive_browser::preset::load_clip(path) {
-            Ok(clip) => {
+        BrowserItem::Clip(path) => match rlive_browser::preset::load_clip_file(path) {
+            Ok(file) => {
                 let at = slot
                     .or_else(|| {
                         session
@@ -378,12 +378,15 @@ pub fn drop_item(
                             .and_then(|t| t.clips.iter().position(|c| c.is_none()))
                     })
                     .unwrap_or(0);
-                session.set_clip(id, at, Some(clip));
+                session.place_clip_file(id, at, file);
                 state.selected_clip = Some(ClipRef::slot(id, at));
             }
             Err(e) => state.status = e,
         },
-        BrowserItem::Set(path) => state.browser.open_set = Some(path.clone()),
+        BrowserItem::Set(path) => match session.merge_set(path) {
+            Ok(tracks) => state.status = format!("Merged {} tracks", tracks.len()),
+            Err(e) => state.status = e,
+        },
         BrowserItem::ProjectDevice(device) => copy_device_to(session, state, *device, chain),
         BrowserItem::ProjectClip(cref) => {
             if let Some(clip) = session.clip_at(*cref).cloned() {

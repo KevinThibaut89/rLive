@@ -149,48 +149,48 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[~]` Waveform greyed and unplayable during analysis [S]
 
 **Export**
-- `[ ]` Rendered Track: Main, All Individual, Selected, single named track; post-fader, equal lengths [M] → offline render
-- `[ ]` MIDI tracks with no output skipped; audio effects with no instrument exports silence [S]
-- `[ ]` Start and length, default whole Set or time selection [S]
-- `[ ]` Render reflects currently active Session or Arrangement clips [M]
-- `[ ]` Include Return and Main Effects [M]
-- `[ ]` Render as Loop: two passes, tail wrapped to start [M]
-- `[ ]` Mono, Normalize, Create Analysis File [S each]
-- `[ ]` Sample rate selection; downsampling via SoX in second step [S]
-- `[ ]` PCM WAV/AIFF/FLAC, 16/24/32-bit [S]
+- `[x]` Rendered Track: Main, All Individual, Selected, single named track; post-fader, equal lengths [M] → offline render
+- `[x]` MIDI tracks with no output skipped; audio effects with no instrument exports silence [S]
+- `[~]` Start and length, default whole Set or time selection [S]
+- `[x]` Render reflects currently active Session or Arrangement clips [M]
+- `[x]` Include Return and Main Effects [M]
+- `[x]` Render as Loop: two passes, tail wrapped to start [M]
+- `[x]` Mono, Normalize, Create Analysis File [S each]
+- `[x]` Sample rate selection; downsampling via SoX in second step [S]
+- `[x]` PCM WAV/AIFF/FLAC, 16/24/32-bit [S]
 - `[ ]` Dither: none, rectangular, triangular (default) [S]; POW-r 1-3 [M PROP]
-- `[ ]` MP3 CBR 320, PCM optional [S]; patent-free now, needs encoder library
+- `[x]` MP3 CBR 320, PCM optional [S]; patent-free now, needs encoder library
 - `[ ]` Video render with system encoder, settings dialog, needs PCM and Arrangement video [L]
 - `[ ]` Real-time render for external devices: auto signal trace, 10 s editable wait, skip, restart, auto-restart on dropout [M] → External devices
 
 **MIDI and Live Clips**
-- `[ ]` Import MIDI at insert marker or slot; Standard MIDI export of a clip [S]
-- `[ ]` Live Clip format: clip, envelopes and track devices; devices restored only on empty track [M]
-- `[ ]` Drag clip to browser saves, with copy policy [M]
+- `[x]` Import MIDI at insert marker or slot; Standard MIDI export of a clip [S]
+- `[x]` Live Clip format: clip, envelopes and track devices; devices restored only on empty track [M]
+- `[~]` Drag clip to browser saves, with copy policy [M]
 
 **Sets**
-- `[ ]` New, Open, Open Recent, Save, Save As, Save a Copy [M]
+- `[~]` New, Open, Open Recent, Save, Save As, Save a Copy [M]
 - `[x]` Undo History window: jump to any step, greyed redo region, not persisted [M] → command-based undo [L]
-- `[ ]` Merge Sets: drag whole Set, excludes returns, rebuilds clips, devices, automation [L]
+- `[~]` Merge Sets: drag whole Set, excludes returns, rebuilds clips, devices, automation [L]
 - `[ ]` Unfold Sets in browser: tracks, groups, devices, Session clips, grooves individually importable [M]
-- `[ ]` Export selected Session clips as new Set by drag [M]
-- `[ ]` Default Set and named templates, load as Untitled [S]
+- `[~]` Export selected Session clips as new Set by drag [M]
+- `[x]` Default Set and named templates, load as Untitled [S]
 - `[ ]` File reference list: replace, hot-swap, external edit (goes offline), location, usage expansion [M]
-- `[ ]` Warp markers kept on replace only if length suitable [S]
+- `[x]` Warp markers kept on replace only if length suitable [S]
 
 **Projects**
-- `[ ]` Project folder auto-created on save; shared samples across versions; title bar display [M]
-- `[ ]` Saving outside Project creates new one, external references remain [S]
-- `[ ]` Older-version Sets require Save As [S]
-- `[ ]` Presets default into current Project [S]
-- `[ ]` Offline clip marking, silence, Status Bar warning [S]
-- `[ ]` Manual repair by drag; no identity check [S]
-- `[ ]` Automatic search: folder, Project, Library, full rescan; 0/1/many candidates, hot-swap for many [M]
-- `[ ]` Collect All and Save by location; File Manager per-location counts, sizes, Show [M]
-- `[ ]` Collect Files on Export: Always (default), Ask, Never [S]
-- `[ ]` File Manager scopes: Set, Project, User Library, any Project via context menu [M]
-- `[ ]` Unused files by category, preview, delete [M]
-- `[ ]` Pack creation: .alp lossless archive, install by double-click, drag, menu; own archive format is enough unless interop wanted [M PROP-if-interop]
+- `[~]` Project folder auto-created on save; shared samples across versions; title bar display [M]
+- `[x]` Saving outside Project creates new one, external references remain [S]
+- `[x]` Older-version Sets require Save As [S]
+- `[~]` Presets default into current Project [S]
+- `[~]` Offline clip marking, silence, Status Bar warning [S]
+- `[~]` Manual repair by drag; no identity check [S]
+- `[~]` Automatic search: folder, Project, Library, full rescan; 0/1/many candidates, hot-swap for many [M]
+- `[~]` Collect All and Save by location; File Manager per-location counts, sizes, Show [M]
+- `[~]` Collect Files on Export: Always (default), Ask, Never [S]
+- `[~]` File Manager scopes: Set, Project, User Library, any Project via context menu [M]
+- `[~]` Unused files by category, preview, delete [M]
+- `[~]` Pack creation: .alp lossless archive, install by double-click, drag, menu; own archive format is enough unless interop wanted [M PROP-if-interop]
 
 
 ## 6. Arrangement View (pp. 165-186)
@@ -466,11 +466,11 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** C14, A19
 
-- `[ ]` Slice to New MIDI Track: beat resolutions, transients, or Warp Markers; 128-slice cap [L] → Drum Rack, Simpler, Macros
-- `[ ]` Slicing presets, factory and User Defaults; factory set is [CONTENT] [M]
-- `[ ]` Preserve Warped Timing option [M] → warp engine
-- `[ ]` Auto-created track, chromatic staircase clip, one Simpler per chain, pre-mapped Macros [M]
-- `[ ]` Resequence by notes or pad swap; group chains with effects [S] → Racks
+- `[x]` Slice to New MIDI Track: beat resolutions, transients, or Warp Markers; 128-slice cap [L] → Drum Rack, Simpler, Macros
+- `[x]` Slicing presets, factory and User Defaults; factory set is [CONTENT] [M]
+- `[x]` Preserve Warped Timing option [M] → warp engine
+- `[x]` Auto-created track, chromatic staircase clip, one Simpler per chain, pre-mapped Macros [M]
+- `[~]` Resequence by notes or pad swap; group chains with effects [S] → Racks
 - `[ ]` Convert Harmony: polyphonic pitch extraction, piano Rack preloaded [XL ML CONTENT]
 - `[ ]` Convert Melody: monophonic extraction, synth/piano Macro Rack [L ML-optional CONTENT]
 - `[ ]` Convert Drums: onsets, kick/snare/hat classification, Drum Rack [L ML CONTENT]
@@ -1331,7 +1331,6 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **A19:** Next similar sample; Previous similar sample; Return to reference; Save as similarity reference; Show similar-sample swap controls; Similarity search
 - `[ ]` **A5:** Audio engine on/off
 - `[ ]` **A9:** Reverse audio selection; Stretch warped clip
-- `[ ]` **C14:** Export MIDI File
 - `[ ]` **C17:** Hide/show Sends; Hide/show return tracks; Toggle second window
 - `[ ]` **C18:** Hide/show video window
 - `[ ]` **C19:** Cancel value entry; Confirm value entry; Current scene from the last track; Decrement value; Delete track from title bar; Eight scenes down; Eight scenes up; First track of the scene; Focus Mixer; Increment value; Jump to highlighted track title; Last track of the scene; Move nonadjacent tracks down; Move nonadjacent tracks left; Move nonadjacent tracks right; Move nonadjacent tracks up; Next control; Next field; Next name while renaming; Next neighbouring control; Next track while renaming; Previous control; Previous neighbouring control; Return to default; Scene down; Scene up; Select all clips and slots; Select clip above; Select clip below; Select clip left; Select clip right; Type a value; Value down by an octave or fine step; Value up by an octave or fine step

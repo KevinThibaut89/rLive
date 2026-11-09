@@ -242,6 +242,27 @@ pub fn write(sample: &Path, analysis: &Analysis) -> io::Result<()> {
     write_locked(sample, analysis)
 }
 
+/// Analyses a file and writes its sidecar, for a file just rendered.
+pub fn create_for(sample: &Path) -> io::Result<()> {
+    let audio = crate::decode(sample).map_err(io::Error::other)?;
+    let fingerprint = crate::fingerprint(sample)?;
+    let peaks = if audio.channels >= 2 {
+        Peaks::stereo(&audio.left, &audio.right)
+    } else {
+        Peaks::mono(&audio.left)
+    };
+    write(
+        sample,
+        &Analysis {
+            fingerprint,
+            frames: audio.frames() as u64,
+            sample_rate: audio.sample_rate as f64,
+            peaks: Arc::new(peaks),
+            extras: AnalysisExtras::default(),
+        },
+    )
+}
+
 /// Changes the extras of an existing analysis file, keeping everything else in it.
 pub fn update_extras(
     sample: &Path,

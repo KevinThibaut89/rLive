@@ -421,6 +421,11 @@ impl Project {
         Ok(())
     }
 
+    /// The format a project's text is in.
+    pub fn format_of(text: &str) -> Result<u32, ProjectError> {
+        migrate::probe_version(text)
+    }
+
     /// Loads a project. A file in an older format is first copied to `<name>.v<old>.bak` so the
     /// upgrade can never lose it; the load fails if that copy can't be made.
     pub fn load(path: &Path) -> Result<Self, ProjectError> {

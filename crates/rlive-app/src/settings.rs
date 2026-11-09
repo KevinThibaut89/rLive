@@ -592,6 +592,28 @@ impl Default for PluginSettings {
     }
 }
 
+/// What happens to a clip's or preset's files when it's saved to a folder (manual p. 152).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CollectFiles {
+    #[default]
+    Always,
+    Ask,
+    Never,
+}
+
+impl CollectFiles {
+    pub const ALL: [CollectFiles; 3] =
+        [CollectFiles::Always, CollectFiles::Ask, CollectFiles::Never];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CollectFiles::Always => "Always",
+            CollectFiles::Ask => "Ask",
+            CollectFiles::Never => "Never",
+        }
+    }
+}
+
 impl PluginSettings {
     /// What a scan should look at, given the custom folders in `dirs`.
     pub fn sources(&self, dirs: &[PathBuf]) -> ScanSources {
@@ -679,6 +701,10 @@ pub struct Settings {
     pub full_height_browser: bool,
     /// EXT, Follow, Link and their options.
     pub sync: SyncSettings,
+    /// Whether a saved clip or preset takes its files along.
+    pub collect_on_export: CollectFiles,
+    /// The Sets opened or saved most recently, the last one first.
+    pub recent_sets: Vec<PathBuf>,
 }
 
 impl Default for Settings {
@@ -716,6 +742,8 @@ impl Default for Settings {
             retune_on_load: false,
             remote: RemoteSettings::default(),
             user_library: None,
+            collect_on_export: CollectFiles::default(),
+            recent_sets: Vec::new(),
             full_height_browser: true,
             sync: SyncSettings::default(),
         }
@@ -831,6 +859,8 @@ mod tests {
             },
             midi_input: Some("Keys".into()),
             user_library: Some(PathBuf::from("/library")),
+            collect_on_export: CollectFiles::Ask,
+            recent_sets: vec![PathBuf::from("/set.rlive")],
             full_height_browser: false,
             sample_dir: Some(PathBuf::from("/samples")),
             plugin_dirs: vec![PathBuf::from("/plugins")],

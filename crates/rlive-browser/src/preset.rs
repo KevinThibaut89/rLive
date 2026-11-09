@@ -287,10 +287,72 @@ pub fn strip_for_storage(d: &mut Device) {
     }
 }
 
-/// A saved clip: `.rlclip`, RON text.
-pub fn load_clip(path: &Path) -> Result<rlive_project::Clip, String> {
+/// What a `.rlclip` holds, RON text: the clip, and the track's devices that come with it when it's
+/// dropped on an empty track (manual p. 134). The file records nothing about where it came from
+/// beyond that.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClipFile {
+    pub format: u32,
+    pub clip: rlive_project::Clip,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<Device>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track: Option<TrackKind>,
+}
+
+/// The format [`ClipFile`] writes.
+pub const CLIP_FORMAT: u32 = 2;
+
+impl ClipFile {
+    pub fn new(clip: rlive_project::Clip) -> Self {
+        Self {
+            format: CLIP_FORMAT,
+            clip,
+            devices: Vec::new(),
+            track: None,
+        }
+    }
+
+    /// Every audio file the clip and its devices refer to.
+    pub fn for_each_file_ref_mut(&mut self, f: &mut impl FnMut(&mut rlive_project::FileRef)) {
+        match &mut self.clip.content {
+            rlive_project::ClipContent::Audio { file, .. } => f(file),
+            rlive_project::ClipContent::Midi { .. } => {}
+        }
+        if let Some(frozen) = &mut self.clip.frozen {
+            f(&mut frozen.file);
+        }
+        for d in &mut self.devices {
+            d.for_each_mut(&mut |d| {
+                if let DeviceKind::Builtin { samples, .. } = &mut d.kind {
+                    samples.iter_mut().flatten().for_each(&mut *f);
+                }
+            });
+        }
+    }
+}
+
+/// A clip file, of this format or the bare clip that came before it.
+pub fn load_clip_file(path: &Path) -> Result<ClipFile, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    ron::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+    ron::from_str::<ClipFile>(&text)
+        .or_else(|_| ron::from_str::<rlive_project::Clip>(&text).map(ClipFile::new))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Writes a `.rlclip`.
+pub fn save_clip_file(path: &Path, file: &ClipFile) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let text = ron::ser::to_string_pretty(file, ron::ser::PrettyConfig::default())
+        .map_err(std::io::Error::other)?;
+    write_atomic(path, text.as_bytes())
+}
+
+/// A saved clip, without its devices.
+pub fn load_clip(path: &Path) -> Result<rlive_project::Clip, String> {
+    load_clip_file(path).map(|f| f.clip)
 }
 
 /// Writes a file so that a crash leaves either the old one or the new one.

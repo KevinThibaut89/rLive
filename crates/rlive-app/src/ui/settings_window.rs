@@ -758,7 +758,15 @@ impl RliveApp {
         ui.add_space(10.0);
         widgets::section_label(ui, "FILES");
         grid(ui, "library_files", |ui| {
-            soon(ui, "Collect Files on Export", "Ask", "C13");
+            label(ui, "Collect Files on Export");
+            egui::ComboBox::from_id_salt("collect_on_export")
+                .selected_text(self.settings.collect_on_export.label())
+                .show_ui(ui, |ui| {
+                    for c in crate::settings::CollectFiles::ALL {
+                        ui.selectable_value(&mut self.settings.collect_on_export, c, c.label());
+                    }
+                });
+            ui.end_row();
         });
         ui.add_space(10.0);
         widgets::section_label(ui, "PLACES");

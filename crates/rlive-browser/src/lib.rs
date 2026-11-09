@@ -14,6 +14,7 @@ pub mod catalog;
 pub mod db;
 pub mod defaults;
 pub mod factory;
+pub mod files;
 pub mod item;
 pub mod library;
 pub mod model;

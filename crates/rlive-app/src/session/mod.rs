@@ -35,6 +35,9 @@ mod launch_log;
 mod modulators;
 pub mod plugins;
 mod presets;
+mod project_files;
+#[cfg(test)]
+mod project_files_tests;
 mod rack_edit;
 mod racks;
 mod recording;
@@ -43,6 +46,7 @@ mod render;
 mod routing;
 mod samples;
 mod sampling;
+mod slice;
 pub mod sync;
 mod takes;
 mod timing;
@@ -105,11 +109,16 @@ pub use build::{descriptor_for, mix_of, time_maps, Builder, DeviceRuntime, Plugi
 pub use clip_edit::{ClipDefaults, MultiClip, SetMarker};
 pub use clips::ClipRef;
 pub use devices::ChainRef;
+pub use export::{ExportOptions, ExportRange, MidiImportTarget, RenderedTrack};
 pub use graph::compile_plan;
 pub use info::InfoTarget;
 pub use io::{can_arm, AudioHardware, CrossfaderField, CrossfaderKeys, RouteChoice};
 pub use launch::{set_follow_on, signature_is_valid, LaunchDefaults};
 pub use presets::{SwapItem, SwapTarget};
+pub use project_files::{
+    CollectOptions, CollectReport, FileEntry, FileLocation, LocationSummary, ManagedScope,
+    ScopeReport, SearchOptions, SearchReport,
+};
 pub use rack_edit::PadDrop;
 pub use racks::{ExtractNotes, MacroDisplay, ZoneKind};
 pub(crate) use remote::transport_fine;
@@ -117,6 +126,7 @@ pub use remote::{MapMode, MappingRow, RemotePorts, RemoteState};
 pub use render::JobStatus;
 pub use rlive_audio_io::SampleCache;
 pub use sampling::SamplingCommand;
+pub use slice::{SliceBy, SliceOptions, SlicePlan, MAX_SLICES};
 pub use warping::{ShortSampleMode, WarpDefaults, WarpView, LONG_SAMPLE_SECONDS};
 
 use crate::recording::capture_midi::CaptureBuffer;
@@ -171,6 +181,19 @@ pub struct Session {
     pub recent_scale: rlive_project::ClipScale,
     /// The file Manage Sample File asked the File Manager (C13) to show.
     pub file_manager_target: Option<PathBuf>,
+    /// Files the Set refers to that can't be found.
+    missing: std::collections::BTreeSet<PathBuf>,
+    /// The Set came from an older format and has to be saved under a new name.
+    save_as_required: bool,
+    /// What Automatic Search has already looked through.
+    file_index: rlive_browser::files::FileIndex,
+    /// Missing files with several candidates, for the user to choose between.
+    file_candidates: HashMap<PathBuf, Vec<PathBuf>>,
+    file_task: Option<project_files::FileTask>,
+    /// What the last search found, for the File Manager.
+    pub search_report: Option<SearchReport>,
+    /// Files Collect Files on Export copies along with a saved clip or preset.
+    pub collect_on_export: bool,
     /// Reversing and cropping running off the audio thread, and what they've learned.
     clip_jobs: clip_files::ClipJobs,
     /// A held scrub on a timeline clip: the song tick to go back to and every how many ticks.
@@ -280,6 +303,13 @@ impl Session {
             clip_defaults: ClipDefaults::default(),
             sample_editor: None,
             file_manager_target: None,
+            missing: Default::default(),
+            save_as_required: false,
+            file_index: Default::default(),
+            file_candidates: HashMap::new(),
+            file_task: None,
+            search_report: None,
+            collect_on_export: true,
             clip_jobs: clip_files::ClipJobs::default(),
             arr_scrub: None,
             leader_points: Vec::new(),
@@ -480,10 +510,16 @@ impl Session {
         self.pending_samples.clear();
         self.path = None;
         self.dirty = false;
+        self.save_as_required = false;
+        self.file_candidates.clear();
         self.rebuild();
+        self.refresh_missing();
     }
 
     pub fn load(&mut self, path: &Path) -> Result<(), String> {
+        let older = std::fs::read_to_string(path)
+            .ok()
+            .is_some_and(|text| !project_files::format_is_current(&text));
         let p = Project::load(path).map_err(|e| e.to_string())?;
         self.render_job = None;
         self.delete_discarded_files();
@@ -495,9 +531,12 @@ impl Session {
         self.pending_samples.clear();
         self.path = Some(path.to_path_buf());
         self.dirty = false;
+        self.save_as_required = older;
+        self.file_candidates.clear();
         // Plugin states in the file must win over the (about to be dropped) running instances.
         self.runtimes.clear();
         self.rebuild();
+        self.refresh_missing();
         Ok(())
     }
 
@@ -566,6 +605,7 @@ impl Session {
         self.poll_looper_tempo();
         self.engine.collect_garbage();
         self.poll_samples();
+        self.poll_file_task();
         self.poll_preview();
         while let Some(note) = self.engine.poll_played() {
             self.played_midi(note);

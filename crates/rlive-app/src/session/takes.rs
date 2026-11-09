@@ -154,7 +154,7 @@ pub(super) fn file_name(track: &str, take: u64, kind: rlive_audio_io::FileType) 
 /// The file a take records into: the Set's Samples/Recorded, or the temporary folder until the Set
 /// has been saved somewhere.
 pub(super) fn recording_folder(project_file: Option<&Path>, temp: Option<&Path>) -> PathBuf {
-    match project_file.and_then(Path::parent) {
+    match project_file.and_then(rlive_project::project_folder::root_or_parent) {
         Some(dir) => dir.join("Samples").join("Recorded"),
         None => temp.map_or_else(default_temp_folder, Path::to_path_buf),
     }

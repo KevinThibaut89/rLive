@@ -1065,11 +1065,7 @@ fn paint_waveform(
     wave_zoom: f32,
 ) {
     if let Some(SampleStatus::Failed(_)) = session.samples.status(path) {
-        let galley = p.layout_no_wrap(
-            "Missing or unreadable file".to_string(),
-            theme::font(10.0),
-            pal().text_dim,
-        );
+        let galley = p.layout_no_wrap("Offline".to_string(), theme::font(10.0), pal().text_dim);
         let at = Pos2::new(
             content.left().max(lanes.left()) + 3.0,
             content.center().y - galley.size().y / 2.0,
@@ -1751,6 +1747,17 @@ fn clip_context_menu(ui: &mut egui::Ui, session: &mut Session, state: &mut UiSta
             state,
             InfoTarget::Clip(ClipRef::Arr { track, id }),
         );
+        if session
+            .clip_at(ClipRef::Arr { track, id })
+            .is_some_and(|c| !c.is_midi())
+            && ui.button("Slice to New MIDI Track…").clicked()
+        {
+            state.files.slice = Some(crate::ui::slice_dialog::SliceDialog::new(ClipRef::Arr {
+                track,
+                id,
+            }));
+            ui.close();
+        }
         if ui.button("Extract Groove").clicked() {
             if session.extract_groove(ClipRef::Arr { track, id }).is_some() {
                 state.show_groove_pool = true;

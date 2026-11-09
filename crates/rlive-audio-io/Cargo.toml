@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["mp3"]
+# The MP3 encoder is LAME, under the LGPL. Building without this leaves MP3 export out.
+mp3 = ["dep:mp3lame-encoder"]
+
 [dependencies]
 rlive-core.workspace = true
 rlive-stretch.workspace = true
@@ -15,6 +20,7 @@ log.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+mp3lame-encoder = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

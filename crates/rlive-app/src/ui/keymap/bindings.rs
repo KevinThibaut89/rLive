@@ -182,7 +182,7 @@ pub static BINDINGS: &[Binding] = &[
     a("42.3", All, "Quit", k(CMD, Key::Q), L(M::App(App::Quit))),
     a("42.3", All, "Hide", Trigger::MacOnly(ch(CMD, Key::H)), Status::Live(Exec::Native)),
     a("42.3", All, "Export Audio/Video", k(CMD_SHIFT, Key::R), L(M::File(File::ExportAudio))),
-    a("42.3", All, "Export MIDI File", k(CMD_SHIFT, Key::E), p!("C14")),
+    a("42.3", All, "Export MIDI File", k(CMD_SHIFT, Key::E), L(M::File(File::ExportMidi))),
 
     // 42.4 Devices and plug-ins
     a("42.4", Dev, "Group devices", k(CMD, Key::G), L(M::Rack(Rack::Group))),

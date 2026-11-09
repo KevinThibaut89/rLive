@@ -146,6 +146,7 @@ impl Session {
                     start,
                     ticks: end - start,
                     tail: false,
+                    rate: None,
                 });
                 Piece::Audio {
                     name: first.clip.name.clone(),
@@ -163,6 +164,7 @@ impl Session {
                     start,
                     ticks: end - start,
                     tail: false,
+                    rate: None,
                 });
             }
             tasks.push(Task {

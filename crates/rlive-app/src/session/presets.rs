@@ -69,8 +69,8 @@ fn device_role_of(role: Role) -> DeviceRole {
 impl Session {
     /// Where defaults come from for the Set that's open.
     pub fn defaults(&self) -> DefaultsLookup {
-        let project = self.path.as_deref().and_then(Path::parent);
-        DefaultsLookup::new(self.library.clone(), project)
+        let project = self.project_root();
+        DefaultsLookup::new(self.library.clone(), project.as_deref())
     }
 
     // ------------------------------------------------------------- making devices
@@ -343,6 +343,9 @@ impl Session {
     /// Puts the files a preset refers to in the User Library, so the preset travels with it
     /// (manual p. 464). What's already there, or can't be copied, stays where it is.
     fn collect_preset_files(&mut self, preset: &mut Preset) {
+        if !self.collect_on_export {
+            return;
+        }
         let Some(library) = self.library.clone() else {
             return;
         };
@@ -357,7 +360,7 @@ impl Session {
         }
     }
 
-    fn library(&self) -> Result<UserLibrary, String> {
+    pub(super) fn library(&self) -> Result<UserLibrary, String> {
         self.library
             .clone()
             .ok_or_else(|| "There is no User Library".to_string())

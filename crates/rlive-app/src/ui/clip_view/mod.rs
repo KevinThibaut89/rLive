@@ -656,7 +656,6 @@ pub(super) fn crop_menu(
         ui.add_enabled(false, egui::Button::new("Show Similar Files"));
         if ui.button("Manage Sample File").clicked() {
             session.manage_sample_file(cref);
-            state.status = "The File Manager arrives with C13".into();
             ui.close();
         }
     }

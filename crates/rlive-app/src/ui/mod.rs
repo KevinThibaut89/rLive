@@ -7,6 +7,9 @@ pub mod clip_envelopes;
 pub(crate) mod clip_view;
 pub mod commands;
 pub(crate) mod devices;
+mod export_dialog;
+mod file_manager;
+mod file_prompts;
 mod groove_pool;
 mod history_window;
 mod icons;
@@ -27,6 +30,7 @@ mod session_select;
 mod session_status;
 mod session_view;
 mod settings_window;
+pub mod slice_dialog;
 pub mod theme;
 mod timeline;
 mod tuning_section;
@@ -96,6 +100,61 @@ enum ScanMsg {
     Done(PluginCache, rlive_plugin_host::scanner::ScanReport),
 }
 
+/// A step that would close the open Set, waiting for an answer about unsaved changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileAction {
+    NewSet,
+    Open(PathBuf),
+    OpenTemplate(PathBuf),
+    Quit,
+}
+
+/// A clip or device on its way to a folder, waiting for Collect Files on Export's "Ask".
+pub enum CopyPrompt {
+    Device {
+        chain: ChainRef,
+        id: rlive_core::DeviceId,
+        path: PathBuf,
+    },
+    Clip {
+        clip: ClipRef,
+        dir: PathBuf,
+        name: String,
+    },
+}
+
+/// Everything the file dialogs keep between frames.
+#[derive(Default)]
+pub struct FilesUi {
+    pub manager: file_manager::FileManagerUi,
+    pub export: export_dialog::ExportUi,
+    pub slice: Option<slice_dialog::SliceDialog>,
+    pub show_recent: bool,
+    pub template_name: Option<String>,
+    pub confirm_default: bool,
+    pub collect_prompt: Option<crate::session::CollectOptions>,
+    pub pending_action: Option<FileAction>,
+    pub copy_prompt: Option<CopyPrompt>,
+    /// A confirmed quit is on its way, so it isn't asked about again.
+    pub quitting: bool,
+    /// The last title the window was given.
+    title: String,
+}
+
+impl FilesUi {
+    pub(crate) fn is_blocking(&self) -> bool {
+        self.pending_action.is_some()
+            || self.collect_prompt.is_some()
+            || self.confirm_default
+            || self.template_name.is_some()
+            || self.copy_prompt.is_some()
+            || self.show_recent
+            || self.slice.is_some()
+            || self.manager.is_blocking()
+            || self.export.is_blocking()
+    }
+}
+
 pub struct UiState {
     pub selected: Option<ChainRef>,
     /// Tracks selected together, for commands like Group Tracks. Includes `selected`.
@@ -157,9 +216,14 @@ pub struct UiState {
     info_edit_focus: bool,
     show_export: bool,
     show_about: bool,
-    export_scene: usize,
-    export_bars: u32,
-    export_arrangement: bool,
+    /// The file dialogs: Export, the File Manager, Slicing and the prompts.
+    pub files: FilesUi,
+    /// Collect Files on Export, read by the browser's drops.
+    pub collect_on_export: crate::settings::CollectFiles,
+    /// A clip dropped on a folder, saved next frame by the app.
+    pub pending_clip_save: Option<(ClipRef, PathBuf, String)>,
+    /// A template whose context menu said to make it the default.
+    pub set_default_from: Option<PathBuf>,
     scan_rx: Option<mpsc::Receiver<ScanMsg>>,
     pub scan_status: String,
     pub status: String,
@@ -200,6 +264,8 @@ pub struct RliveApp {
     last_frame: std::time::Instant,
     /// Commands queued from outside the egui pass (menus, input hook).
     pending: Vec<MenuCommand>,
+    /// A confirmed quit, sent as the window's close next frame.
+    pending_quit: bool,
     #[cfg(target_os = "macos")]
     mac_menu: Option<mac_menu::MacMenu>,
 }
@@ -340,9 +406,10 @@ impl UiState {
             info_edit_focus: false,
             show_export: false,
             show_about: false,
-            export_scene: 0,
-            export_bars: 4,
-            export_arrangement: false,
+            files: FilesUi::default(),
+            collect_on_export: crate::settings::CollectFiles::default(),
+            pending_clip_save: None,
+            set_default_from: None,
             scan_rx: None,
             scan_status: String::new(),
             bounce_copy: None,
@@ -446,11 +513,20 @@ impl RliveApp {
             ui,
             last_frame: std::time::Instant::now(),
             pending: Vec::new(),
+            pending_quit: false,
             #[cfg(target_os = "macos")]
             mac_menu: mac_menu::MacMenu::install(cc),
         };
         app.apply_control_surfaces();
         app.connect_midi();
+        let has_default = app
+            .session
+            .library
+            .as_ref()
+            .is_some_and(|l| l.default_set_path().exists());
+        if app.session.path.is_none() && has_default {
+            app.session.new_from_default();
+        }
         app
     }
 
@@ -717,11 +793,14 @@ impl RliveApp {
     }
 
     fn open_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("rLive project", &[rlive_project::FILE_EXTENSION])
-            .pick_file()
-        {
-            self.open_path(&path);
+        let start = self.session.project_root();
+        let mut dialog =
+            rfd::FileDialog::new().add_filter("rLive project", &[rlive_project::FILE_EXTENSION]);
+        if let Some(dir) = start {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(path) = dialog.pick_file() {
+            self.request_file_action(FileAction::Open(path));
         }
     }
 
@@ -735,26 +814,153 @@ impl RliveApp {
                     .first()
                     .map(|t| ChainRef::Track(t.id));
                 self.ui.selected_clip = None;
-                self.ui.status = format!("Opened {}", path.display());
+                self.note_recent(path);
+                self.ui.status = if self.session.needs_save_as() {
+                    format!("{} is from an older version: use Save As", path.display())
+                } else {
+                    format!("Opened {}", path.display())
+                };
             }
             Err(e) => self.ui.status = format!("Open failed: {e}"),
         }
     }
 
-    fn save(&mut self, save_as: bool) {
-        let path = match (&self.session.path, save_as) {
-            (Some(p), false) => Some(p.clone()),
-            _ => rfd::FileDialog::new()
-                .add_filter("rLive project", &[rlive_project::FILE_EXTENSION])
-                .set_file_name("Untitled.rlive")
-                .save_file(),
-        };
-        if let Some(path) = path {
-            match self.session.save(&path) {
-                Ok(()) => self.ui.status = format!("Saved {}", path.display()),
-                Err(e) => self.ui.status = format!("Save failed: {e}"),
+    fn open_template(&mut self, path: &std::path::Path) {
+        match self.session.load_as_untitled(path) {
+            Ok(()) => {
+                self.ui.selected = self
+                    .session
+                    .project
+                    .tracks
+                    .first()
+                    .map(|t| ChainRef::Track(t.id));
+                self.ui.selected_clip = None;
+                self.ui.status = "New Set from template".to_string();
+            }
+            Err(e) => self.ui.status = format!("Open failed: {e}"),
+        }
+    }
+
+    fn note_recent(&mut self, path: &std::path::Path) {
+        const MAX_RECENT: usize = 20;
+        let path = path.to_path_buf();
+        self.settings.recent_sets.retain(|p| *p != path);
+        self.settings.recent_sets.insert(0, path);
+        self.settings.recent_sets.truncate(MAX_RECENT);
+        self.settings.save();
+    }
+
+    /// Runs something that would close the open Set, asking first if it has unsaved changes.
+    fn request_file_action(&mut self, action: FileAction) {
+        if self.session.dirty {
+            self.ui.files.pending_action = Some(action);
+        } else {
+            self.run_file_action(action);
+        }
+    }
+
+    fn run_file_action(&mut self, action: FileAction) {
+        match action {
+            FileAction::NewSet => {
+                self.session.new_from_default();
+                self.ui.selected_clip = None;
+            }
+            FileAction::Open(path) => self.open_path(&path),
+            FileAction::OpenTemplate(path) => self.open_template(&path),
+            FileAction::Quit => {
+                self.ui.files.quitting = true;
+                self.pending_quit = true;
             }
         }
+    }
+
+    /// Whether what's in the way of the pending action has been saved.
+    fn save_before_action(&mut self) -> bool {
+        match self.session.path.clone() {
+            Some(p) if !self.session.needs_save_as() => match self.session.save(&p) {
+                Ok(()) => true,
+                Err(e) => {
+                    self.ui.status = format!("Save failed: {e}");
+                    false
+                }
+            },
+            _ => {
+                let saved = self.save_as_dialog();
+                saved.is_some()
+            }
+        }
+    }
+
+    fn set_file_name(&self) -> String {
+        self.session
+            .path
+            .as_deref()
+            .and_then(|p| p.file_stem())
+            .map_or_else(
+                || "Untitled".to_string(),
+                |s| s.to_string_lossy().into_owned(),
+            )
+    }
+
+    fn save_dialog(&self) -> rfd::FileDialog {
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter("rLive project", &[rlive_project::FILE_EXTENSION])
+            .set_file_name(format!(
+                "{}.{}",
+                self.set_file_name(),
+                rlive_project::FILE_EXTENSION
+            ));
+        if let Some(dir) = self.session.project_root() {
+            dialog = dialog.set_directory(dir);
+        }
+        dialog
+    }
+
+    fn save_as_dialog(&mut self) -> Option<PathBuf> {
+        let path = self.save_dialog().save_file()?;
+        match self.session.save_as(&path) {
+            Ok(saved) => {
+                self.ui.status = format!("Saved {}", saved.display());
+                self.note_recent(&saved);
+                Some(saved)
+            }
+            Err(e) => {
+                self.ui.status = format!("Save failed: {e}");
+                None
+            }
+        }
+    }
+
+    fn save(&mut self, save_as: bool) {
+        let older = self.session.needs_save_as();
+        match (&self.session.path, save_as || older) {
+            (Some(p), false) => {
+                let p = p.clone();
+                match self.session.save(&p) {
+                    Ok(()) => {
+                        self.ui.status = format!("Saved {}", p.display());
+                        self.note_recent(&p);
+                    }
+                    Err(e) => self.ui.status = format!("Save failed: {e}"),
+                }
+            }
+            _ => {
+                if older {
+                    self.ui.status = "This Set is from an older version: choose a new name".into();
+                }
+                let _ = self.save_as_dialog();
+            }
+        }
+    }
+
+    fn save_copy(&mut self) {
+        let Some(path) = self.save_dialog().save_file() else {
+            return;
+        };
+        self.ui.status = match self.session.save_copy(&path) {
+            Ok(saved) => format!("Saved a copy at {}", saved.display()),
+            Err(e) => format!("Save failed: {e}"),
+        };
     }
 
     /// Focus follows the area that was clicked last.
@@ -1250,6 +1456,7 @@ impl RliveApp {
             text_focused: ctx.text_edit_focused(),
             keyboard_taken: ctx.egui_wants_keyboard_input(),
             dialog_open: self.ui.show_about
+                || self.ui.files.is_blocking()
                 || self.ui.show_export
                 || self.ui.show_settings
                 || self.session.render_status().is_some(),
@@ -2164,12 +2371,30 @@ impl RliveApp {
                 pal().text_dim,
             )
         };
+        let missing = self.session.missing_files().len();
+        let msg = if missing > 0 && !self.ui.show_info && job.is_none() && dropped == 0 {
+            (
+                format!("{missing} referenced files are missing. Click to locate them."),
+                pal().arm_red,
+            )
+        } else {
+            msg
+        };
         let galley = u.painter().layout_no_wrap(msg.0, theme::font(11.0), msg.1);
         u.painter().with_clip_rect(ir).galley(
             Pos2::new(ir.left(), ir.center().y - galley.size().y / 2.0),
             galley,
             msg.1,
         );
+        if missing > 0
+            && u.interact(ir, u.scope_id().with("missing files"), Sense::click())
+                .clicked()
+        {
+            self.ui
+                .files
+                .manager
+                .show_scope(crate::session::ManagedScope::Set);
+        }
 
         u.with_layout(egui::Layout::right_to_left(egui::Align::Center), |u| {
             let d = self.ui.show_detail;
@@ -2261,64 +2486,10 @@ impl RliveApp {
         midi_settings::mpe_dialog(ctx, &mut self.session, &mut self.ui);
         midi_settings::layout_dialog(ctx, &mut self.session, &mut self.ui);
 
-        let mut open = self.ui.show_export;
-        egui::Window::new("Export Audio")
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.label("Renders offline to a 32-bit float WAV file.");
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.ui.export_arrangement, false, "Scene");
-                    ui.radio_value(&mut self.ui.export_arrangement, true, "Arrangement");
-                });
-                let scenes = self.session.project.scenes.len();
-                if self.ui.export_arrangement {
-                    let a = &self.session.project.arrangement;
-                    ui.label(if a.loop_enabled {
-                        "Renders the loop range."
-                    } else {
-                        "Renders from the start to the last clip."
-                    });
-                } else {
-                    ui.horizontal(|ui| {
-                        ui.label("Scene");
-                        ui.add(
-                            egui::DragValue::new(&mut self.ui.export_scene)
-                                .range(0..=scenes.saturating_sub(1))
-                                .custom_formatter(|v, _| format!("{}", v as usize + 1)),
-                        );
-                        ui.label("Length");
-                        ui.add(
-                            egui::DragValue::new(&mut self.ui.export_bars)
-                                .range(1..=512)
-                                .suffix(" bars"),
-                        );
-                    });
-                }
-                if ui.button("Export…").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("WAV", &["wav"])
-                        .set_file_name("Export.wav")
-                        .save_file()
-                    {
-                        let result = if self.ui.export_arrangement {
-                            self.session.export_arrangement(&path)
-                        } else {
-                            self.session.export_scene(
-                                self.ui.export_scene,
-                                self.ui.export_bars,
-                                &path,
-                            )
-                        };
-                        self.ui.status = match result {
-                            Ok(()) => format!("Exported {}", path.display()),
-                            Err(e) => format!("Export failed: {e}"),
-                        };
-                        self.ui.show_export = false;
-                    }
-                }
-            });
-        self.ui.show_export &= open;
+        self.export_dialog(ctx);
+        self.slice_dialog(ctx);
+        self.file_manager_window(ctx);
+        self.file_prompts(ctx);
 
         let mut open = self.ui.show_about;
         egui::Window::new("About rLive").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
@@ -2337,6 +2508,8 @@ impl eframe::App for RliveApp {
         theme::begin_frame(ctx, &self.settings.theme);
         widgets::info_begin_frame(ctx);
         self.session.colors = self.settings.colors;
+        self.session.collect_on_export =
+            self.settings.collect_on_export != crate::settings::CollectFiles::Never;
         self.session.warp_defaults = self.settings.warp;
         self.session.clip_defaults.create_fades = self.settings.create_fades;
         self.session.set_clip_update_rate(
@@ -2376,8 +2549,30 @@ impl eframe::App for RliveApp {
         self.ui.retune_on_load = self.settings.retune_on_load;
         browser::poll_requests(&self.session, &mut self.ui);
         if let Some(path) = self.ui.browser.open_set.take() {
-            self.open_path(&path);
+            let template = self
+                .session
+                .library
+                .as_ref()
+                .is_some_and(|l| l.is_template(&path));
+            self.request_file_action(if template {
+                FileAction::OpenTemplate(path)
+            } else {
+                FileAction::Open(path)
+            });
         }
+        self.ui.collect_on_export = self.settings.collect_on_export;
+        if let Some((clip, dir, name)) = self.ui.pending_clip_save.take() {
+            self.save_clip_with_policy(clip, &dir, &name);
+        }
+        if let Some(path) = self.ui.set_default_from.take() {
+            self.ui.status = match self.session.set_default_set_from(&path) {
+                Ok(_) => "Set as the Default Set".into(),
+                Err(e) => e,
+            };
+        }
+        self.window_title(ctx);
+        self.confirm_close(ctx);
+        self.install_dropped_packs(ctx);
         self.end_hot_swap_on_navigation();
         self.poll_scan();
         if std::mem::take(&mut self.ui.request_scan) && self.ui.scan_rx.is_none() {

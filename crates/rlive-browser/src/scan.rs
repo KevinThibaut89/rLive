@@ -21,6 +21,12 @@ pub struct ScanConfig {
 
 /// The extension of a Set, a tuning and a clip, as classified.
 const SET_EXT: &str = rlive_project::FILE_EXTENSION;
+
+/// Whether a path is a Set by its extension.
+pub fn is_set_file(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case(SET_EXT))
+}
 pub const CLIP_EXT: &str = "rlclip";
 
 /// Makes an item for a file, or `None` for what the browser doesn't list.

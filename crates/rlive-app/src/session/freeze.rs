@@ -29,7 +29,7 @@ const SESSION_CYCLES: u64 = 2;
 const TAIL_SILENCE: f32 = 1e-5;
 
 /// Whether a device needs real time to work: anything talking to hardware (manual p. 986).
-fn needs_realtime(devices: &[Device]) -> bool {
+pub(super) fn needs_realtime(devices: &[Device]) -> bool {
     let mut any = false;
     for d in devices {
         d.for_each(&mut |d| {
@@ -89,6 +89,7 @@ impl Session {
                 start,
                 ticks: b.end() - start,
                 tail: true,
+                rate: None,
             });
             targets.push(Target::Lane { start });
         }
@@ -105,6 +106,7 @@ impl Session {
                 start: 0,
                 ticks: frozen_shape(clip).1,
                 tail: false,
+                rate: None,
             });
             targets.push(Target::Slot(slot));
         }

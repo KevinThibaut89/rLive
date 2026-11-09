@@ -168,6 +168,7 @@ impl RliveApp {
     pub(super) fn menu_state(&self, ctx: &egui::Context) -> MenuState {
         let mut s = MenuState::default();
         self.edit_state(ctx, &mut s);
+        self.file_state(&mut s);
         self.create_state(&mut s);
         self.view_state(&mut s);
         self.options_state(&mut s);

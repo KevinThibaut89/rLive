@@ -50,6 +50,7 @@ pub const MENU: &[Entry] = &[
     Item("Browser", M::View(View::ToggleBrowser)),
     Item("Groove Pool", M::View(View::ToggleGroovePool)),
     Item("Tuning", M::View(View::ToggleTuning)),
+    Item("File Manager", M::File(super::file::File::ManageFiles)),
     Item("Detail View", M::View(View::ToggleDetail)),
     Item("Mixer", M::View(View::ToggleMixer)),
     Item("In/Out", M::View(View::ToggleInOut)),

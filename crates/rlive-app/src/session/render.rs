@@ -66,7 +66,7 @@ pub(super) fn processed_folder(
     temp: Option<&Path>,
     kind: Processed,
 ) -> PathBuf {
-    let base = match project_file.and_then(Path::parent) {
+    let base = match project_file.and_then(rlive_project::project_folder::root_or_parent) {
         Some(dir) => dir.join("Samples"),
         None => temp.map_or_else(default_temp_folder, Path::to_path_buf),
     };
@@ -95,6 +95,8 @@ pub(super) struct Render {
     pub ticks: u64,
     /// Whether to keep going after `ticks` until the sound has died away.
     pub tail: bool,
+    /// The rate to render at, when it isn't the engine's.
+    pub rate: Option<f64>,
 }
 
 /// Commands that play the timeline from `start`.
@@ -241,6 +243,7 @@ impl Session {
             start,
             ticks,
             tail,
+            rate,
         } = render;
         let mut paths = HashSet::new();
         project.for_each_file_ref(&mut |file| {
@@ -254,7 +257,7 @@ impl Session {
                     .push(format!("Rendered without a sample: {reason}"));
             }
         }
-        let sample_rate = self.engine.sample_rate;
+        let sample_rate = rate.unwrap_or(self.engine.sample_rate);
         super::external::set_internal_latency(&mut project, BLOCK);
         let (mut engine, mut handle) = rlive_engine::create_engine(sample_rate, BLOCK);
         let mut runtimes = HashMap::new();
@@ -391,7 +394,8 @@ impl Session {
             .iter()
             .map(|r| {
                 let maps = super::build::time_maps(&r.project);
-                (span_seconds(&r.project, &maps.tempo, r.start, r.ticks) * sample_rate) as usize
+                (span_seconds(&r.project, &maps.tempo, r.start, r.ticks)
+                    * r.rate.unwrap_or(sample_rate)) as usize
             })
             .sum();
         self.render_job = Some(Box::new(RenderJob {
@@ -778,6 +782,52 @@ pub(super) fn pre_fx_variant(p: &Project, keep: &[TrackId]) -> Project {
         };
         t.clips.iter_mut().flatten().for_each(own);
         t.arrangement.iter_mut().for_each(|c| own(&mut c.clip));
+    }
+    v
+}
+
+/// The project with only one track reaching the Main output, after its mixer: an individual
+/// track of an export. With `with_fx`, its returns and the Main track's effects come along.
+pub(super) fn export_track_variant(p: &Project, id: TrackId, with_fx: bool) -> Project {
+    let return_track = p.returns.iter().any(|r| r.id == id);
+    let group = p.track(id).is_some_and(Track::is_group);
+    let mut v = if group {
+        let mut v = group_variant(p, id);
+        for t in &mut v.tracks {
+            if t.id == id {
+                t.mute = p.track(id).is_some_and(|o| o.mute);
+            }
+        }
+        v
+    } else {
+        let mut v = base_variant(p);
+        if return_track {
+            // What's in a return is what the tracks send it, so they stay and only leave quietly.
+            for t in &mut v.tracks {
+                t.routing.output = Route::None;
+            }
+        } else {
+            silence_others(&mut v, &HashSet::from([id]));
+        }
+        v
+    };
+    if !return_track {
+        if let Some(t) = v.tracks.iter_mut().find(|t| t.id == id) {
+            t.group = None;
+            t.routing.output = Route::Default;
+        }
+        if !with_fx {
+            let returns: Vec<TrackId> = v.returns.iter().map(|t| t.id).collect();
+            v.tracks.iter_mut().for_each(|t| sends_off(t, &returns));
+        }
+    }
+    for r in &mut v.returns {
+        if r.id != id && !with_fx {
+            r.routing.output = Route::None;
+        }
+    }
+    if with_fx {
+        v.master = p.master.clone();
     }
     v
 }

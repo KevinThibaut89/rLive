@@ -445,6 +445,32 @@ fn item_menu(ui: &mut egui::Ui, state: &mut UiState, key: &ItemKey, lib: &Librar
         state.browser.assign_color(None);
         ui.close();
     }
+    let rows = state.browser.model.selected_rows();
+    if let [row] = rows.as_slice() {
+        if let (rlive_browser::item::ItemKind::Template, Some(path)) =
+            (row.item.kind, row.item.path.clone())
+        {
+            ui.separator();
+            if ui.button("Set Default Live Set").clicked() {
+                state.set_default_from = Some(path);
+                ui.close();
+            }
+        }
+        if let (rlive_browser::item::ItemKind::Folder, Some(path)) =
+            (row.item.kind, row.item.path.clone())
+        {
+            if path.join(rlive_project::project_folder::MARKER).exists() {
+                ui.separator();
+                if ui.button("Manage Project").clicked() {
+                    state
+                        .files
+                        .manager
+                        .show_scope(crate::session::ManagedScope::Project(path));
+                    ui.close();
+                }
+            }
+        }
+    }
     ui.separator();
     let is_file = state
         .browser
@@ -578,10 +604,22 @@ fn receive_drop_into_place(
         ui.scope_id().with("browser_place_drop"),
         Sense::hover(),
     );
+    let target_dir =
+        |state: &UiState, session: &Session| match state.browser.model.nav.scope.clone() {
+            Scope::Place(folder) => Some(folder),
+            Scope::Project => session.project_root(),
+            _ => None,
+        };
     if let Some(drag) = crate::ui::widgets::released::<crate::ui::devices::DeviceDrag>(&resp) {
-        let Scope::Place(folder) = state.browser.model.nav.scope.clone() else {
+        let Some(folder) = target_dir(state, session) else {
             return;
         };
+        let folder = if state.browser.model.nav.scope == Scope::Project {
+            session.project_presets_dir().unwrap_or(folder)
+        } else {
+            folder
+        };
+        let _ = std::fs::create_dir_all(&folder);
         let name = session
             .devices(drag.chain)
             .iter()
@@ -589,6 +627,14 @@ fn receive_drop_into_place(
             .map(|d| d.name.clone())
             .unwrap_or_default();
         let path = rlive_browser::preset::unused_path(&folder, &name);
+        if matches!(state.collect_on_export, crate::settings::CollectFiles::Ask) {
+            state.files.copy_prompt = Some(crate::ui::CopyPrompt::Device {
+                chain: drag.chain,
+                id: drag.device,
+                path,
+            });
+            return;
+        }
         match session.save_device_preset_as(drag.chain, drag.device, &path) {
             Ok(()) => {
                 if let Some(db) = &state.browser.db {
@@ -598,5 +644,28 @@ fn receive_drop_into_place(
             }
             Err(e) => state.status = e,
         }
+    }
+    if let Some(drag) = crate::ui::widgets::released::<crate::ui::session_view::ClipDrag>(&resp) {
+        let Some(folder) = target_dir(state, session) else {
+            return;
+        };
+        let slots = crate::ui::session_select::selected_slots(session, state);
+        if slots.len() > 1 && slots.contains(&(drag.track, drag.slot)) {
+            let path = folder.join("Clips.rlive");
+            state.status = match session.export_clips_as_set(&slots, &path) {
+                Ok(p) => format!("Saved {}", p.display()),
+                Err(e) => e,
+            };
+            if let Some(db) = &state.browser.db {
+                db.rescan();
+            }
+            return;
+        }
+        let clip = crate::session::ClipRef::slot(drag.track, drag.slot);
+        let name = session
+            .clip_at(clip)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+        state.pending_clip_save = Some((clip, folder, name));
     }
 }

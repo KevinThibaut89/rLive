@@ -171,6 +171,7 @@ impl Session {
                 start: 0,
                 ticks,
                 tail: false,
+                rate: None,
             },
             Goes::Slot {
                 slot,
@@ -217,6 +218,7 @@ impl Session {
                 start,
                 ticks: end - start,
                 tail,
+                rate: None,
             },
             Goes::Lane {
                 start,
@@ -761,6 +763,7 @@ impl Session {
                 start,
                 ticks: end - start,
                 tail: false,
+                rate: None,
             },
             Goes::Lane {
                 start,
