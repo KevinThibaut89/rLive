@@ -6,7 +6,7 @@ use rlive_core::{MidiMessage, TrackId};
 use rlive_engine::shared::TrackShared;
 use rlive_engine::{mix_cell, EngineCommand, GraphOp, RecordCmd, TrackNode};
 use rlive_project::history::ParkedTrack;
-use rlive_project::{Device, Route, Track, TrackKind};
+use rlive_project::{Route, Track, TrackKind};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -27,14 +27,11 @@ impl Session {
             return self.add_return().unwrap_or(TrackId(0));
         }
         let n = self.project.tracks.len() + 1;
-        let (name, device) = match kind {
-            TrackKind::Midi => (
-                format!("{n} MIDI"),
-                Some(Device::builtin("rlive.poly", "Poly Synth")),
-            ),
-            TrackKind::Audio => (format!("{n} Audio"), None),
-            TrackKind::Group => (format!("{n} Group"), None),
-            TrackKind::Return | TrackKind::Master => ("Master".to_string(), None),
+        let name = match kind {
+            TrackKind::Midi => format!("{n} MIDI"),
+            TrackKind::Audio => format!("{n} Audio"),
+            TrackKind::Group => format!("{n} Group"),
+            TrackKind::Return | TrackKind::Master => "Master".to_string(),
         };
         let mut t = Track::new(
             &name,
@@ -42,7 +39,6 @@ impl Session {
             self.colors.track_color(&self.project),
             self.project.scenes.len(),
         );
-        t.devices.extend(device);
         self.apply_track_default(&mut t);
         // A track placed among a group's members joins them.
         let prev = index

@@ -176,10 +176,12 @@ fn rename_ui(ui: &mut egui::Ui, state: &mut UiState, key: &str, apply: impl FnOn
         return;
     }
     let edit = ui.add(egui::TextEdit::singleline(&mut renaming.text).font(theme::font(11.0)));
-    edit.request_focus();
-    if edit.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+    if crate::ui::widgets::hold_focus(&edit) {
+        let keep = !crate::ui::widgets::escaped(ui);
         let text = state.browser.renaming.take().expect("just read").text;
-        state.browser.op(apply(text));
+        if keep {
+            state.browser.op(apply(text));
+        }
     }
 }
 

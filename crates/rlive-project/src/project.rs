@@ -240,7 +240,19 @@ impl Project {
         }
     }
 
-    /// The template a new project starts from: two MIDI tracks with a synth and an audio track.
+    /// What a new Set starts as: two MIDI tracks and an audio track, with nothing on them.
+    pub fn new_set() -> Self {
+        let mut p = Self::empty();
+        let scenes = p.scenes.len();
+        p.tracks = vec![
+            Track::new("1 MIDI", TrackKind::Midi, PALETTE[9], scenes),
+            Track::new("2 MIDI", TrackKind::Midi, PALETTE[1], scenes),
+            Track::new("3 Audio", TrackKind::Audio, PALETTE[5], scenes),
+        ];
+        p
+    }
+
+    /// A small Set with something in it: synths, an effect and a clip. Tests build on this.
     pub fn new_default() -> Self {
         let mut p = Self::empty();
         let mut t1 = Track::new("1 Poly", TrackKind::Midi, PALETTE[9], p.scenes.len());
@@ -536,6 +548,16 @@ mod tests {
         let loaded = Project::from_ron(&s).unwrap();
         assert_eq!(p, loaded);
         assert!(rlive_core::DeviceId::new().0 > 2_000_100);
+    }
+
+    #[test]
+    fn a_new_set_has_tracks_with_nothing_on_them() {
+        let p = Project::new_set();
+        assert_eq!(p.tracks.len(), 3);
+        for t in &p.tracks {
+            assert!(t.devices.is_empty(), "{}", t.name);
+            assert!(t.clips.iter().all(Option::is_none), "{}", t.name);
+        }
     }
 
     #[test]

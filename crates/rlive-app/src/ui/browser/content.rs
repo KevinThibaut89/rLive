@@ -669,3 +669,76 @@ fn receive_drop_into_place(
         state.pending_clip_save = Some((clip, folder, name));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::ChainRef;
+    use egui::{Event, Modifiers, PointerButton, RawInput};
+    use rlive_browser::item::{Item, ItemKind};
+    use rlive_browser::{ItemKey, Results};
+    use rlive_engine::create_engine;
+    use rlive_plugin_host::scanner::PluginCache;
+    use rlive_project::Project;
+
+    #[test]
+    fn double_clicking_a_device_adds_it_to_the_selected_track() {
+        let (_engine, handle) = create_engine(48_000.0, 512);
+        let mut s = Session::new(handle, Project::new_set(), PluginCache::default());
+        let track = s.project.tracks[1].id;
+        let mut state = UiState::initial(&s, &crate::settings::Settings::default(), String::new());
+        state.selected = Some(ChainRef::Track(track));
+        state.detail = crate::ui::Detail::Clip;
+        state.show_detail = false;
+        let mut item = Item::new(ItemKey::builtin("rlive.reverb"), "Reverb", ItemKind::Device);
+        item.device = Some("rlive.reverb".to_string());
+        let row = Row {
+            item: Arc::new(item),
+            depth: 0,
+            has_children: false,
+            expanded: false,
+            colors: 0,
+        };
+        state.browser.model.take_results(Arc::new(Results {
+            id: 1,
+            rows: vec![row.clone()],
+            search: false,
+        }));
+        let lib = LibraryData::default();
+        let ctx = egui::Context::default();
+        let area = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(300.0, ROW_H));
+        let pos = rect.center();
+        let mut time = 0.0;
+        let mut frame = |events: Vec<Event>, s: &mut Session, state: &mut UiState| {
+            let raw = RawInput {
+                events,
+                time: Some(time),
+                screen_rect: Some(area),
+                ..RawInput::default()
+            };
+            let mut out = ctx.run_ui(raw, |root| {
+                draw_row(root, rect, &row, &[], &lib, s, state);
+            });
+            out.textures_delta.clear();
+            time += 0.03;
+        };
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        frame(vec![Event::PointerMoved(pos)], &mut s, &mut state);
+        for _ in 0..2 {
+            frame(vec![button(true)], &mut s, &mut state);
+            frame(vec![button(false)], &mut s, &mut state);
+        }
+        let devices = s.devices(ChainRef::Track(track));
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].name, "Reverb");
+        assert_eq!(s.project.tracks.len(), 3, "no new track");
+        assert!(state.show_detail && state.detail == crate::ui::Detail::Devices);
+        assert_eq!(state.devices.scroll_to, Some(devices[0].id));
+    }
+}

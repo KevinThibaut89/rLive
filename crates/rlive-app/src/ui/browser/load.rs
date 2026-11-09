@@ -513,21 +513,29 @@ pub(crate) fn apply(session: &mut Session, state: &mut UiState, item: &BrowserIt
         BrowserItem::ChordBank(path) => return load_chord_bank(state, path),
         _ => {}
     }
-    let id = match state.selected {
-        Some(ChainRef::Track(t)) => t,
-        Some(chain @ (ChainRef::Master | ChainRef::Nested(_))) => {
-            add_to_chain(session, state, chain, item);
-            return;
-        }
-        None => {
-            let kind = match item {
-                BrowserItem::Sample(_) => TrackKind::Audio,
-                _ => TrackKind::Midi,
-            };
-            session.add_track(kind, None)
-        }
-    };
-    drop_item(session, state, id, item, None, false);
+    let chain = state.selected.unwrap_or_else(|| {
+        let kind = match item {
+            BrowserItem::Sample(_) => TrackKind::Audio,
+            _ => TrackKind::Midi,
+        };
+        ChainRef::Track(session.add_track(kind, None))
+    });
+    let before: Vec<_> = session.devices(chain).iter().map(|d| d.id).collect();
+    match chain {
+        ChainRef::Track(id) => drop_item(session, state, id, item, None, false),
+        ChainRef::Master | ChainRef::Nested(_) => add_to_chain(session, state, chain, item),
+    }
+    // Whatever was showing below, a device that was just added should be in view.
+    let added = session
+        .devices(chain)
+        .iter()
+        .find(|d| !before.contains(&d.id))
+        .map(|d| d.id);
+    if let Some(id) = added {
+        state.detail = crate::ui::Detail::Devices;
+        state.show_detail = true;
+        state.devices.scroll_to = Some(id);
+    }
 }
 
 fn add_to_chain(session: &mut Session, state: &mut UiState, chain: ChainRef, item: &BrowserItem) {

@@ -18,6 +18,7 @@ impl RliveApp {
         match c {
             App::About => self.ui.show_about = true,
             App::Preferences => {
+                self.ui.settings_raise = self.ui.show_settings;
                 self.ui.show_settings = true;
                 self.ui.audio_devices = None;
                 self.ui.midi_ports = None;

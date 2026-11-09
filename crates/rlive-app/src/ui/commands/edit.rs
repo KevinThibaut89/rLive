@@ -245,7 +245,10 @@ impl RliveApp {
             on(Edit::Duplicate),
             focus != EditFocus::Text && has_selection,
         );
-        s.enable(on(Edit::Delete), focus != EditFocus::Text && has_selection);
+        s.enable(
+            on(Edit::Delete),
+            self.can_delete_in_device_view(ctx) || (focus != EditFocus::Text && has_selection),
+        );
         s.enable(
             on(Edit::Rename),
             focus != EditFocus::Text
@@ -379,6 +382,9 @@ impl RliveApp {
     }
 
     fn edit_command(&mut self, ctx: &egui::Context, c: Edit) {
+        if c == Edit::Delete && self.delete_in_device_view(ctx) {
+            return;
+        }
         match self.edit_focus(ctx) {
             EditFocus::Notes => self.edit_notes(c),
             EditFocus::ArrClips => self.edit_arr_clips(c),

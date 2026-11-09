@@ -705,6 +705,8 @@ pub struct Settings {
     pub user_library: Option<PathBuf>,
     /// The browser runs the full height of the window (manual p. 63).
     pub full_height_browser: bool,
+    /// The mixer's In/Out section, with each track's routing.
+    pub show_in_out: bool,
     /// EXT, Follow, Link and their options.
     pub sync: SyncSettings,
     /// Whether a saved clip or preset takes its files along.
@@ -792,6 +794,7 @@ impl Default for Settings {
             collect_on_export: CollectFiles::default(),
             recent_sets: Vec::new(),
             full_height_browser: true,
+            show_in_out: true,
             sync: SyncSettings::default(),
             cpu: CpuSettings::default(),
         }
@@ -917,6 +920,7 @@ mod tests {
             collect_on_export: CollectFiles::Ask,
             recent_sets: vec![PathBuf::from("/set.rlive")],
             full_height_browser: false,
+            show_in_out: false,
             sample_dir: Some(PathBuf::from("/samples")),
             plugin_dirs: vec![PathBuf::from("/plugins")],
             plugins: PluginSettings {

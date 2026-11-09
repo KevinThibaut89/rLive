@@ -460,8 +460,7 @@ fn title_bar(
     }
     if let Some(name) = state.clip_view.rename.as_mut() {
         let r = tu.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
-        r.request_focus();
-        if r.lost_focus() {
+        if crate::ui::widgets::hold_focus(&r) {
             let typed = state.clip_view.rename.take().unwrap_or_default();
             if tu.input(|i| !i.key_pressed(egui::Key::Escape)) {
                 session.rename_clips(group, &typed);

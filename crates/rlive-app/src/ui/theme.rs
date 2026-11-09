@@ -81,13 +81,10 @@ impl Theme {
         self.map.apply(c)
     }
 
-    /// A grid or ruler line, with the user's grid opacity applied.
-    pub fn grid_line(&self, c: Color32) -> Color32 {
-        if self.grid_opacity >= 1.0 {
-            c
-        } else {
-            c.gamma_multiply(self.grid_opacity)
-        }
+    /// A grid line of `alpha` strength, scaled by the user's Grid Line Opacity. It lightens dark
+    /// themes and darkens light ones, so it always stands out from what is behind it.
+    pub fn grid_line(&self, alpha: u8) -> Color32 {
+        self.overlay(alpha).gamma_multiply(self.grid_opacity)
     }
 
     /// A translucent wash that lightens in dark themes and darkens in light ones.
@@ -567,7 +564,7 @@ mod tests {
         for v in [0x000000, 0x2a2a2a, 0x3d4a57, 0xb5e0ff, 0xffffff] {
             assert_eq!(theme.map(hex(v)), hex(v));
         }
-        assert_eq!(theme.grid_line(hex(0x0f0f0f)), hex(0x0f0f0f));
+        assert_eq!(theme.grid_line(45), Color32::from_white_alpha(45));
         assert_eq!(theme.overlay(45), Color32::from_white_alpha(45));
     }
 
@@ -663,12 +660,10 @@ mod tests {
 
     #[test]
     fn grid_opacity_fades_grid_lines() {
-        let t = with(|s| s.grid_opacity = 0.5);
-        assert!(t.grid_line(hex(0xffffff)).a() < 255);
-        assert_eq!(
-            with(|s| s.grid_opacity = 1.0).grid_line(hex(0xffffff)).a(),
-            255
-        );
+        let faded = with(|s| s.grid_opacity = 0.5).grid_line(100).a();
+        let full = with(|s| s.grid_opacity = 1.0).grid_line(100).a();
+        assert!(faded < full, "{faded} {full}");
+        assert_eq!(with(|s| s.grid_opacity = 0.0).grid_line(100).a(), 0);
     }
 
     #[test]

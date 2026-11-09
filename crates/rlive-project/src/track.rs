@@ -190,6 +190,8 @@ pub struct TrackUi {
     pub folded: bool,
     /// The Arrangement lane's height in points, when set by hand.
     pub height: Option<f32>,
+    /// The Session View column's width in points, when set by hand.
+    pub width: Option<f32>,
     pub show_take_lanes: bool,
     /// The take lane being auditioned, by index.
     pub audition_lane: Option<usize>,

@@ -234,6 +234,7 @@ fn apply(
         }
         Action::Add(item) => add_item(session, chain, item),
         Action::SelectDevice(id, additive) => {
+            view.ui.key_focus = None;
             select_device(&mut view.selected_devices, chain, id, additive);
         }
         Action::Rename(id, name) => session.rename_device(chain, id, &name),

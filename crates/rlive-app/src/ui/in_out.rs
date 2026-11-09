@@ -10,7 +10,7 @@ use rlive_core::{CrossfadeCurve, TrackId};
 use rlive_project::{Crossfade, CustomLayout, Monitor, Route, Tap, TrackKind, TuningLayout};
 
 /// How tall the section is in a mixer strip, and how wide beside an Arrangement lane.
-pub(super) const IN_OUT_H: f32 = 132.0;
+pub(super) const IN_OUT_H: f32 = 150.0;
 pub(super) const ARR_IN_OUT_W: f32 = 236.0;
 const ROW_H: f32 = 16.0;
 /// How tall the Crossfade Assign row is, under the mixer strip's buttons.
@@ -38,6 +38,20 @@ fn chooser(
     let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
     child.spacing_mut().interact_size.y = rect.height();
     child.spacing_mut().button_padding = Vec2::new(3.0, 0.0);
+    // A plain field with an outline, as Live's choosers are.
+    let visuals = child.visuals_mut();
+    let edge = egui::Stroke::new(1.0, pal().grid_line(70));
+    for w in [
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.open,
+    ] {
+        w.weak_bg_fill = pal().field_bg;
+        w.bg_fill = pal().field_bg;
+        w.bg_stroke = edge;
+        w.corner_radius = egui::CornerRadius::same(1);
+        w.expansion = 0.0;
+    }
     let mut combo = ComboBox::from_id_salt(salt)
         .width(rect.width())
         .height(240.0)
@@ -78,6 +92,8 @@ fn output_type_label(session: &Session, id: TrackId) -> String {
         return String::new();
     };
     match &t.routing.output {
+        // A MIDI track with no instrument has nothing to send to the Main track.
+        Route::Default if !audio_of(session, id) => "No Output".into(),
         Route::Default | Route::Resampling => "Main".into(),
         Route::None => "No Output".into(),
         Route::SendsOnly => "Sends Only".into(),
@@ -116,6 +132,25 @@ fn audio_of(session: &Session, id: TrackId) -> bool {
         .is_some_and(|t| t.kind != TrackKind::Midi || !session.is_midi_only(id))
 }
 
+/// A chooser with nothing to choose, greyed out and holding its place in the column.
+fn blank_field(ui: &egui::Ui, rect: Rect, text: &str) {
+    let p = ui.painter();
+    p.rect_filled(rect, 1.0, pal().field_bg.gamma_multiply(0.5));
+    p.rect_stroke(
+        rect,
+        1.0,
+        egui::Stroke::new(1.0, pal().grid_line(30)),
+        egui::StrokeKind::Inside,
+    );
+    p.with_clip_rect(rect.shrink(2.0)).text(
+        rect.left_center() + Vec2::new(4.0, 0.0),
+        Align2::LEFT_CENTER,
+        text,
+        theme::font(10.0),
+        pal().text_faint,
+    );
+}
+
 /// The upper or lower chooser pair of the section.
 fn input_pair(
     ui: &mut egui::Ui,
@@ -141,8 +176,10 @@ fn input_pair(
         return;
     };
     let (route, tap) = (t.routing.input.clone(), t.routing.tap);
+    let is_midi = t.kind == TrackKind::Midi;
     let list = session.input_channels(id, &hw);
     if list.is_empty() {
+        blank_field(ui, rects[1], if is_midi { "All Channels" } else { "" });
         return;
     }
     let shown = channel_label(&list, &route, Some(tap));
@@ -185,6 +222,7 @@ fn output_pair(
     let route = t.routing.output.clone();
     let list = session.output_channels(id, &hw);
     if list.is_empty() {
+        blank_field(ui, rects[1], "");
         return;
     }
     let shown = channel_label(&list, &route, None);
@@ -209,11 +247,20 @@ fn monitor_row(ui: &mut egui::Ui, session: &mut Session, state: &UiState, id: Tr
     let monitor = t.routing.monitor;
     let w = (rect.width() / 3.0).floor();
     let mut hovered = false;
-    let options = [
-        (Monitor::In, "In"),
-        (Monitor::Auto, "Auto"),
-        (Monitor::Off, "Off"),
-    ];
+    // A narrow track has room for a letter each.
+    let options = if w < 25.0 {
+        [
+            (Monitor::In, "I"),
+            (Monitor::Auto, "A"),
+            (Monitor::Off, "O"),
+        ]
+    } else {
+        [
+            (Monitor::In, "In"),
+            (Monitor::Auto, "Auto"),
+            (Monitor::Off, "Off"),
+        ]
+    };
     for (i, (mode, label)) in options.into_iter().enumerate() {
         let r = Rect::from_min_size(
             rect.min + Vec2::new(i as f32 * w, 0.0),
@@ -273,12 +320,12 @@ pub(super) fn strip_section(
     };
     let p = ui.painter().clone();
     let small = |p: &egui::Painter, r: Rect, t: &str| {
-        p.text(
+        p.with_clip_rect(r).text(
             r.left_center(),
             Align2::LEFT_CENTER,
             t,
-            theme::font(9.0),
-            pal().text_faint,
+            theme::font_bold(9.5),
+            pal().text,
         );
     };
     let mut n = 0;
@@ -293,8 +340,9 @@ pub(super) fn strip_section(
             },
         );
         input_pair(ui, session, state, id, [row(1), row(2)]);
-        monitor_row(ui, session, state, id, row(3));
-        n = 4;
+        small(&p, row(3), "Monitor");
+        monitor_row(ui, session, state, id, row(4));
+        n = 5;
     }
     small(&p, row(n), if audio { "Audio To" } else { "MIDI To" });
     if kind == TrackKind::Midi {

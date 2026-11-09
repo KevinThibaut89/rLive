@@ -224,6 +224,12 @@ pub struct UiState {
     pub key_velocity: f32,
     held: HashMap<Key, u8>,
     show_settings: bool,
+    /// Where the Settings window opened, fixed while it stays open.
+    settings_pos: Option<[f32; 2]>,
+    /// Bring the open Settings window to the front.
+    settings_raise: bool,
+    /// The system title bar's height, once it has been measured.
+    title_bar_h: Option<f32>,
     settings_tab: settings_window::Tab,
     /// The info text being typed, and for what.
     pub info_edit: Option<(InfoTarget, String)>,
@@ -347,6 +353,17 @@ fn parse_length(text: &str, sig: TimeSignature) -> Option<f64> {
     )
 }
 
+/// Runs a window's own colours up under the system's close, minimise and zoom buttons, so the
+/// title bar is part of the window rather than a strip above it. `title_strip` fills the space.
+pub fn window_chrome(builder: egui::ViewportBuilder) -> egui::ViewportBuilder {
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .with_fullsize_content_view(true)
+        .with_titlebar_shown(false)
+        .with_title_shown(false);
+    builder
+}
+
 #[cfg(not(target_os = "macos"))]
 const MENU_H: f32 = 22.0;
 const CONTROL_BAR_H: f32 = 34.0;
@@ -416,7 +433,10 @@ impl UiState {
             follow_scrolls: false,
             midi_auto_reset: false,
             toggle_midi_auto_reset: false,
-            layout: session_view::SessionLayout::default(),
+            layout: session_view::SessionLayout {
+                show_in_out: settings.show_in_out,
+                ..session_view::SessionLayout::default()
+            },
             arr: arrangement::ArrangementState::default(),
             show_browser: settings.show_browser.unwrap_or(true),
             show_groove_pool: false,
@@ -433,6 +453,9 @@ impl UiState {
             key_velocity: 0.8,
             held: HashMap::new(),
             show_settings: false,
+            settings_pos: None,
+            settings_raise: false,
+            title_bar_h: None,
             settings_tab: settings_window::Tab::default(),
             info_edit: None,
             info_edit_focus: false,
@@ -490,7 +513,7 @@ impl RliveApp {
         if skip_scan {
             log::info!("plug-in scan skipped: modifier held at launch");
         }
-        let mut session = Session::new(handle, Project::new_default(), plugins);
+        let mut session = Session::new(handle, Project::new_set(), plugins);
         session
             .samples
             .configure(settings.samples.loader_config(settings.warp.auto_warp_long));
@@ -1839,6 +1862,35 @@ impl RliveApp {
     }
 
     /// Live-style control bar: tempo & signature left, transport centre, status right.
+    /// The band at the top of a window that the system's buttons sit on, in the control bar's
+    /// colour. A full-screen window has no buttons, so no band.
+    pub(super) fn title_strip(&mut self, ui: &mut egui::Ui, id: &'static str, title: &str) {
+        #[cfg(target_os = "macos")]
+        {
+            if ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+                return;
+            }
+            if self.ui.title_bar_h.is_none() {
+                self.ui.title_bar_h = mac_menu::title_bar_height();
+            }
+            egui::Panel::top(id)
+                .exact_size(self.ui.title_bar_h.unwrap_or(28.0))
+                .show_separator_line(false)
+                .frame(egui::Frame::new().fill(pal().bar_bg))
+                .show(ui, |ui| {
+                    ui.painter().text(
+                        ui.max_rect().center(),
+                        egui::Align2::CENTER_CENTER,
+                        title,
+                        theme::font(12.0),
+                        pal().text_dim,
+                    );
+                });
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (&self.ui, ui, id, title);
+    }
+
     fn control_bar(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
         let p = ui.painter().clone();
@@ -2429,6 +2481,43 @@ impl RliveApp {
     }
 
     /// Info view (left), messages (middle), panel toggles (right).
+    /// The menu in the bottom right corner choosing which parts of the mixer show (manual p. 372).
+    fn mixer_controls_menu(&mut self, ui: &mut egui::Ui) {
+        use commands::view::View as V;
+        let (layout, window) = (&self.ui.layout, &self.session.project.window_layout);
+        let parts = [
+            ("Mixer", V::ToggleMixer, layout.show_mixer),
+            ("In/Out", V::ToggleInOut, layout.show_in_out),
+            ("Sends", V::ToggleSends, window.show_sends),
+            ("Return Tracks", V::ToggleReturns, window.show_returns),
+            ("Track Delay", V::ToggleTrackDelay, layout.show_track_delay),
+            ("Crossfader", V::ToggleCrossfader, layout.show_crossfader),
+            (
+                "Performance Impact",
+                V::TogglePerformanceImpact,
+                layout.show_impact,
+            ),
+        ];
+        let mut picked = None;
+        let label = egui::RichText::new("Mixer").size(10.5);
+        let menu = ui.menu_button(label, |ui| {
+            for (name, command, on) in parts {
+                if ui.selectable_label(on, name).clicked() {
+                    picked = Some(command);
+                    ui.close();
+                }
+            }
+        });
+        info(
+            menu.response,
+            "Mixer Controls — choose which parts of the mixer show, such as In/Out routing",
+        );
+        if let Some(command) = picked {
+            let ctx = ui.ctx().clone();
+            self.dispatch(&ctx, commands::MenuCommand::View(command));
+        }
+    }
+
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
         let p = ui.painter().clone();
@@ -2510,6 +2599,7 @@ impl RliveApp {
         }
 
         u.with_layout(egui::Layout::right_to_left(egui::Align::Center), |u| {
+            self.mixer_controls_menu(u);
             let d = self.ui.show_detail;
             let r = widgets::bare_icon(u, Vec2::new(22.0, 18.0), |p, r, c| {
                 icons::panel_toggle(
@@ -2751,6 +2841,8 @@ impl RliveApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
 
+        let title = self.ui.files.title.trim_end_matches(" - rLive").to_string();
+        self.title_strip(ui, "title_strip", &title);
         #[cfg(not(target_os = "macos"))]
         egui::Panel::top("menu")
             .exact_size(MENU_H)

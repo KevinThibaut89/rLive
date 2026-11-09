@@ -39,7 +39,11 @@ use std::sync::atomic::Ordering;
 const HEADER_H: f32 = 22.0;
 const STOP_ROW_H: f32 = 20.0;
 const MIN_TRACK_W: f32 = 84.0;
-const MAX_TRACK_W: f32 = 150.0;
+const MAX_TRACK_W: f32 = 100.0;
+/// How narrow and wide dragging a title bar's edge can make a track.
+const TRACK_W_RANGE: (f32, f32) = (56.0, 420.0);
+/// How strongly the lines between clip slots are drawn.
+const SLOT_LINE: u8 = 46;
 const MIN_SLOT_H: f32 = 20.0;
 const MAX_SLOT_H: f32 = 26.0;
 const ADD_COL_W: f32 = 36.0;
@@ -68,6 +72,36 @@ fn click_track(state: &mut UiState, ui: &egui::Ui, id: TrackId) {
     state.title_focus = Some(id);
 }
 
+/// The field a track's name is typed in. Enter or clicking away keeps the name, Esc drops it.
+pub(crate) fn track_name_field(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    session: &mut Session,
+    state: &mut UiState,
+    id: TrackId,
+    size: f32,
+) {
+    let Some((_, text)) = &mut state.renaming else {
+        return;
+    };
+    let r = ui.put(
+        rect,
+        egui::TextEdit::singleline(text).font(theme::font(size)),
+    );
+    if !widgets::hold_focus(&r) {
+        return;
+    }
+    let keep = !widgets::escaped(ui);
+    if let Some((_, text)) = state.renaming.take() {
+        if keep {
+            if let Some(t) = session.project.track_mut(id) {
+                t.name = text;
+            }
+            session.dirty = true;
+        }
+    }
+}
+
 /// Layout state that persists across frames.
 pub struct SessionLayout {
     pub scroll: Vec2,
@@ -81,18 +115,31 @@ pub struct SessionLayout {
     pub reveal: Option<(TrackId, usize)>,
     /// The Performance Impact meters.
     pub show_impact: bool,
+    /// The Track Delay fields, hidden until asked for.
+    pub show_track_delay: bool,
+    /// Where the last track's width handle was drawn, for tests to drag.
+    #[cfg(test)]
+    pub last_width_handle: Option<Rect>,
+    /// Where the mixer's top edge was drawn, for tests to drag.
+    #[cfg(test)]
+    pub last_splitter: Option<Rect>,
 }
 
 impl Default for SessionLayout {
     fn default() -> Self {
         Self {
             scroll: Vec2::ZERO,
-            mixer_h: 190.0,
+            mixer_h: 170.0,
             show_mixer: true,
-            show_in_out: false,
+            show_in_out: true,
             show_crossfader: false,
             reveal: None,
             show_impact: false,
+            show_track_delay: false,
+            #[cfg(test)]
+            last_width_handle: None,
+            #[cfg(test)]
+            last_splitter: None,
         }
     }
 }
@@ -131,6 +178,8 @@ enum Column {
 /// Geometry of the view for this frame.
 struct Geo {
     track_w: f32,
+    /// Where each column starts, then where the last one ends, from the first column's left.
+    edges: Vec<f32>,
     slot_h: f32,
     tracks_left: f32,
     tracks_right: f32,
@@ -142,16 +191,37 @@ struct Geo {
     stop_row: Rect,
     mixer: Rect,
     compact_mixer: bool,
+    in_out_h: f32,
 }
 
 impl Geo {
     fn track_x(&self, i: usize, scroll_x: f32) -> f32 {
-        self.tracks_left + i as f32 * self.track_w - scroll_x
+        self.tracks_left + self.edges[i.min(self.edges.len() - 1)] - scroll_x
+    }
+
+    fn column_w(&self, i: usize) -> f32 {
+        match (self.edges.get(i), self.edges.get(i + 1)) {
+            (Some(a), Some(b)) => b - a,
+            _ => self.track_w,
+        }
+    }
+
+    /// The column under `x` in content space, if there is one.
+    fn column_at(&self, x: f32) -> Option<usize> {
+        column_index(&self.edges, x)
     }
 
     fn slot_y(&self, j: usize, scroll_y: f32) -> f32 {
         self.grid.top() + j as f32 * self.slot_h - scroll_y
     }
+}
+
+/// Which column `x` falls in, given where each one starts and where the last one ends.
+fn column_index(edges: &[f32], x: f32) -> Option<usize> {
+    if x < 0.0 || x >= *edges.last()? {
+        return None;
+    }
+    Some(edges.partition_point(|e| *e <= x) - 1)
 }
 
 /// A mixer control of a track, as an envelope addresses it.
@@ -206,16 +276,20 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let tracks_right = master_x - return_w * n_returns as f32;
     let mixer_h = if state.layout.show_mixer {
         // On short windows the mixer gives room to the clip grid.
-        state
-            .layout
-            .mixer_h
-            .clamp(90.0, (full.height() * 0.42).max(90.0))
+        state.layout.mixer_h
     } else {
         0.0
     };
     // The In/Out section is added to the mixer's height, so the strips keep their room.
     let in_out_h = if state.layout.show_mixer && state.layout.show_in_out {
         in_out::IN_OUT_H
+    } else {
+        0.0
+    };
+    // The mixer can grow until a few rows of clips are left above it.
+    let mixer_h = if state.layout.show_mixer {
+        let tallest = full.height() - in_out_h - HEADER_H - STOP_ROW_H - 3.0 * MIN_SLOT_H;
+        mixer_h.clamp(90.0, tallest.max(90.0))
     } else {
         0.0
     };
@@ -248,8 +322,22 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
             .clamp(MIN_SLOT_H, MAX_SLOT_H)
             .floor()
     };
+    let mut edges = vec![0.0];
+    let mut end = 0.0;
+    for column in &grid_columns {
+        end += match column {
+            Column::Track(id, _) => session
+                .project
+                .track(*id)
+                .and_then(|t| t.ui.width)
+                .unwrap_or(track_w),
+            Column::Chain(_) => track_w,
+        };
+        edges.push(end);
+    }
     let g = Geo {
         track_w,
+        edges,
         slot_h,
         tracks_left: full.left(),
         tracks_right,
@@ -264,10 +352,11 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         stop_row,
         mixer,
         compact_mixer: mixer_h - in_out_h < 140.0,
+        in_out_h,
     };
 
     // ---- scrolling
-    let content_w = n_tracks as f32 * track_w + ADD_COL_W;
+    let content_w = g.edges[g.edges.len() - 1] + ADD_COL_W;
     let content_h = n_scenes as f32 * slot_h;
     let max_x = (content_w - (tracks_right - full.left())).max(0.0);
     let max_y = (content_h - grid.height()).max(0.0);
@@ -295,12 +384,13 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
             .iter()
             .position(|c| matches!(c, Column::Track(id, _) if *id == track))
         {
-            let left = col as f32 * track_w;
+            let left = g.edges[col];
+            let w = g.column_w(col);
             let visible_w = tracks_right - full.left();
             if left < s.x {
                 s.x = left;
-            } else if left + track_w > s.x + visible_w {
-                s.x = left + track_w - visible_w;
+            } else if left + w > s.x + visible_w {
+                s.x = left + w - visible_w;
             }
         }
     }
@@ -327,14 +417,15 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     // ---- tracks
     for (col, column) in grid_columns.iter().enumerate() {
         let x = g.track_x(col, scroll.x);
-        if x + track_w < full.left() || x > g.tracks_right {
+        let w = g.column_w(col);
+        if x + w < full.left() || x > g.tracks_right {
             continue; // off screen
         }
         match column {
             Column::Track(id, i) => {
-                track_column(ui, session, state, &g, *id, *i, x, scroll.y, blink);
+                track_column(ui, session, state, &g, *id, *i, x, w, scroll.y, blink);
             }
-            Column::Chain(chain) => chain_column(ui, session, state, &g, chain, x),
+            Column::Chain(chain) => chain_column(ui, session, state, &g, chain, x, w),
         }
     }
 
@@ -405,12 +496,12 @@ fn grid_cell(
     if !g.grid.contains(pos) || n_scenes == 0 {
         return None;
     }
-    let col = ((pos.x - g.tracks_left + scroll.x) / g.track_w).floor();
+    let col = g.column_at(pos.x - g.tracks_left + scroll.x)?;
     let row = ((pos.y - g.grid.top() + scroll.y) / g.slot_h).floor();
-    if col < 0.0 || row < 0.0 || row as usize >= n_scenes {
+    if row < 0.0 || row as usize >= n_scenes {
         return None;
     }
-    match columns.get(col as usize)? {
+    match columns.get(col)? {
         Column::Track(id, _) => Some((*id, row as usize)),
         Column::Chain(_) => None,
     }
@@ -445,7 +536,7 @@ fn rubber_band(
         for row in 0..n {
             let r = Rect::from_min_size(
                 Pos2::new(x, g.slot_y(row, scroll.y)),
-                Vec2::new(g.track_w - 1.0, g.slot_h - 1.0),
+                Vec2::new(g.column_w(c) - 1.0, g.slot_h - 1.0),
             );
             if r.intersects(band) {
                 slots.push((*id, row));
@@ -513,8 +604,8 @@ fn chain_column(
     g: &Geo,
     chain: &ChainColumn,
     x: f32,
+    w: f32,
 ) {
-    let w = g.track_w;
     let rects = ColumnRects {
         header: Rect::from_min_size(
             Pos2::new(x, g.header.top()),
@@ -572,23 +663,7 @@ fn return_column(
     }
     let renaming = matches!(&state.renaming, Some((tid, _)) if *tid == id);
     if renaming {
-        let mut done = false;
-        if let Some((_, text)) = &mut state.renaming {
-            let r = ui.put(
-                rect.shrink(1.0),
-                egui::TextEdit::singleline(text).font(theme::font(11.5)),
-            );
-            r.request_focus();
-            done = r.lost_focus();
-        }
-        if done {
-            if let Some((_, text)) = state.renaming.take() {
-                if let Some(t) = session.project.track_mut(id) {
-                    t.name = text;
-                }
-                session.dirty = true;
-            }
-        }
+        track_name_field(ui, rect.shrink(1.0), session, state, id, 11.5);
     } else {
         let galley =
             ui.painter()
@@ -696,6 +771,77 @@ pub(super) fn return_menu(
     }
 }
 
+/// The lines around a column's clip slots, in the gaps the slots leave between them.
+#[allow(clippy::too_many_arguments)]
+fn slot_lines(
+    ui: &egui::Ui,
+    g: &Geo,
+    col_clip: Rect,
+    x: f32,
+    w: f32,
+    first: usize,
+    last: usize,
+    scroll_y: f32,
+) {
+    let p = ui.painter().with_clip_rect(g.grid.intersect(col_clip));
+    let stroke = Stroke::new(1.0, pal().grid_line(SLOT_LINE));
+    for slot in first..last {
+        let y = g.slot_y(slot, scroll_y) + g.slot_h - 0.5;
+        p.line_segment([Pos2::new(x, y), Pos2::new(x + w, y)], stroke);
+    }
+    let right = x + w - 0.5;
+    p.line_segment(
+        [
+            Pos2::new(right, g.grid.top()),
+            Pos2::new(right, g.grid.bottom()),
+        ],
+        stroke,
+    );
+}
+
+/// The right edge of a track's title bar: drag to resize the column, with Alt for every track.
+fn track_width_handle(
+    ui: &egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    g: &Geo,
+    id: TrackId,
+    x: f32,
+    w: f32,
+) {
+    let rect = Rect::from_min_max(
+        Pos2::new(x + w - 5.0, g.header.top()),
+        Pos2::new(x + w + 2.0, g.header.bottom()),
+    );
+    let resp = ui.interact(
+        rect.intersect(g.header),
+        ui.scope_id().with(("track_width", id)),
+        Sense::drag(),
+    );
+    #[cfg(test)]
+    {
+        state.layout.last_width_handle = Some(rect);
+    }
+    #[cfg(not(test))]
+    let _ = &state;
+    if resp.hovered() || resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    let dx = resp.drag_delta().x;
+    if !resp.dragged() || dx == 0.0 {
+        return;
+    }
+    let width = (w + dx).clamp(TRACK_W_RANGE.0, TRACK_W_RANGE.1).round();
+    if ui.input(|i| i.modifiers.alt) {
+        for t in &mut session.project.tracks {
+            t.ui.width = Some(width);
+        }
+    } else if let Some(t) = session.project.track_mut(id) {
+        t.ui.width = Some(width);
+    }
+    session.dirty = true;
+}
+
 #[allow(clippy::too_many_arguments)]
 fn track_column(
     ui: &mut egui::Ui,
@@ -705,6 +851,7 @@ fn track_column(
     id: TrackId,
     index: usize,
     x: f32,
+    w: f32,
     scroll_y: f32,
     blink: bool,
 ) {
@@ -730,7 +877,6 @@ fn track_column(
     let has_rack_mixer = rack_mixer::track_has_mixer(&t.devices);
     let rack_mixer_open = state.devices.mixer_open.contains(&MixFold::Track(id));
     let track_color = rgb(color);
-    let w = g.track_w;
     let col_clip = Rect::from_min_max(
         Pos2::new(g.tracks_left, g.header.top()),
         Pos2::new(g.tracks_right, g.mixer.bottom()),
@@ -784,23 +930,7 @@ fn track_column(
         }
         let renaming = matches!(&state.renaming, Some((tid, _)) if *tid == id);
         if renaming {
-            let mut done = false;
-            if let Some((_, text)) = &mut state.renaming {
-                let r = cu.put(
-                    rect.shrink(1.0),
-                    egui::TextEdit::singleline(text).font(theme::font(11.5)),
-                );
-                r.request_focus();
-                done = r.lost_focus();
-            }
-            if done {
-                if let Some((_, text)) = state.renaming.take() {
-                    if let Some(t) = session.project.track_mut(id) {
-                        t.name = text;
-                    }
-                    session.dirty = true;
-                }
-            }
+            track_name_field(&mut cu, rect.shrink(1.0), session, state, id, 11.5);
         } else {
             let galley = cu.painter().layout_no_wrap(
                 name.clone(),
@@ -1160,6 +1290,9 @@ fn track_column(
         remote_map::overlay(&cu, rect, MapTarget::ClipSlot { track: id, slot });
     }
 
+    slot_lines(ui, g, col_clip, x, w, first, last, scroll_y);
+    track_width_handle(ui, session, state, g, id, x, w);
+
     // ---- clip stop button
     {
         let rect = Rect::from_min_size(
@@ -1436,7 +1569,6 @@ fn mixer_strip(
     nav::set_group(ui.ctx(), nav::Group::Track(id));
     let mut new_mix = (vol, pan, mute, solo);
     let inner = rect.shrink2(Vec2::new(5.0, 6.0));
-    let buttons_h = 17.0;
     let mut y = inner.top() + 2.0;
 
     if !compact && state.layout.show_in_out {
@@ -1462,37 +1594,12 @@ fn mixer_strip(
             }
             y += 18.0;
         }
-        let knob_r =
-            Rect::from_center_size(Pos2::new(inner.center().x, y + 13.0), Vec2::new(28.0, 26.0));
-        let mut ku = ui.new_child(UiBuilder::new().max_rect(knob_r));
-        let shown = session
-            .automated_cell_value(chain, mix_cell::PAN)
-            .map_or(pan, |v| v as f32);
-        if let Some(v) = widgets::pan_knob(&mut ku, shown) {
-            new_mix.1 = v;
-        }
-        remote_map::overlay_track(&ku, knob_r, id, mixer::PAN);
-        if let Some(moved) = session.modulated_cell_norm(chain, mix_cell::PAN) {
-            let needle = (shown + 1.0) / 2.0;
-            if let Some(span) = widgets::mod_ring_span(needle, moved) {
-                widgets::paint_mod_ring(&p, knob_r.center(), 9.5, span);
-            }
-        }
-        Led::of(session.cell_state(chain, mix_cell::PAN))
-            .paint(&p, knob_r.left_top() + Vec2::new(2.0, 2.0));
-        automation::control_zone(
-            &ku,
-            session,
-            state,
-            knob_r,
-            chain,
-            mixer_target(id, mixer::PAN),
-        );
-        y += 30.0;
         if !sends.is_empty() && show_sends {
             y = send_knobs(ui, session, state, id, is_return, &sends, inner, y);
         }
-        y = track_delay_row(ui, session, id, delay, inner, y);
+        if state.layout.show_track_delay {
+            y = track_delay_row(ui, session, id, delay, inner, y);
+        }
     }
     if state.layout.show_impact {
         let row = Rect::from_min_size(Pos2::new(inner.left(), y), Vec2::new(inner.width(), 7.0));
@@ -1506,11 +1613,22 @@ fn mixer_strip(
     } else {
         0.0
     };
-    let fader_bottom = inner.bottom() - buttons_h - 18.0 - assign_h;
-    let fader_w = (inner.width() * 0.5).clamp(26.0, 44.0);
-    let fader_r = Rect::from_min_max(
-        Pos2::new(inner.center().x - fader_w / 2.0, y),
-        Pos2::new(inner.center().x + fader_w / 2.0, fader_bottom.max(y + 20.0)),
+    // Volume, pan and the buttons stack down the left; the fader and meter fill the right.
+    let main = Rect::from_min_max(
+        Pos2::new(inner.left(), y),
+        Pos2::new(inner.right(), (inner.bottom() - assign_h).max(y + 20.0)),
+    );
+    let side_w = (main.width() * 0.42).clamp(24.0, 36.0);
+    let side = Rect::from_min_max(
+        main.left_top(),
+        Pos2::new(main.left() + side_w, main.bottom()),
+    );
+    let fader_left = side.right() + 5.0;
+    // Leaves room for the dB marks once the column is wide enough to hold them.
+    let fader_w = (main.right() - fader_left - 18.0).clamp(18.0, 34.0);
+    let fader_r = Rect::from_min_size(
+        Pos2::new(fader_left, main.top()),
+        Vec2::new(fader_w, main.height()),
     );
     let mut fu = ui.new_child(UiBuilder::new().max_rect(fader_r));
     let shown_vol = session
@@ -1542,10 +1660,7 @@ fn mixer_strip(
         chain,
         mixer_target(id, mixer::VOLUME),
     );
-    let db_r = Rect::from_center_size(
-        Pos2::new(inner.center().x, fader_r.bottom() + 9.0),
-        Vec2::new(inner.width().min(54.0), 14.0),
-    );
+    let db_r = Rect::from_min_size(side.min, Vec2::new(side.width(), 14.0));
     p.rect_filled(db_r, 1.0, pal().field_bg);
     let db_text = if shown_vol <= -70.0 {
         "-inf".to_string()
@@ -1560,6 +1675,40 @@ fn mixer_strip(
         pal().text,
     );
 
+    paint_db_scale(&p, fader_r, main.right());
+    let mut side_y = db_r.bottom() + 3.0;
+    if !compact {
+        let knob_r = Rect::from_center_size(
+            Pos2::new(side.center().x, side_y + 13.0),
+            Vec2::new(side.width().min(28.0), 26.0),
+        );
+        let mut ku = ui.new_child(UiBuilder::new().max_rect(knob_r));
+        let shown = session
+            .automated_cell_value(chain, mix_cell::PAN)
+            .map_or(pan, |v| v as f32);
+        if let Some(v) = widgets::pan_knob(&mut ku, shown) {
+            new_mix.1 = v;
+        }
+        remote_map::overlay_track(&ku, knob_r, id, mixer::PAN);
+        if let Some(moved) = session.modulated_cell_norm(chain, mix_cell::PAN) {
+            let needle = (shown + 1.0) / 2.0;
+            if let Some(span) = widgets::mod_ring_span(needle, moved) {
+                widgets::paint_mod_ring(&p, knob_r.center(), 9.5, span);
+            }
+        }
+        Led::of(session.cell_state(chain, mix_cell::PAN))
+            .paint(&p, knob_r.left_top() + Vec2::new(2.0, 2.0));
+        automation::control_zone(
+            &ku,
+            session,
+            state,
+            knob_r,
+            chain,
+            mixer_target(id, mixer::PAN),
+        );
+        side_y += 30.0;
+    }
+
     // Activator / Solo / Arm. Monitoring In tints the Activator blue (manual p. 374).
     let activator_color = if monitoring_in {
         pal().solo_blue
@@ -1569,27 +1718,27 @@ fn mixer_strip(
     let shown_mute = session
         .automated_cell_value(chain, mix_cell::MUTE)
         .map_or(mute, |v| v >= 0.5);
-    let bw = ((inner.width() - 4.0) / 3.0).floor();
     if assign_h > 0.0 {
         let row = Rect::from_min_size(
-            Pos2::new(inner.left(), inner.bottom() - buttons_h - assign_h),
+            Pos2::new(inner.left(), inner.bottom() - assign_h + 2.0),
             Vec2::new(inner.width(), assign_h - 2.0),
         );
         in_out::assign_row(ui, session, state, id, row);
     }
-    let row = Rect::from_min_size(
-        Pos2::new(inner.left(), inner.bottom() - buttons_h),
-        Vec2::new(inner.width(), buttons_h),
-    );
+    // The buttons sit on the bottom of the strip, however much is above them.
+    let has_arm = armable && !is_return && can_arm(&session.project, id);
+    let stack_h = if has_arm { 53.0 } else { 36.0 };
+    let stack_top = (side.bottom() - stack_h).max(side_y);
+    let stack = Rect::from_min_max(Pos2::new(side.left(), stack_top), side.max);
     let mut bu = ui.new_child(
         UiBuilder::new()
-            .max_rect(row)
-            .layout(Layout::left_to_right(egui::Align::Center)),
+            .max_rect(stack)
+            .layout(Layout::top_down(egui::Align::Min)),
     );
-    bu.spacing_mut().item_spacing.x = 2.0;
+    bu.spacing_mut().item_spacing.y = 2.0;
     let r = widgets::state_button(
         &mut bu,
-        Vec2::new(bw, buttons_h),
+        Vec2::new(side.width(), 19.0),
         !shown_mute,
         activator_color,
         label,
@@ -1610,7 +1759,7 @@ fn mixer_strip(
     }
     let r = widgets::state_button(
         &mut bu,
-        Vec2::new(bw, buttons_h),
+        Vec2::new(side.width(), 15.0),
         solo,
         pal().solo_blue,
         if cue_mode { "Cue" } else { "S" },
@@ -1658,10 +1807,10 @@ fn mixer_strip(
             ui.close();
         }
     });
-    if armable && !is_return && can_arm(&session.project, id) {
+    if has_arm {
         let r = widgets::icon_button(
             &mut bu,
-            Vec2::new(bw, buttons_h),
+            Vec2::new(side.width(), 15.0),
             arm,
             pal().arm_red,
             icons::record,
@@ -1700,6 +1849,31 @@ fn mixer_strip(
             t.solo = new_mix.3;
         }
         session.sync_mix(id);
+    }
+}
+
+/// The dB marks beside a meter, where there's room for them.
+fn paint_db_scale(p: &egui::Painter, fader: Rect, right: f32) {
+    if right - fader.right() < 16.0 {
+        return;
+    }
+    let travel = fader.height() - 6.0;
+    let bottom = fader.bottom() - 3.0;
+    let mut last = f32::NEG_INFINITY;
+    for db in [0.0, -12.0, -24.0, -36.0, -48.0, -60.0] {
+        let y = bottom - travel * widgets::db_to_pos(db);
+        // The fader's law bunches the low marks together, so some give way.
+        if y - last < 11.0 {
+            continue;
+        }
+        last = y;
+        p.text(
+            Pos2::new(fader.right() + 4.0, y),
+            Align2::LEFT_CENTER,
+            format!("{}", -(db as i32)),
+            theme::font(8.5),
+            pal().text_faint,
+        );
     }
 }
 
@@ -2190,8 +2364,14 @@ fn mixer_splitter(ui: &mut egui::Ui, state: &mut UiState, g: &Geo) {
             Stroke::new(2.0, pal().accent.gamma_multiply(0.6)),
         );
     }
+    #[cfg(test)]
+    {
+        state.layout.last_splitter = Some(r);
+    }
     if resp.dragged() {
-        state.layout.mixer_h = (g.mixer.height() - resp.drag_delta().y).clamp(90.0, 420.0);
+        // The height kept doesn't count the In/Out section, which is added on top of it.
+        let strip = g.mixer.height() - g.in_out_h;
+        state.layout.mixer_h = (strip - resp.drag_delta().y).clamp(90.0, 900.0);
     }
 }
 
@@ -2626,5 +2806,21 @@ pub(super) fn new_track_zone(
     if info(plus_resp, "Add Track — add a MIDI track (Cmd+Shift+T)").clicked() {
         let id = session.add_track(TrackKind::Midi, None);
         state.selected = Some(ChainRef::Track(id));
+    }
+}
+
+#[cfg(test)]
+mod column_tests {
+    use super::column_index;
+
+    #[test]
+    fn columns_of_different_widths_are_found_by_position() {
+        let edges = [0.0, 200.0, 260.0, 400.0];
+        assert_eq!(column_index(&edges, -1.0), None);
+        assert_eq!(column_index(&edges, 0.0), Some(0));
+        assert_eq!(column_index(&edges, 199.0), Some(0));
+        assert_eq!(column_index(&edges, 200.0), Some(1));
+        assert_eq!(column_index(&edges, 300.0), Some(2));
+        assert_eq!(column_index(&edges, 400.0), None);
     }
 }

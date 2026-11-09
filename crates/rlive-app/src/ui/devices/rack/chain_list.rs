@@ -472,15 +472,16 @@ fn rename_field(
             rect,
             egui::TextEdit::singleline(&mut rename.text).font(theme::font(10.5)),
         );
-        edit.request_focus();
-        if edit.lost_focus() {
+        if crate::ui::widgets::hold_focus(&edit) {
             done = Some(rename.text.clone());
         }
     }
     if let Some(text) = done {
         cx.ui.rename = None;
-        cx.queue
-            .push(chain, Action::Rack(rack, RackAction::RenameChain(id, text)));
+        if !crate::ui::widgets::escaped(ui) {
+            cx.queue
+                .push(chain, Action::Rack(rack, RackAction::RenameChain(id, text)));
+        }
     }
 }
 

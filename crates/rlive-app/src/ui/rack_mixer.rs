@@ -238,17 +238,18 @@ fn header(
                 name_rect,
                 egui::TextEdit::singleline(&mut rename.text).font(theme::font(10.5)),
             );
-            edit.request_focus();
-            if edit.lost_focus() {
+            if crate::ui::widgets::hold_focus(&edit) {
                 done = Some(rename.text.clone());
             }
         }
         if let Some(text) = done {
             state.devices.ui.rename = None;
-            queue.push(
-                col.at,
-                Action::Rack(col.rack, RackAction::RenameChain(col.chain, text)),
-            );
+            if !crate::ui::widgets::escaped(&cu) {
+                queue.push(
+                    col.at,
+                    Action::Rack(col.rack, RackAction::RenameChain(col.chain, text)),
+                );
+            }
         }
     } else {
         cu.painter()

@@ -388,6 +388,7 @@ fn default_project_plays_demo_clip() {
 fn edits_reach_engine() {
     let (mut engine, mut s) = session();
     let t = s.add_track(TrackKind::Midi, None);
+    s.add_builtin(ChainRef::Track(t), "rlive.poly");
     assert_eq!(s.project.tracks.len(), 4);
     let mut clip = Clip::new_midi("x", [1, 2, 3], 1, s.project.time_signature);
     clip.notes_mut()

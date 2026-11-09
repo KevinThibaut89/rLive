@@ -503,8 +503,9 @@ fn outcome(b: &Binding) -> Resolution {
 /// Resolves a key press: what the Computer MIDI Keyboard takes first, then the focused area,
 /// then what applies everywhere.
 pub fn resolve(chord: Chord, cx: &KeyContext) -> Resolution {
-    // Settings and the other dialogs move their own keyboard focus with Tab (manual p. 1004).
-    if cx.dialog_open && chord.key == Key::Tab {
+    // Settings and the other dialogs move their own keyboard focus with Tab (manual p. 1004), and
+    // Enter answers a dialog rather than launching whatever is selected behind it.
+    if cx.dialog_open && matches!(chord.key, Key::Tab | Key::Enter) {
         return Resolution::Unbound;
     }
     let tabs_through_names = cx.renaming && chord.key == Key::Tab && chord.mods == Mods::default();

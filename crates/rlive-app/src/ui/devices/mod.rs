@@ -5,7 +5,7 @@
 //! Drawing only reads the session. What the user does queues up and applies afterwards.
 
 mod layout;
-mod queue;
+pub(crate) mod queue;
 pub(crate) mod rack;
 mod tree;
 mod views;
@@ -56,7 +56,7 @@ pub struct DeviceViewState {
     /// The devices selected in the Device View, for grouping.
     pub(crate) selected_devices: Vec<(ChainRef, DeviceId)>,
     /// A device to bring into view.
-    scroll_to: Option<DeviceId>,
+    pub(crate) scroll_to: Option<DeviceId>,
     /// The parameter selected on a panel in Configure Mode.
     pub(crate) configure_selected: Option<(ChainRef, DeviceId, u32)>,
     /// A panel parameter waiting for a yes, since removing it would lose something.
@@ -356,22 +356,16 @@ fn device(
         rounding,
         if on { shade(0x3a3a3a) } else { shade(0x2f2f2f) },
     );
-    p.rect_stroke(
-        rect,
-        rounding,
-        Stroke::new(
-            1.0,
-            if selected {
-                shade(0xdddddd)
-            } else {
-                pal().separator
-            },
-        ),
-        StrokeKind::Inside,
+    let title = Rect::from_min_size(rect.min, Vec2::new(width, TITLE_H));
+    // Below the buttons in the title, so they still get their own clicks. It selects, folds and
+    // drags the device to a browser folder to save it there.
+    let title_bar = ui.interact(
+        title,
+        ui.scope_id().with(("device_drag", dev.id)),
+        Sense::click_and_drag(),
     );
 
     // ---- title bar
-    let title = Rect::from_min_size(rect.min, Vec2::new(width, TITLE_H));
     let mut tu = ui.new_child(
         UiBuilder::new()
             .max_rect(title.shrink2(Vec2::new(2.0, 1.0)))
@@ -382,9 +376,23 @@ fn device(
         p.rect_filled(
             title,
             1.0,
-            if on { shade(0x505050) } else { shade(0x3a3a3a) },
+            match (selected, on) {
+                (true, _) => shade(0x5d6f82),
+                (false, true) => shade(0x505050),
+                (false, false) => shade(0x3a3a3a),
+            },
         );
     }
+    p.rect_stroke(
+        rect,
+        rounding,
+        if selected {
+            Stroke::new(1.5, pal().accent)
+        } else {
+            Stroke::new(1.0, pal().separator)
+        },
+        StrokeKind::Inside,
+    );
     let r = widgets::bare_icon(&mut tu, Vec2::new(18.0, 18.0), |p, r, c| {
         icons::power(p, r, if on { pal().accent } else { c })
     });
@@ -423,29 +431,26 @@ fn device(
 
     let resp = info(bg, format!("{} — right-click for options", dev.name));
     widgets::info_note(&resp, &dev.info);
-    // The title bar drags a device to a browser folder, to save it there.
-    let drag = ui.interact(
-        title,
-        ui.scope_id().with(("device_drag", dev.id)),
-        Sense::drag(),
-    );
-    drag.dnd_set_drag_payload(DeviceDrag {
+    title_bar.dnd_set_drag_payload(DeviceDrag {
         chain,
         device: dev.id,
     });
-    if drag.dragged() {
+    if title_bar.dragged() {
         crate::ui::browser::drag_device_label(ui, &dev.name);
     }
-    let on_title = |resp: &egui::Response| {
-        resp.interact_pointer_pos()
-            .is_some_and(|pos| title.contains(pos) || !dev.expanded)
-    };
-    if resp.double_clicked() && on_title(&resp) {
+    #[cfg(test)]
+    {
+        cx.ui.last_title = Some(title);
+    }
+    if title_bar.double_clicked() || (resp.double_clicked() && !dev.expanded) {
         cx.queue.push(chain, Action::Fold(dev.id, !dev.expanded));
-    } else if resp.clicked() && on_title(&resp) {
+    } else if title_bar.clicked() || resp.clicked() {
         let additive = ui.input(|i| i.modifiers.shift);
+        // The device has the keyboard now, not whichever knob was touched last.
+        crate::ui::nav::clear(ui.ctx());
         cx.queue.push(chain, Action::SelectDevice(dev.id, additive));
     }
+    title_bar.context_menu(|ui| device_menu(ui, cx, chain, dev, index, count, is_plugin));
     resp.context_menu(|ui| device_menu(ui, cx, chain, dev, index, count, is_plugin));
 
     match &node.body {
@@ -503,14 +508,15 @@ fn expanded_title(
                 nr,
                 egui::TextEdit::singleline(&mut rename.text).font(theme::font(11.0)),
             );
-            edit.request_focus();
-            if edit.lost_focus() {
+            if crate::ui::widgets::hold_focus(&edit) {
                 done = Some(rename.text.clone());
             }
         }
         if let Some(name) = done {
             cx.ui.rename = None;
-            cx.queue.push(chain, Action::Rename(dev.id, name));
+            if !crate::ui::widgets::escaped(tu) {
+                cx.queue.push(chain, Action::Rename(dev.id, name));
+            }
         }
     }
     let shown_name = match cx.session.compare_slot(chain, dev.id) {
@@ -1320,8 +1326,8 @@ fn plugin_dialogs(ctx: &egui::Context, session: &mut Session, state: &mut Device
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
                 let edit = ui.text_edit_singleline(name);
-                edit.request_focus();
-                let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let enter = crate::ui::widgets::hold_focus(&edit)
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 ui.horizontal(|ui| {
                     if ui.button("OK").clicked() || enter {
                         close = Some(true);

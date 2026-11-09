@@ -506,7 +506,7 @@ impl Session {
         self.render_job = None;
         self.delete_discarded_files();
         self.forget_tempo_override();
-        self.project = Project::new_default();
+        self.project = Project::new_set();
         self.samples.forget_failed();
         self.history = History::new(&self.project);
         self.pending_samples.clear();

@@ -145,49 +145,96 @@ fn label(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).color(pal().text));
 }
 
+/// A real window, so it gets the system's title bar and close button.
+fn viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("rlive_settings")
+}
+
+const WINDOW_SIZE: Vec2 = Vec2::new(660.0, 510.0);
+
+/// Where a window of `size` goes to sit in the middle of `main`, or of the screen without one.
+fn centered(main: Option<egui::Rect>, screen: Option<Vec2>, size: Vec2) -> [f32; 2] {
+    let centre = main
+        .map(|r| r.center())
+        .or_else(|| screen.map(|s| (s / 2.0).to_pos2()))
+        .unwrap_or(egui::pos2(640.0, 400.0));
+    let at = centre - size / 2.0;
+    [at.x.max(0.0), at.y.max(0.0)]
+}
+
 impl RliveApp {
+    fn settings_viewport(&mut self, ctx: &egui::Context) {
+        // Set once: the builder is compared each frame, and a change would fight the user's drags.
+        let pos = *self.ui.settings_pos.get_or_insert_with(|| {
+            ctx.input(|i| {
+                centered(
+                    i.viewport().outer_rect,
+                    i.viewport().monitor_size,
+                    WINDOW_SIZE,
+                )
+            })
+        });
+        if std::mem::take(&mut self.ui.settings_raise) {
+            ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::Focus);
+        }
+        let builder = super::window_chrome(egui::ViewportBuilder::default())
+            .with_title("Settings")
+            .with_position(pos)
+            .with_inner_size(WINDOW_SIZE)
+            .with_resizable(false)
+            .with_minimize_button(false)
+            .with_maximize_button(false);
+        ctx.show_viewport_immediate(viewport_id(), builder, |ui, _class| {
+            if ui.ctx().input(|i| i.viewport().close_requested()) {
+                self.ui.show_settings = false;
+            }
+            self.title_strip(ui, "settings_title_strip", "Settings");
+            egui::CentralPanel::default().show(ui, |ui| self.settings_contents(ui));
+        });
+    }
+
+    fn settings_contents(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(150.0);
+                for tab in Tab::ALL {
+                    ui.selectable_value(&mut self.ui.settings_tab, tab, tab.label());
+                }
+            });
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.set_width(460.0);
+                ui.set_min_height(380.0);
+                egui::ScrollArea::vertical().show(ui, |ui| match self.ui.settings_tab {
+                    Tab::Display => self.display_tab(ui),
+                    Tab::Theme => self.theme_tab(ui),
+                    Tab::Audio => self.audio_tab(ui),
+                    Tab::Link => {
+                        if link_tab(ui, &mut self.settings) {
+                            self.settings.save();
+                            self.apply_sync_settings();
+                        }
+                    }
+                    Tab::TempoMidi => self.tempo_midi_tab(ui),
+                    Tab::FileFolder => self.file_folder_tab(ui),
+                    Tab::Library => self.library_tab(ui),
+                    Tab::PlugIns => self.plugins_tab(ui),
+                    Tab::RecordWarpLaunch => record_warp_launch_tab(ui, &mut self.settings),
+                    Tab::Licenses => licenses_tab(ui),
+                });
+            });
+        });
+    }
+
     /// Shows the window, and saves if anything in it changed.
     pub(super) fn settings_window(&mut self, ctx: &egui::Context) {
         let before = self.settings.clone();
-        let mut open = self.ui.show_settings;
-        egui::Window::new("Settings")
-            .open(&mut open)
-            .resizable(false)
-            .collapsible(false)
-            .default_width(640.0)
-            .show(ctx, |ui| {
-                ui.horizontal_top(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(150.0);
-                        for tab in Tab::ALL {
-                            ui.selectable_value(&mut self.ui.settings_tab, tab, tab.label());
-                        }
-                    });
-                    ui.separator();
-                    ui.vertical(|ui| {
-                        ui.set_width(460.0);
-                        ui.set_min_height(380.0);
-                        egui::ScrollArea::vertical().show(ui, |ui| match self.ui.settings_tab {
-                            Tab::Display => self.display_tab(ui),
-                            Tab::Theme => self.theme_tab(ui),
-                            Tab::Audio => self.audio_tab(ui),
-                            Tab::Link => {
-                                if link_tab(ui, &mut self.settings) {
-                                    self.settings.save();
-                                    self.apply_sync_settings();
-                                }
-                            }
-                            Tab::TempoMidi => self.tempo_midi_tab(ui),
-                            Tab::FileFolder => self.file_folder_tab(ui),
-                            Tab::Library => self.library_tab(ui),
-                            Tab::PlugIns => self.plugins_tab(ui),
-                            Tab::RecordWarpLaunch => record_warp_launch_tab(ui, &mut self.settings),
-                            Tab::Licenses => licenses_tab(ui),
-                        });
-                    });
-                });
-            });
-        self.ui.show_settings = open;
+        if self.ui.show_settings {
+            self.settings_viewport(ctx);
+        } else {
+            // Each opening starts centred again.
+            self.ui.settings_pos = None;
+        }
         if self.settings != before {
             self.settings.save();
             let auto_warp = self.settings.warp.auto_warp_long;
@@ -1333,5 +1380,29 @@ mod tests {
     fn disabled_controls_name_their_milestone() {
         assert_eq!(coming("A16"), "coming in A16");
         assert_eq!(coming("out"), "out of scope for rLive");
+    }
+}
+
+#[cfg(test)]
+mod centring_tests {
+    use super::*;
+
+    #[test]
+    fn settings_open_over_the_middle_of_the_main_window() {
+        let main = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), Vec2::new(1400.0, 900.0));
+        let [x, y] = centered(Some(main), None, Vec2::new(660.0, 480.0));
+        assert_eq!((x + 330.0, y + 240.0), (800.0, 500.0));
+    }
+
+    #[test]
+    fn settings_use_the_screen_without_a_main_window_and_stay_on_it() {
+        let [x, y] = centered(
+            None,
+            Some(Vec2::new(1000.0, 800.0)),
+            Vec2::new(660.0, 480.0),
+        );
+        assert_eq!((x, y), (170.0, 160.0));
+        let small = centered(None, Some(Vec2::new(300.0, 200.0)), Vec2::new(660.0, 480.0));
+        assert_eq!(small, [0.0, 0.0]);
     }
 }

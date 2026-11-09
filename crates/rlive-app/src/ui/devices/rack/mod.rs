@@ -238,6 +238,9 @@ pub struct ChainDrag {
 /// What only matters while the rack is on screen.
 #[derive(Default)]
 pub struct RackUi {
+    /// Where the last device title was drawn, for tests to click on.
+    #[cfg(test)]
+    pub last_title: Option<egui::Rect>,
     /// A plug-in menu asked for the MPE/Multi-channel Settings dialog.
     pub mpe_settings: Option<crate::ui::midi_settings::MpeTarget>,
     pub rename: Option<Rename>,

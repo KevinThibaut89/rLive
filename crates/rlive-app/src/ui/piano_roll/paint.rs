@@ -106,7 +106,7 @@ pub(super) fn grid(
         if key.is_multiple_of(12) {
             p.line_segment(
                 [r.left_bottom(), r.right_bottom()],
-                Stroke::new(1.0, shade(0x171717)),
+                Stroke::new(1.0, pal().grid_line(40)),
             );
         }
     }
@@ -121,11 +121,11 @@ pub(super) fn grid(
     while geo.x(t as f64) <= geo.grid.right() {
         let x = geo.x(t as f64);
         let c = if t.is_multiple_of(bar) {
-            pal().grid_line(shade(0x0f0f0f))
+            pal().grid_line(72)
         } else if t.is_multiple_of(PPQ) {
-            pal().grid_line(shade(0x1c1c1c))
+            pal().grid_line(40)
         } else {
-            pal().grid_line(shade(0x242424))
+            pal().grid_line(18)
         };
         p.line_segment(
             [

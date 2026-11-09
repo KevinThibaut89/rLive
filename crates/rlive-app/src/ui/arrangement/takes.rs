@@ -466,8 +466,7 @@ fn rename_field(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, r
     });
     let edit = egui::TextEdit::singleline(&mut text).font(theme::font(10.5));
     let r = ui.put(rect, edit);
-    r.request_focus();
-    let done = r.lost_focus();
+    let done = crate::ui::widgets::hold_focus(&r);
     if let Some(step) = tab {
         session.rename_take_lane(id, n, text);
         let next = n as i32 + step;

@@ -355,6 +355,14 @@ impl MacMenu {
     }
 }
 
+/// How tall the system's title bar is, once the main window exists.
+pub fn title_bar_height() -> Option<f32> {
+    let mtm = MainThreadMarker::new()?;
+    let window = NSApplication::sharedApplication(mtm).mainWindow()?;
+    let height = window.frame().size.height - window.contentLayoutRect().size.height;
+    (height > 0.0).then_some(height as f32)
+}
+
 /// The window eframe created for the app.
 fn main_window(cc: &eframe::CreationContext<'_>) -> Option<Retained<NSWindow>> {
     let RawWindowHandle::AppKit(handle) = cc.window_handle().ok()?.as_raw() else {

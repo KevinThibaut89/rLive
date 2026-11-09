@@ -770,7 +770,7 @@ pub fn pan_knob(ui: &mut Ui, pan: f32) -> Option<f32> {
 
 const FADER_MAX_DB: f32 = 6.0;
 
-fn db_to_pos(db: f32) -> f32 {
+pub(crate) fn db_to_pos(db: f32) -> f32 {
     if db <= -70.0 {
         return 0.0;
     }
@@ -975,6 +975,21 @@ pub fn play_triangle(p: &egui::Painter, rect: Rect, color: Color32) {
 
 pub fn stop_square(p: &egui::Painter, rect: Rect, color: Color32) {
     icons::stop(p, rect, color);
+}
+
+/// Keeps the keyboard on a field being typed in until the user leaves it, and returns true on the
+/// frame they do. A field that asks for focus before checking `lost_focus` can never be left.
+pub fn hold_focus(r: &egui::Response) -> bool {
+    let left = r.lost_focus();
+    if !left && !r.has_focus() {
+        r.request_focus();
+    }
+    left
+}
+
+/// Whether Esc was what left a field, which throws away what was typed.
+pub fn escaped(ui: &egui::Ui) -> bool {
+    ui.input(|i| i.key_pressed(egui::Key::Escape))
 }
 
 #[cfg(test)]

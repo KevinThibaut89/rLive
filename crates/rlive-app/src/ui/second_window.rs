@@ -85,7 +85,7 @@ impl RliveApp {
             .ui
             .second_start
             .get_or_insert(layout.second_rect.unwrap_or([120.0, 120.0, 1000.0, 680.0]));
-        let builder = ViewportBuilder::default()
+        let builder = super::window_chrome(ViewportBuilder::default())
             .with_title(TITLE)
             .with_position([start[0], start[1]])
             .with_inner_size([start[2], start[3]])
@@ -120,6 +120,7 @@ impl RliveApp {
             self.handle_shortcuts(&ctx);
         }
 
+        self.title_strip(ui, "second_title_strip", TITLE);
         let view = other(self.ui.main_view);
         let area = match view {
             MainView::Session => FocusArea::Session,

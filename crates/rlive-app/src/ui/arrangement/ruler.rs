@@ -696,8 +696,7 @@ fn edit_window(ctx: &egui::Context, title: &str, text: &mut String) -> (bool, bo
         .open(&mut open)
         .show(ctx, |ui| {
             let r = ui.text_edit_singleline(text);
-            r.request_focus();
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if crate::ui::widgets::hold_focus(&r) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 commit = true;
                 keep = false;
             }

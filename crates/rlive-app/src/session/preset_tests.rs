@@ -711,7 +711,7 @@ fn a_new_track_starts_from_its_default() {
     let midi = r.s.add_track(TrackKind::Midi, None);
     assert_eq!(
         r.s.project.track(midi).unwrap().devices.len(),
-        1,
+        0,
         "MIDI has no default"
     );
 }

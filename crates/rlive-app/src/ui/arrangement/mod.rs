@@ -798,10 +798,13 @@ fn paint_lane_backgrounds(ui: &egui::Ui, state: &UiState, lanes: Rect, rows: &Ro
         p.rect_filled(r, 0.0, fill);
         p.line_segment(
             [r.left_bottom(), r.right_bottom()],
-            Stroke::new(1.0, pal().separator),
+            Stroke::new(1.0, pal().grid_line(GRID_BAR)),
         );
     }
 }
+
+const GRID_BAR: u8 = 72;
+const GRID_BEAT: u8 = 34;
 
 fn paint_grid(ui: &egui::Ui, lanes: Rect, axis: &TimeAxis, grid: u64, bars: &BarMap) {
     let p = ui.painter_at(lanes);
@@ -813,9 +816,9 @@ fn paint_grid(ui: &egui::Ui, lanes: Rect, axis: &TimeAxis, grid: u64, bars: &Bar
         let x = axis.x(t);
         let barline = bars.bar_at(t).start == t;
         let c = if barline {
-            pal().grid_line(shade(0x141414))
+            pal().grid_line(GRID_BAR)
         } else {
-            pal().grid_line(shade(0x202020))
+            pal().grid_line(GRID_BEAT)
         };
         p.line_segment(
             [Pos2::new(x, lanes.top()), Pos2::new(x, lanes.bottom())],
@@ -2391,23 +2394,7 @@ fn track_header(
         Vec2::new(inner.width() - fold_w, 16.0),
     );
     if matches!(&state.renaming, Some((tid, _)) if *tid == id) {
-        let mut done = false;
-        if let Some((_, text)) = &mut state.renaming {
-            let r = cu.put(
-                top,
-                egui::TextEdit::singleline(text).font(theme::font(11.0)),
-            );
-            r.request_focus();
-            done = r.lost_focus();
-        }
-        if done {
-            if let Some((_, text)) = state.renaming.take() {
-                if let Some(t) = session.project.track_mut(id) {
-                    t.name = text;
-                }
-                session.dirty = true;
-            }
-        }
+        crate::ui::session_view::track_name_field(&mut cu, top, session, state, id, 11.0);
     } else {
         let galley = p.layout_no_wrap(name.clone(), theme::font_bold(11.0), pal().text);
         p.with_clip_rect(top.intersect(headers)).galley(

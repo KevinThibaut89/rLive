@@ -1,9 +1,162 @@
 //! The small dialogs of the File menu: saving changes, Collect All, templates, Open Recent.
 
+use super::theme;
 use super::{pal, CopyPrompt, FileAction, RliveApp};
 use crate::session::ClipRef;
 use crate::settings::CollectFiles;
+use egui::{CornerRadius, Pos2, Rect, Sense, Vec2};
 use std::path::Path;
+
+const ALERT_SIZE: Vec2 = Vec2::new(446.0, 132.0);
+const ALERT_RADIUS: u8 = 10;
+const ALERT_TITLE_H: f32 = 28.0;
+const ALERT_BUTTON: Vec2 = Vec2::new(98.0, 18.0);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AlertChoice {
+    Save,
+    DontSave,
+    Cancel,
+}
+
+/// Don't Save at the left edge, Cancel and Save together at the right.
+fn alert_buttons(area: Rect) -> [Rect; 3] {
+    let top = area.bottom() - 13.0 - ALERT_BUTTON.y;
+    let at = |left: f32| Rect::from_min_size(Pos2::new(left, top), ALERT_BUTTON);
+    let save = area.right() - 18.0 - ALERT_BUTTON.x;
+    [
+        at(area.left() + 20.0),
+        at(save - 4.0 - ALERT_BUTTON.x),
+        at(save),
+    ]
+}
+
+/// Enter saves and Esc cancels, as the outlined default button and Cancel promise.
+fn save_changes_alert(ui: &mut egui::Ui, name: &str) -> Option<AlertChoice> {
+    let (area, _) = ui.allocate_exact_size(ALERT_SIZE, Sense::hover());
+    let p = ui.painter().clone();
+    let radius = ALERT_RADIUS;
+    p.rect_filled(
+        Rect::from_min_size(area.min, Vec2::new(area.width(), ALERT_TITLE_H)),
+        CornerRadius {
+            nw: radius,
+            ne: radius,
+            sw: 0,
+            se: 0,
+        },
+        pal().bar_bg,
+    );
+    let icon = Rect::from_min_size(area.min + Vec2::new(32.0, 40.0), Vec2::new(54.0, 48.0));
+    warning_icon(&p, icon);
+    let left = icon.right() + 20.0;
+    let shown: String = if name.chars().count() > 46 {
+        name.chars().take(45).chain(['\u{2026}']).collect()
+    } else {
+        name.to_string()
+    };
+    let text = p.layout(
+        format!("Save changes to \"{shown}\" before closing?"),
+        theme::font(13.0),
+        pal().text,
+        area.right() - 18.0 - left,
+    );
+    let y = icon.center().y - text.size().y / 2.0;
+    p.galley(Pos2::new(left, y), text, pal().text);
+
+    let [dont_save, cancel, save] = alert_buttons(area);
+    let mut choice = None;
+    if alert_button(ui, dont_save, "Don\u{2019}t Save", false) {
+        choice = Some(AlertChoice::DontSave);
+    }
+    if alert_button(ui, cancel, "Cancel", false) {
+        choice = Some(AlertChoice::Cancel);
+    }
+    if alert_button(ui, save, "Save", true) {
+        choice = Some(AlertChoice::Save);
+    }
+    let (enter, esc) = ui.input_mut(|i| {
+        (
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+        )
+    });
+    if esc {
+        choice = Some(AlertChoice::Cancel);
+    } else if enter {
+        choice = Some(AlertChoice::Save);
+    }
+    choice
+}
+
+fn alert_button(ui: &mut egui::Ui, rect: Rect, label: &str, default: bool) -> bool {
+    let r = ui.interact(rect, ui.scope_id().with(("alert", label)), Sense::click());
+    // The default button takes the accent colour, as the app's lit buttons do.
+    let base = if default { pal().accent } else { pal().raised };
+    let fill = if r.is_pointer_button_down_on() {
+        base.gamma_multiply(0.8)
+    } else if r.hovered() {
+        base.gamma_multiply(1.15)
+    } else {
+        base
+    };
+    let p = ui.painter();
+    let round = rect.height() / 2.0;
+    p.rect_filled(rect, round, fill);
+    if !default {
+        p.rect_stroke(
+            rect,
+            round,
+            egui::Stroke::new(1.0, pal().grid_line(50)),
+            egui::StrokeKind::Outside,
+        );
+    }
+    let ink = if default {
+        theme::text_on(base)
+    } else {
+        pal().text
+    };
+    p.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        theme::font(11.5),
+        ink,
+    );
+    r.clicked()
+}
+
+/// A triangle with soft corners and an exclamation mark cut out of it.
+fn warning_icon(p: &egui::Painter, r: Rect) {
+    let corner = 5.0;
+    let ink = pal().text;
+    let (top, left, right) = (
+        Pos2::new(r.center().x, r.top() + corner),
+        Pos2::new(r.left() + corner, r.bottom() - corner),
+        Pos2::new(r.right() - corner, r.bottom() - corner),
+    );
+    p.add(egui::Shape::convex_polygon(
+        vec![top, right, left],
+        ink,
+        egui::Stroke::NONE,
+    ));
+    for (a, b) in [(top, right), (right, left), (left, top)] {
+        p.line_segment([a, b], egui::Stroke::new(corner * 2.0, ink));
+        p.circle_filled(a, corner, ink);
+    }
+    let x = r.center().x;
+    let mark = pal().panel;
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            Pos2::new(x - 3.2, r.top() + 13.0),
+            Pos2::new(x + 3.2, r.top() + 13.0),
+            Pos2::new(x + 1.8, r.top() + 33.0),
+            Pos2::new(x - 1.8, r.top() + 33.0),
+        ],
+        mark,
+        egui::Stroke::NONE,
+    ));
+    p.circle_filled(Pos2::new(x, r.top() + 39.5), 3.2, mark);
+}
 
 impl RliveApp {
     fn save_changes_prompt(&mut self, ctx: &egui::Context) {
@@ -11,22 +164,30 @@ impl RliveApp {
             return;
         };
         let name = self.set_file_name();
-        let mut result = None;
-        egui::Modal::new(egui::Id::unique("save changes")).show(ctx, |ui| {
-            ui.set_width(320.0);
-            ui.label(format!("Save changes to \u{201c}{name}\u{201d}?"));
-            ui.horizontal(|ui| {
-                if ui.button("Save").clicked() {
-                    result = Some(true);
-                }
-                if ui.button("Don't Save").clicked() {
-                    result = Some(false);
-                }
-                if ui.button("Cancel").clicked() {
-                    self.ui.files.pending_action = None;
-                }
+        let frame = egui::Frame::new()
+            .fill(pal().panel)
+            .stroke(egui::Stroke::new(1.0, pal().grid_line(60)))
+            .corner_radius(ALERT_RADIUS)
+            .shadow(egui::Shadow {
+                offset: [0, 10],
+                blur: 34,
+                spread: 0,
+                color: egui::Color32::from_black_alpha(120),
             });
-        });
+        let choice = egui::Modal::new(egui::Id::unique("save changes"))
+            .frame(frame)
+            .backdrop_color(egui::Color32::from_black_alpha(70))
+            .show(ctx, |ui| save_changes_alert(ui, &name))
+            .inner;
+        let result = match choice {
+            Some(AlertChoice::Save) => Some(true),
+            Some(AlertChoice::DontSave) => Some(false),
+            Some(AlertChoice::Cancel) => {
+                self.ui.files.pending_action = None;
+                None
+            }
+            None => None,
+        };
         match result {
             Some(true) => {
                 if self.save_before_action() {

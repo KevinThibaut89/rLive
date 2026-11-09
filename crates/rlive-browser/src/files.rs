@@ -363,8 +363,9 @@ pub fn unused_files(root: &Path, docs: &[Document]) -> Vec<UnusedGroup> {
 }
 
 fn is_sidecar(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("rlad"))
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    // `.part` is one still being written, while its sample is analysed.
+    name.ends_with(".rlad") || name.ends_with(".rlad.part")
 }
 
 fn category_of(samples: &Path, path: &Path) -> String {
@@ -623,6 +624,7 @@ mod tests {
             "Samples/Processed/Freeze/b.wav",
             "Samples/loose.wav",
             "Samples/Recorded/a.wav.rlad",
+            "Samples/Recorded/a.wav.rlad.part",
         ] {
             let p = d.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();

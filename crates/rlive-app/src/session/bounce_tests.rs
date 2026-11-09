@@ -300,6 +300,7 @@ fn frozen_session_clips_are_two_loop_cycles_and_sound_like_the_clip() {
 fn session_freeze_holds_parameters_where_automation_starts() {
     let (_engine, mut s) = empty_session();
     let id = s.add_track(TrackKind::Midi, None);
+    s.add_builtin(ChainRef::Track(id), "rlive.poly");
     let device = s.devices(ChainRef::Track(id))[0].id;
     let target = EnvTarget::Param(rlive_core::ParamRef {
         owner: rlive_core::ParamOwner::Device(device),

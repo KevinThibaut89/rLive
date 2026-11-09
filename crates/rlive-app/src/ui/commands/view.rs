@@ -16,6 +16,7 @@ super::domain! {
         ToggleDetail,
         ToggleMixer,
         ToggleInOut,
+        ToggleTrackDelay,
         ToggleCrossfader,
         TogglePerformanceImpact,
         ToggleInfoView,
@@ -60,6 +61,7 @@ pub const MENU: &[Entry] = &[
     Item("Detail View", M::View(View::ToggleDetail)),
     Item("Mixer", M::View(View::ToggleMixer)),
     Item("In/Out", M::View(View::ToggleInOut)),
+    Item("Track Delay", M::View(View::ToggleTrackDelay)),
     Item("Sends", M::View(View::ToggleSends)),
     Item("Return Tracks", M::View(View::ToggleReturns)),
     Item("Crossfader", M::View(View::ToggleCrossfader)),
@@ -96,6 +98,10 @@ impl RliveApp {
         s.check(M::View(View::ToggleDetail), self.ui.show_detail);
         s.check(M::View(View::ToggleMixer), self.ui.layout.show_mixer);
         s.check(M::View(View::ToggleInOut), self.ui.layout.show_in_out);
+        s.check(
+            M::View(View::ToggleTrackDelay),
+            self.ui.layout.show_track_delay,
+        );
         s.check(
             M::View(View::ToggleCrossfader),
             self.ui.layout.show_crossfader,
@@ -245,7 +251,14 @@ impl RliveApp {
             }
             View::ToggleDetail => self.toggle_detail(),
             View::ToggleMixer => self.ui.layout.show_mixer = !self.ui.layout.show_mixer,
-            View::ToggleInOut => self.ui.layout.show_in_out = !self.ui.layout.show_in_out,
+            View::ToggleTrackDelay => {
+                self.ui.layout.show_track_delay = !self.ui.layout.show_track_delay;
+            }
+            View::ToggleInOut => {
+                self.ui.layout.show_in_out = !self.ui.layout.show_in_out;
+                self.settings.show_in_out = self.ui.layout.show_in_out;
+                self.settings.save();
+            }
             View::ToggleCrossfader => {
                 self.ui.layout.show_crossfader = !self.ui.layout.show_crossfader
             }
@@ -277,6 +290,9 @@ impl RliveApp {
     /// Closes the frontmost window, if one is open.
     fn close_top_dialog(&mut self) {
         let ui = &mut self.ui;
+        if ui.files.pending_action.take().is_some() {
+            return;
+        }
         for open in [
             &mut ui.show_about,
             &mut ui.show_export,

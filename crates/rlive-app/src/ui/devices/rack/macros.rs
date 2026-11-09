@@ -254,15 +254,16 @@ fn rename_field(
             Rect::from_min_size(cell.min, Vec2::new(cell.width(), 16.0)),
             egui::TextEdit::singleline(&mut rename.text).font(theme::font(10.0)),
         );
-        r.request_focus();
-        if r.lost_focus() {
+        if crate::ui::widgets::hold_focus(&r) {
             done = Some(rename.text.clone());
         }
     }
     if let Some(text) = done {
         cx.ui.rename = None;
-        cx.queue
-            .push(chain, Action::Rack(rack, RackAction::MacroName(n, text)));
+        if !crate::ui::widgets::escaped(ui) {
+            cx.queue
+                .push(chain, Action::Rack(rack, RackAction::MacroName(n, text)));
+        }
     }
 }
 
@@ -320,17 +321,18 @@ pub fn variations(ui: &mut egui::Ui, cx: &mut DrawCx, r: &RackRef, rect: Rect) {
                     row.shrink2(Vec2::new(18.0, 0.0)),
                     egui::TextEdit::singleline(&mut rename.text).font(theme::font(10.0)),
                 );
-                edit.request_focus();
-                if edit.lost_focus() {
+                if crate::ui::widgets::hold_focus(&edit) {
                     done = Some(rename.text.clone());
                 }
             }
             if let Some(text) = done {
                 cx.ui.rename = None;
-                cx.queue.push(
-                    chain,
-                    Action::Rack(rack, RackAction::RenameVariation(i, text)),
-                );
+                if !crate::ui::widgets::escaped(ui) {
+                    cx.queue.push(
+                        chain,
+                        Action::Rack(rack, RackAction::RenameVariation(i, text)),
+                    );
+                }
             }
         } else {
             ui.painter().with_clip_rect(row.shrink(2.0)).text(
