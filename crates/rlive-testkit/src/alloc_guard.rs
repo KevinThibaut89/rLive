@@ -6,6 +6,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 thread_local! {
     // Const-initialised and without destructors, so touching these never allocates.
@@ -14,10 +15,36 @@ thread_local! {
     static FREES: Cell<u64> = const { Cell::new(0) };
 }
 
+thread_local! {
+    /// This thread is a helper the code under test started, counted in [`helper_heap_touches`].
+    static HELPER: Cell<bool> = const { Cell::new(false) };
+}
+
+static HELPER_TOUCHES: AtomicU64 = AtomicU64::new(0);
+
 fn note(counter: &'static std::thread::LocalKey<Cell<u64>>) {
     if WATCHING.try_with(Cell::get).unwrap_or(false) {
         let _ = counter.try_with(|c| c.set(c.get() + 1));
     }
+    if HELPER.try_with(Cell::get).unwrap_or(false) {
+        HELPER_TOUCHES.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Mark this thread as a helper of the code under test, such as a real-time worker: from now on
+/// any allocation or free it makes is counted in [`helper_heap_touches`].
+pub fn watch_helper_thread() {
+    HELPER.set(true);
+}
+
+/// Stop counting this thread, for what it does as it winds down.
+pub fn unwatch_helper_thread() {
+    HELPER.set(false);
+}
+
+/// How many times any thread marked with [`watch_helper_thread`] has touched the heap.
+pub fn helper_heap_touches() -> u64 {
+    HELPER_TOUCHES.load(Ordering::Relaxed)
 }
 
 /// The system allocator, counting what the watched thread does.

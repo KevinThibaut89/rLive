@@ -1181,6 +1181,10 @@ impl AutoFilter {
 }
 
 impl Processor for AutoFilter {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.sr = sample_rate as f32;
         let max_comb = (sample_rate * MAX_COMB_SECONDS) as usize + 8;

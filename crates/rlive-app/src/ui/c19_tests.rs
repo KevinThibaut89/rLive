@@ -45,6 +45,7 @@ fn rig() -> Rig {
     };
     let app = RliveApp {
         session,
+        channel_masks: Default::default(),
         sync_out: Default::default(),
         pending_quit: false,
         audio: AudioOutput::stopped(),

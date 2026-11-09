@@ -644,6 +644,10 @@ impl Juno106 {
 }
 
 impl Processor for Juno106 {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _max_block: usize) {
         self.apply_unit_changes();
         self.unit.power_on(self.value(p::COLD_START) >= 0.5);

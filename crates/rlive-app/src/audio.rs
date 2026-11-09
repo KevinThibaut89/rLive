@@ -3,7 +3,7 @@
 
 use crate::settings::InputDevice;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use rlive_engine::{create_engine, AudioIo, Engine, EngineHandle};
+use rlive_engine::{create_engine, AudioIo, Engine, EngineHandle, WorkerPool};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -15,6 +15,76 @@ const MAX_OUTPUT_CHANNELS: usize = 64;
 const SCRATCH_FRAMES: usize = 16_384;
 /// Most hardware input channels read at once.
 const MAX_INPUT_CHANNELS: usize = 32;
+
+/// Which hardware channels are in use: one bit each, for the callback to read as it goes.
+pub struct ChannelMasks {
+    inputs: AtomicU64,
+    outputs: AtomicU64,
+}
+
+impl Default for ChannelMasks {
+    fn default() -> Self {
+        Self {
+            inputs: AtomicU64::new(u64::MAX),
+            outputs: AtomicU64::new(u64::MAX),
+        }
+    }
+}
+
+impl ChannelMasks {
+    /// Set which channels are in use, from the Channel Configuration.
+    pub fn set(&self, inputs: u64, outputs: u64) {
+        self.inputs.store(inputs, Ordering::Relaxed);
+        self.outputs.store(outputs, Ordering::Relaxed);
+    }
+
+    fn input_on(&self, channel: usize) -> bool {
+        channel >= 64 || self.inputs.load(Ordering::Relaxed) >> channel & 1 == 1
+    }
+
+    fn output_on(&self, channel: usize) -> bool {
+        channel >= 64 || self.outputs.load(Ordering::Relaxed) >> channel & 1 == 1
+    }
+}
+
+/// How the audio callback is to run.
+pub struct AudioPrefs {
+    /// Threads to render on; 0 is Auto.
+    pub threads: u32,
+    /// Devices left with nothing to do stop being called.
+    pub idle_sleep: bool,
+    /// Which hardware channels to bother with.
+    pub channels: Arc<ChannelMasks>,
+}
+
+impl Default for AudioPrefs {
+    fn default() -> Self {
+        Self {
+            threads: 0,
+            idle_sleep: true,
+            channels: Arc::default(),
+        }
+    }
+}
+
+/// Helper threads for an engine on this device. `None` is one thread: today's path, nothing else
+/// to go wrong.
+pub fn worker_pool(
+    threads: u32,
+    device_name: Option<&str>,
+    sample_rate: f64,
+) -> Option<Box<WorkerPool>> {
+    let count = crate::audio_threads::resolve_thread_count(threads);
+    if count <= 1 {
+        return None;
+    }
+    let hooks = crate::audio_threads::worker_hooks(device_name, sample_rate);
+    let pool = WorkerPool::spawn(count - 1, Some(hooks));
+    if pool.is_none() {
+        log::error!("no worker threads could be started; rendering on one thread");
+    }
+    pool
+}
 
 pub struct AudioOutput {
     _stream: Option<cpal::Stream>,
@@ -82,12 +152,21 @@ pub fn output_device_names() -> Vec<String> {
 
 /// Open an output device (by name, or the default one) and start an engine on it.
 /// Falls back to a silent timer-driven engine when no device is available so the app still runs.
-pub fn start(device_name: Option<&str>, input: &InputDevice) -> (AudioOutput, EngineHandle) {
-    match try_start(device_name, input) {
+pub fn start(
+    device_name: Option<&str>,
+    input: &InputDevice,
+    prefs: &AudioPrefs,
+) -> (AudioOutput, EngineHandle) {
+    match try_start(device_name, input, prefs) {
         Ok(r) => r,
         Err(e) => {
             log::error!("audio output unavailable: {e}");
-            let (engine, handle) = create_engine(48_000.0, MAX_BLOCK);
+            let (mut engine, handle) = create_engine(48_000.0, MAX_BLOCK);
+            engine.set_workers(worker_pool(prefs.threads, None, 48_000.0));
+            handle
+                .shared
+                .idle_sleep
+                .store(prefs.idle_sleep, Ordering::Relaxed);
             let stop = Arc::new(AtomicBool::new(false));
             let thread = spawn_fallback(engine, stop.clone());
             (
@@ -112,6 +191,7 @@ pub fn start(device_name: Option<&str>, input: &InputDevice) -> (AudioOutput, En
 fn try_start(
     device_name: Option<&str>,
     input: &InputDevice,
+    prefs: &AudioPrefs,
 ) -> Result<(AudioOutput, EngineHandle), String> {
     let host = cpal::default_host();
     let device = match device_name {
@@ -138,7 +218,12 @@ fn try_start(
     let config = widest_config(&device, &supported);
     let channels = (config.channels as usize).min(MAX_OUTPUT_CHANNELS);
     let sample_rate = config.sample_rate as f64;
-    let (engine, handle) = create_engine(sample_rate, MAX_BLOCK);
+    let (mut engine, handle) = create_engine(sample_rate, MAX_BLOCK);
+    engine.set_workers(worker_pool(prefs.threads, device_name, sample_rate));
+    handle
+        .shared
+        .idle_sleep
+        .store(prefs.idle_sleep, Ordering::Relaxed);
     let glitches = Arc::new(AtomicU64::new(0));
     let opened = match open_input(&host, input, config.sample_rate, glitches.clone()) {
         Ok(opened) => opened,
@@ -158,6 +243,7 @@ fn try_start(
         engine,
         tail,
         handle.shared.clone(),
+        prefs.channels.clone(),
     )?;
     stream.play().map_err(|e| e.to_string())?;
     Ok((
@@ -393,6 +479,7 @@ fn render_interleaved(
     input: Option<&mut InputSide>,
     data: &mut [f32],
     channels: usize,
+    masks: &ChannelMasks,
 ) {
     let wired = channels.max(2).min(scratch.len());
     let frames_total = data.len() / channels.max(1);
@@ -406,8 +493,11 @@ fn render_interleaved(
         if let Some(side) = input.as_mut() {
             side.ring.pull(n, &mut side.scratch);
             in_channels = side.scratch.len().min(MAX_INPUT_CHANNELS);
-            for (slice, buffer) in in_slices.iter_mut().zip(side.scratch.iter()) {
-                *slice = &buffer[..n];
+            for (c, (slice, buffer)) in in_slices.iter_mut().zip(side.scratch.iter()).enumerate() {
+                // A channel nobody uses reads as silence, as one that isn't there does.
+                if masks.input_on(c) {
+                    *slice = &buffer[..n];
+                }
             }
         }
         {
@@ -429,7 +519,11 @@ fn render_interleaved(
                 1 => frame[0] = (scratch[0][i] + scratch[1][i]) * 0.5,
                 _ => {
                     for (c, s) in frame.iter_mut().enumerate() {
-                        *s = scratch.get(c).map_or(0.0, |b| b[i]);
+                        *s = if masks.output_on(c) {
+                            scratch.get(c).map_or(0.0, |b| b[i])
+                        } else {
+                            0.0
+                        };
                     }
                 }
             }
@@ -451,6 +545,7 @@ fn build_stream(
     mut engine: Engine,
     input: Option<DriftRing>,
     shared: Arc<rlive_engine::shared::EngineShared>,
+    masks: Arc<ChannelMasks>,
 ) -> Result<cpal::Stream, String> {
     // Scratch buffers allocated up front; the callback never allocates.
     let mut scratch = vec![vec![0.0f32; SCRATCH_FRAMES]; channels.max(2)];
@@ -472,7 +567,14 @@ fn build_stream(
                     let frames = (lag as f64 * 1e-9 * sample_rate) as u32;
                     shared.input_latency.store(frames, Ordering::Relaxed);
                 }
-                render_interleaved(&mut engine, &mut scratch, input.as_mut(), data, channels);
+                render_interleaved(
+                    &mut engine,
+                    &mut scratch,
+                    input.as_mut(),
+                    data,
+                    channels,
+                    &masks,
+                );
             },
             |err| log::error!("audio stream error: {err}"),
             None,
@@ -513,12 +615,67 @@ mod tests {
     }
 
     #[test]
+    fn a_disabled_output_channel_stays_silent() {
+        let (mut e, mut h) = engine();
+        h.send(rlive_engine::EngineCommand::Transport(
+            rlive_engine::TransportCmd::SetMetronome(true),
+        ))
+        .ok()
+        .unwrap();
+        h.send(rlive_engine::EngineCommand::Transport(
+            rlive_engine::TransportCmd::Play,
+        ))
+        .ok()
+        .unwrap();
+        let masks = ChannelMasks::default();
+        masks.set(u64::MAX, 0b10); // Only channel 1 of the pair.
+        let mut scratch = vec![vec![0.0f32; SCRATCH_FRAMES]; 2];
+        let mut data = vec![0.5f32; 2 * 1000];
+        render_interleaved(&mut e, &mut scratch, None, &mut data, 2, &masks);
+        assert!(
+            data.chunks(2).all(|f| f[0] == 0.0),
+            "the disabled channel is silent"
+        );
+        assert!(
+            data.chunks(2).any(|f| f[1] != 0.0),
+            "the other channel has the click"
+        );
+    }
+
+    #[test]
+    fn a_disabled_input_channel_reads_as_silence() {
+        let (mut e, h) = engine();
+        let (head, ring) = ring_with(4096);
+        let mut side = InputSide {
+            scratch: vec![vec![0.0f32; SCRATCH_FRAMES]],
+            ring,
+        };
+        let _keep_writer_alive = head;
+        let masks = ChannelMasks::default();
+        let mut scratch = vec![vec![0.0f32; SCRATCH_FRAMES]; 2];
+        let mut data = vec![0.0f32; 2 * 128];
+        masks.set(0, u64::MAX); // No inputs in use.
+        render_interleaved(&mut e, &mut scratch, Some(&mut side), &mut data, 2, &masks);
+        assert_eq!(h.shared.input_meters[0].take(), 0.0, "not metered");
+        masks.set(1, u64::MAX); // Input 0 in use again.
+        render_interleaved(&mut e, &mut scratch, Some(&mut side), &mut data, 2, &masks);
+        assert!(h.shared.input_meters[0].take() > 0.0, "read when enabled");
+    }
+
+    #[test]
     fn interleaved_channels_past_the_stereo_pair_are_silent_until_routed() {
         let (mut e, _h) = engine();
         let mut scratch = vec![vec![1.0f32; SCRATCH_FRAMES]; 6];
         let mut data = vec![0.5f32; 6 * 100];
         rlive_testkit::assert_no_alloc(|| {
-            render_interleaved(&mut e, &mut scratch, None, &mut data, 6)
+            render_interleaved(
+                &mut e,
+                &mut scratch,
+                None,
+                &mut data,
+                6,
+                &ChannelMasks::default(),
+            )
         });
         assert!(data.iter().all(|s| *s == 0.0));
     }
@@ -528,7 +685,14 @@ mod tests {
         let (mut e, _h) = engine();
         let mut scratch = vec![vec![0.0f32; SCRATCH_FRAMES]; 2];
         let mut data = vec![0.5f32; 100];
-        render_interleaved(&mut e, &mut scratch, None, &mut data, 1);
+        render_interleaved(
+            &mut e,
+            &mut scratch,
+            None,
+            &mut data,
+            1,
+            &ChannelMasks::default(),
+        );
         assert!(data.iter().all(|s| *s == 0.0));
     }
 
@@ -596,7 +760,14 @@ mod tests {
         };
         let mut data = vec![0.0f32; 2 * 100];
         rlive_testkit::assert_no_alloc(|| {
-            render_interleaved(&mut e, &mut scratch, Some(&mut side), &mut data, 2)
+            render_interleaved(
+                &mut e,
+                &mut scratch,
+                Some(&mut side),
+                &mut data,
+                2,
+                &ChannelMasks::default(),
+            )
         });
     }
 }

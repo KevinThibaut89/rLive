@@ -14,6 +14,8 @@ pub struct TapBus {
     right: Box<[f32]>,
     line: Option<Box<StereoLine>>,
     readers: Box<[FadingDelay]>,
+    /// The one track the running plan lets touch this bus while a block renders. See [`BusView`].
+    pub(crate) owner: u32,
 }
 
 impl TapBus {
@@ -24,6 +26,7 @@ impl TapBus {
             right: vec![0.0; max_block].into_boxed_slice(),
             line: (longest_delay > 0).then(|| StereoLine::new(longest_delay, max_block)),
             readers: vec![FadingDelay::default(); readers].into_boxed_slice(),
+            owner: NO_OWNER,
         }
     }
 
@@ -119,6 +122,92 @@ impl TapBus {
         for (new, old) in self.readers.iter_mut().zip(old.readers.iter()) {
             *new = *old;
         }
+    }
+}
+
+/// A [`TapBus`] nothing in the running plan is known to own, or two things claim.
+pub(crate) const NO_OWNER: u32 = u32::MAX;
+
+/// A track's way to the tap buses while it renders.
+///
+/// With one thread any track may reach any bus, as a plan asks. With several, the plan gives every
+/// bus one owning track, [`Engine::configure_tracks`](crate::Engine) checks that it does, and each
+/// thread holds a view for the track it is rendering: everything here goes through
+/// [`owned`](Self::owned), so a write can only reach a bus that thread's track owns. Buses are
+/// only otherwise touched from the serial part of a block, so there is never anyone to race with.
+pub(crate) struct BusView {
+    buses: *mut TapBus,
+    len: usize,
+    /// The track this view renders for, or `None` when nothing else is running.
+    track: Option<u32>,
+}
+
+impl BusView {
+    /// A view over all of `buses`, for use with nothing else running.
+    pub(crate) fn serial(buses: &mut [TapBus]) -> Self {
+        Self {
+            buses: buses.as_mut_ptr(),
+            len: buses.len(),
+            track: None,
+        }
+    }
+
+    /// One thread's view while the others hold views of their own.
+    ///
+    /// # Safety
+    /// `buses` must be valid for the view's lifetime. While any view for another track exists, a
+    /// bus may be reached only through a view for its owner.
+    pub(crate) unsafe fn scoped(buses: *mut TapBus, len: usize, track: u32) -> Self {
+        Self {
+            buses,
+            len,
+            track: Some(track),
+        }
+    }
+
+    /// A view that no longer checks ownership: the caller is the only thread rendering.
+    pub(crate) fn unchecked(mut self) -> Self {
+        self.track = None;
+        self
+    }
+
+    /// The bus at `index`, if this view's track may have it.
+    fn owned(&mut self, index: u32) -> Option<&mut TapBus> {
+        let index = index as usize;
+        if index >= self.len {
+            return None;
+        }
+        // SAFETY: `index` is in range. If `track` is `Some`, the bus only comes back when it is
+        // this view's own, and the contract of `scoped` keeps every other thread off it; if
+        // `None`, nothing else is running.
+        let bus = unsafe { &mut *self.buses.add(index) };
+        match self.track {
+            Some(track) if bus.owner != track => None,
+            _ => Some(bus),
+        }
+    }
+
+    pub(crate) fn write(&mut self, bus: u32, from: usize, left: &[f32], right: &[f32]) {
+        if let Some(b) = self.owned(bus) {
+            b.write(from, left, right);
+        }
+    }
+
+    pub(crate) fn silence(&mut self, bus: u32, from: usize, to: usize) {
+        if let Some(b) = self.owned(bus) {
+            b.silence(from, to);
+        }
+    }
+
+    pub(crate) fn finish(&mut self, bus: u32, frames: usize) {
+        if let Some(b) = self.owned(bus) {
+            b.finish(frames);
+        }
+    }
+
+    /// Part of a bus this view's track owns, read-only.
+    pub(crate) fn input(&mut self, bus: u32, from: usize, to: usize) -> Option<AudioInput<'_>> {
+        Some(self.owned(bus)?.input(from, to))
     }
 }
 

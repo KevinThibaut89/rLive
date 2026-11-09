@@ -305,6 +305,40 @@ impl Engine {
         }
         self.click.delay.set_target(plan.click_delay);
         self.solo_dirty = true;
+        for t in self.tracks.iter_mut() {
+            t.refresh_thread_policy();
+        }
+        self.master.refresh_thread_policy();
+        self.claim_buses();
+    }
+
+    /// Say which track owns each bus under the running plan, and whether every bus has one owner,
+    /// which is what lets tracks render at once. Anything less runs on this thread alone.
+    fn claim_buses(&mut self) {
+        let plan = self.plans.active();
+        for bus in self.buses.iter_mut() {
+            bus.owner = crate::taps::NO_OWNER;
+        }
+        let buses = &mut self.buses;
+        let mut one_owner = true;
+        let mut claim = |index: u32, track: u32| {
+            if let Some(bus) = buses.get_mut(index as usize) {
+                if bus.owner != crate::taps::NO_OWNER && bus.owner != track {
+                    one_owner = false;
+                }
+                bus.owner = track;
+            }
+        };
+        for out in &plan.tap_outs {
+            claim(out.bus, out.track);
+        }
+        for sc in &plan.sidechains {
+            claim(sc.feed, sc.to);
+        }
+        for ret in &plan.hardware_returns {
+            claim(ret.feed, ret.to);
+        }
+        self.parallel_safe = one_owner;
     }
 
     /// Whether every delay a plan asks for has a line long enough to read it from.
@@ -677,6 +711,8 @@ impl Engine {
                 }
                 std::mem::swap(&mut self.buses, &mut *buses);
                 retire(&mut self.garbage, Garbage::Boxed(buses));
+                // Who owns the new buses has to be worked out for them.
+                applied.devices = true;
             }
             C::SetResource {
                 target,

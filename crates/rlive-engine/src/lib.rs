@@ -14,6 +14,7 @@ pub mod automation;
 pub mod capture;
 pub mod clip;
 mod commands;
+pub mod cpu;
 pub mod delay;
 pub mod graph;
 pub mod lane;
@@ -21,6 +22,7 @@ pub mod midi_out;
 pub mod modulation;
 pub mod params;
 pub mod rack;
+pub mod sched;
 pub mod shared;
 pub mod sync;
 pub mod taps;
@@ -49,8 +51,8 @@ pub use graph::{
     TrackIo, TrackRef, MAX_RACK_DEPTH,
 };
 pub use lane::{ArrangementLane, LaneClip, LaneFades};
-use midi_out::MidiOutSink;
 pub use midi_out::{HwMidi, PortRoute};
+use midi_out::{MidiMerge, MidiOutSink, PendingMidi};
 pub use modulation::{ModBus, ModRoute, MAX_MOD_VALUES, NO_MOD_BASE};
 pub use params::{
     mix_cell, BusLayout, CellIx, CellSpec, CellState, CellTarget, ControlHooks, ControlStep,
@@ -65,11 +67,13 @@ use rlive_core::{
     time::{BarMap, TempoRun, TimeMaps},
     DeviceId, GrooveBank, MidiMessage, Quantize, TimeSignature, TrackId, TransportInfo,
 };
+pub use sched::{WorkerHooks, WorkerPool};
 use shared::EngineShared;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 use sync::{HwSync, SyncStamp};
+use taps::BusView;
 use track::BlockCtx;
 pub use track::{DeviceBody, DeviceSlot, MixSettings, RackOuts, TrackNode, MAX_SCENES};
 
@@ -143,6 +147,9 @@ pub enum EngineCommand {
     Graph(Box<GraphTxn>),
     /// A file heard from the browser.
     Preview(PreviewCmd),
+    /// Render on these helper threads from now on, or `None` on this one alone. Built on the UI
+    /// thread; the pool it replaces goes back there to be stopped.
+    SetWorkers(Option<Box<WorkerPool>>),
 }
 
 impl EngineCommand {
@@ -673,6 +680,16 @@ pub struct Engine {
     shared: Arc<EngineShared>,
     /// MIDI Clock, timecode, Tempo Follower and Link.
     sync: sync::SyncState,
+    /// The helper threads, when rendering on more than this one.
+    pool: Option<Box<WorkerPool>>,
+    /// The running plan gives every bus a single owner, so its tracks can run at once.
+    parallel_safe: bool,
+    /// Room to tell apart a level's steps that must run on this thread and those that may not.
+    pinned_steps: Vec<u16>,
+    free_steps: Vec<u16>,
+    /// This block's MIDI, on its way to the ring.
+    midi_merge: MidiMerge,
+    cpu: cpu::CpuMeter,
 }
 
 /// Create an engine and its UI handle.
@@ -764,6 +781,12 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         remote: remote_rx,
         shared: shared.clone(),
         sync: sync::SyncState::new(sample_rate, sync_rx, hw_sync_tx),
+        pool: None,
+        parallel_safe: true,
+        pinned_steps: Vec::with_capacity(MAX_TRACKS + 1),
+        free_steps: Vec::with_capacity(MAX_TRACKS + 1),
+        midi_merge: MidiMerge::new(HW_MIDI_CAPACITY),
+        cpu: cpu::CpuMeter::new(),
     };
     let handle = EngineHandle {
         commands: cmd_tx,
@@ -792,16 +815,57 @@ fn retire(garbage: &mut rtrb::Producer<Garbage>, g: Garbage) {
 }
 
 impl Engine {
-    /// Hands this block's MIDI to the thread that owns the hardware ports.
-    fn send_hw_midi(&mut self) {
+    /// Hands this block's MIDI to the thread that owns the hardware ports, in sample order. A
+    /// message's place among others on the same sample is the order the serial engine would make
+    /// them in: each step's devices in plan order, then each track's Ext. Out.
+    fn send_hw_midi(&mut self, plan: &RenderPlan) {
+        let master = self.tracks.len() as u32;
+        for step in &plan.steps {
+            let t = if step.track == master {
+                Some(&mut *self.master)
+            } else {
+                self.tracks.get_mut(step.track as usize).map(|t| &mut **t)
+            };
+            if let Some(t) = t {
+                for m in t.out.midi.drain() {
+                    self.midi_merge.add(m);
+                }
+            }
+        }
         for t in self.tracks.iter() {
             let Some(port) = t.hw_port else {
                 continue;
             };
             for e in t.midi_out.iter() {
-                self.midi_sink.push(port, e.message, e.offset);
+                self.midi_merge.add(PendingMidi {
+                    port,
+                    message: e.message,
+                    offset: e.offset,
+                });
             }
         }
+        self.midi_merge.drain_into(&mut self.midi_sink);
+    }
+
+    /// Use these helper threads from the next block on. For before the engine is running; a
+    /// running engine takes [`EngineCommand::SetWorkers`].
+    pub fn set_workers(&mut self, pool: Option<Box<WorkerPool>>) {
+        self.pool = pool;
+    }
+
+    /// How many threads share the rendering, this one included.
+    pub fn render_threads(&self) -> usize {
+        self.pool.as_ref().map_or(1, |p| p.threads() + 1)
+    }
+
+    /// The pool, for reading its diagnostics.
+    pub fn workers(&self) -> Option<&WorkerPool> {
+        self.pool.as_deref()
+    }
+
+    /// Whether the running plan is being rendered on the helper threads.
+    pub fn renders_on_workers(&self) -> bool {
+        self.pool.is_some() && self.parallel_safe
     }
 
     pub fn sample_rate(&self) -> f64 {
@@ -976,6 +1040,11 @@ impl Engine {
             EngineCommand::Tuning(c) => self.handle_tuning(c),
             EngineCommand::Graph(c) => self.handle_graph(c),
             EngineCommand::Preview(c) => self.handle_preview(c),
+            EngineCommand::SetWorkers(pool) => {
+                if let Some(old) = std::mem::replace(&mut self.pool, pool) {
+                    retire(&mut self.garbage, Garbage::Boxed(old));
+                }
+            }
         }
     }
 
@@ -1223,9 +1292,15 @@ impl Engine {
         }
         if total > 0 {
             let budget = total as f64 / self.sample_rate;
-            let load = (started.elapsed().as_secs_f64() / budget) as f32;
-            let prev = self.shared.cpu_load.load();
-            self.shared.cpu_load.store(prev + (load - prev) * 0.1);
+            let elapsed = started.elapsed().as_secs_f64();
+            let (average, current) = self.cpu.update(elapsed, budget);
+            self.shared.cpu_load.store(average);
+            self.shared.cpu_current.store_max(current);
+            if current > 1.0 {
+                self.shared
+                    .cpu_overloads
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
         }
     }
 
@@ -1281,33 +1356,47 @@ impl Engine {
         let plan_for_takes = std::mem::take(&mut self.plans);
         self.step_slot_records(plan_for_takes.active(), time);
         self.plans = plan_for_takes;
-        let garbage = &mut self.garbage;
-        let mut retire_clip = |c: Arc<ClipData>| retire(garbage, Garbage::Shared(c));
+        let pool = self.pool.as_deref();
+        let tracks_ptr = Raw(self.tracks.as_mut_ptr());
+        let master_ptr = Raw(&mut *self.master as *mut TrackNode);
+        let count = self.tracks.len();
         let smooth = self.smooth_coeff;
-        let env = clip::LaunchEnv {
-            bars: &maps.bars,
-            global: self.quantize,
-            chase: self.chase,
-        };
-        for t in self.tracks.iter_mut() {
-            t.smooth = smooth;
-            t.lane.set_chase(self.chase);
-            t.begin_block(
-                time,
-                &transport,
-                self.midi_auto_reset,
-                env,
-                &mut retire_clip,
-            );
+        let chase = self.chase;
+        let auto_reset = self.midi_auto_reset;
+        let measure = self.shared.measure_tracks.load(Ordering::Relaxed);
+        let quantize = self.quantize;
+        {
+            let begin = |i: usize| {
+                let env = clip::LaunchEnv {
+                    bars: &maps.bars,
+                    global: quantize,
+                    chase,
+                };
+                // SAFETY: each index is a different element of `tracks`, or the master, and
+                // nothing else touches them until the phase is over.
+                let t = unsafe { track_at(tracks_ptr, master_ptr, count, i) };
+                let started = measure.then(Instant::now);
+                t.smooth = smooth;
+                t.lane.set_chase(chase);
+                t.begin_block(time, &transport, auto_reset, env);
+                if let Some(started) = started {
+                    t.out.busy_nanos = started.elapsed().as_nanos() as u64;
+                }
+            };
+            match pool {
+                Some(p) => p.scatter(count + 1, &begin),
+                None => (0..count + 1).for_each(begin),
+            }
         }
-        self.master.smooth = smooth;
-        self.master.begin_block(
-            time,
-            &transport,
-            self.midi_auto_reset,
-            env,
-            &mut retire_clip,
-        );
+        for t in self
+            .tracks
+            .iter_mut()
+            .chain(std::iter::once(&mut self.master))
+        {
+            for c in t.out.retired.drain(..) {
+                retire(&mut self.garbage, Garbage::Shared(c));
+            }
+        }
         for t in self.tracks.iter_mut() {
             if let Some(lane) = t.lane.spent.take() {
                 retire(&mut self.garbage, Garbage::Shared(lane));
@@ -1338,14 +1427,19 @@ impl Engine {
             for step in steps {
                 self.gather_inputs(plan, step, inputs, start, time, &transport, &maps.bars);
             }
-            self.run_control_steps(plan, steps, level == 0, &ctx);
-            self.finish_steps(plan, steps, time, &ctx);
+            if level == 0 {
+                // Commands, the crossfader and solo reach across tracks at every control step.
+                self.run_control_steps(plan, steps, true, &ctx);
+            }
+            self.render_level(plan, steps, level != 0, time, &ctx);
+            self.finish_level(steps, frames);
         }
         self.run_captures(plan, inputs, start, time);
         self.write_outputs(plan, outputs, start, frames, &time);
-        self.send_hw_midi();
+        self.send_hw_midi(plan);
         self.emit_clock(time);
         self.plans = plans;
+        // Every worker has reported in, so there's no one left to see the buffers move.
         self.mods.end_block();
         self.clock += frames as u64;
 
@@ -1734,7 +1828,8 @@ impl Engine {
             .sort_unstable_by_key(|e| e.sort_key());
     }
 
-    /// Resolve the parameters of some steps at each control step of the block.
+    /// Resolve the parameters of level 0's steps at each control step of the block, with what
+    /// reaches across tracks in between: commands, the crossfader, solo. Serial.
     fn run_control_steps(
         &mut self,
         plan: &RenderPlan,
@@ -1743,6 +1838,7 @@ impl Engine {
         ctx: &BlockCtx,
     ) {
         let master = self.tracks.len() as u32;
+        let idle_sleep = self.shared.idle_sleep.load(Ordering::Relaxed);
         let mut index = 0;
         let mut offset = 0;
         while offset < ctx.frames {
@@ -1762,42 +1858,15 @@ impl Engine {
                 .get(index as usize)
                 .copied()
                 .unwrap_or((1.0, 1.0));
-            let events = &mut self.events;
-            let buses = &mut self.buses;
-            let mods = &mut *self.mods;
-            let midi_sink = &mut self.midi_sink;
+            let mut buses = BusView::serial(&mut self.buses);
             for step in steps {
-                let is_master = step.track == master;
-                let t = if is_master {
+                let t = if step.track == master {
                     Some(&mut *self.master)
                 } else {
                     self.tracks.get_mut(step.track as usize).map(|t| &mut **t)
                 };
                 if let Some(t) = t {
-                    let target = if is_master {
-                        TrackRef::Master
-                    } else {
-                        TrackRef::Track(t.id)
-                    };
-                    let sink = std::cell::RefCell::new(&mut *events);
-                    t.control_step(
-                        index,
-                        offset,
-                        ctx,
-                        buses,
-                        &mut *mods,
-                        &mut *midi_sink,
-                        &mut |_, d, p, v| {
-                            push_param_changed(&mut sink.borrow_mut(), target, d, p, v)
-                        },
-                        &mut |cell, value| {
-                            let _ = sink.borrow_mut().push(EngineEvent::ClipAutomationEnded {
-                                target,
-                                cell,
-                                value,
-                            });
-                        },
-                    );
+                    t.control_step(index, offset, ctx, &mut buses, &self.mods, idle_sleep);
                 }
             }
             for step in steps {
@@ -1906,55 +1975,255 @@ impl Engine {
         }
     }
 
-    /// Run what is left of some steps' chains and take them through the mixer stage.
-    fn finish_steps(&mut self, plan: &RenderPlan, steps: &[Step], time: BlockTime, ctx: &BlockCtx) {
-        let events = &mut self.events;
+    /// Render one level: for each of its steps, the control steps if they're still to do, what's
+    /// left of its chain, and its mixer stage. Tracks in a level don't depend on each other, so
+    /// they may run at once. [`Self::finish_level`] then sends out what they said, in order.
+    fn render_level(
+        &mut self,
+        plan: &RenderPlan,
+        steps: &[Step],
+        control: bool,
+        time: BlockTime,
+        ctx: &BlockCtx,
+    ) {
         let master = self.tracks.len() as u32;
-        let coeff = self.smooth_coeff;
+        let mods = &*self.mods;
+        let shared = &*self.shared;
+        let crossfade = &self.crossfade_steps[..];
+        let env = StepEnv {
+            ctx,
+            time,
+            plan,
+            mods,
+            buses: Raw(self.buses.as_mut_ptr()),
+            bus_count: self.buses.len(),
+            scoped: self.pool.is_some() && self.parallel_safe,
+            coeff: self.smooth_coeff,
+            crossfade,
+            measure: shared.measure_tracks.load(Ordering::Relaxed),
+            idle_sleep: shared.idle_sleep.load(Ordering::Relaxed),
+            shared,
+        };
+        let tracks_ptr = Raw(self.tracks.as_mut_ptr());
+        let master_ptr = Raw(&mut *self.master as *mut TrackNode);
+        let count = self.tracks.len();
+        let run = |at: usize, control: bool| {
+            let step = &steps[at];
+            // SAFETY: `fits` guarantees a step's track appears once in the plan, or is the master,
+            // so these references never overlap. Nothing else touches a track or the buses it
+            // owns until the level has been joined.
+            let t = unsafe { step_track(tracks_ptr, master_ptr, count, master, step) };
+            if let Some(t) = t {
+                run_step(&env, t, step, control);
+            }
+        };
+        match self.pool.as_deref().filter(|_| self.parallel_safe) {
+            None => {
+                for at in 0..steps.len() {
+                    run(at, control);
+                }
+            }
+            Some(pool) => {
+                // What must stay on this thread stays here; the rest goes to whoever takes it.
+                let mut pinned = std::mem::take(&mut self.pinned_steps);
+                let mut free = std::mem::take(&mut self.free_steps);
+                pinned.clear();
+                free.clear();
+                for (at, step) in steps.iter().enumerate() {
+                    let pin = if step.track == master {
+                        self.master.needs_audio_thread
+                    } else {
+                        self.tracks
+                            .get(step.track as usize)
+                            .is_some_and(|t| t.needs_audio_thread)
+                    };
+                    if pin {
+                        pinned.push(at as u16);
+                    } else {
+                        free.push(at as u16);
+                    }
+                }
+                let job = |k: usize| run(free[k] as usize, control);
+                pool.scatter_after(free.len(), &job, || {
+                    for at in pinned.iter() {
+                        run(*at as usize, control);
+                    }
+                });
+                self.pinned_steps = pinned;
+                self.free_steps = free;
+            }
+        }
+    }
+
+    /// Send out, in plan order, what a level's tracks said while they rendered.
+    fn finish_level(&mut self, steps: &[Step], frames: usize) {
+        let master = self.tracks.len() as u32;
+        let events = &mut self.events;
         let [cue_l, cue_r] = &mut self.cue;
         for step in steps {
-            let is_master = step.track == master;
-            let t = if is_master {
+            let t = if step.track == master {
                 Some(&mut *self.master)
             } else {
                 self.tracks.get_mut(step.track as usize).map(|t| &mut **t)
             };
-            let Some(t) = t else {
-                continue;
-            };
-            t.finish_block(
-                time,
-                ctx,
-                &mut self.buses,
-                &mut self.mods,
-                &mut self.midi_sink,
-                &mut |t, d, p, v| {
-                    let owner = if is_master {
-                        TrackRef::Master
-                    } else {
-                        TrackRef::Track(t)
-                    };
-                    push_param_changed(events, owner, d, p, v)
-                },
-            );
-            t.prepare_sends(time.frames, coeff);
-            t.cue_into((&mut cue_l[..], &mut cue_r[..]), time.frames, coeff);
-            t.apply_mix(time.frames, coeff);
-            if t.silenced {
-                t.left[..time.frames].fill(0.0);
-                t.right[..time.frames].fill(0.0);
+            let Some(t) = t else { continue };
+            for e in t.out.events.drain(..) {
+                let _ = events.push(e);
             }
-            t.write_post_mix(&mut self.buses, time.frames);
-            t.feed_lines(time.frames);
-            for out in plan.taps_of(step.track) {
-                self.buses[out.bus as usize].finish(time.frames);
+            if std::mem::take(&mut t.out.cue_used) {
+                for (d, s) in cue_l[..frames].iter_mut().zip(&t.out.cue[0][..frames]) {
+                    *d += s;
+                }
+                for (d, s) in cue_r[..frames].iter_mut().zip(&t.out.cue[1][..frames]) {
+                    *d += s;
+                }
             }
-            if is_master {
-                let (l, r) = t.output(time.frames);
-                self.shared.master_meter.update(l, r);
+            if t.out.busy_nanos > 0 {
+                t.shared
+                    .busy_nanos
+                    .fetch_add(std::mem::take(&mut t.out.busy_nanos), Ordering::Relaxed);
             }
         }
     }
+}
+
+/// What every step of a level needs, shared by the threads rendering it.
+struct StepEnv<'a> {
+    ctx: &'a BlockCtx<'a>,
+    time: BlockTime,
+    plan: &'a RenderPlan,
+    mods: &'a ModBus,
+    buses: Raw<taps::TapBus>,
+    bus_count: usize,
+    /// Rendering on several threads, so a view must check who owns the bus it is asked for.
+    scoped: bool,
+    coeff: f32,
+    crossfade: &'a [(f32, f32)],
+    measure: bool,
+    idle_sleep: bool,
+    shared: &'a EngineShared,
+}
+
+/// Run one track through its control steps, if `control`, and the rest of its chain and mixer.
+///
+/// Serial and threaded rendering share this one function: nothing here reaches a track or a bus
+/// that isn't this track's, so running tracks in any order, or at once, gives the same result.
+fn run_step(env: &StepEnv, t: &mut TrackNode, step: &Step, control: bool) {
+    let started = env.measure.then(Instant::now);
+    let frames = env.ctx.frames;
+    // SAFETY: valid for the whole level. A scoped view only reaches buses its track owns, and
+    // a serial one has only ever got this thread for company.
+    let mut buses = unsafe {
+        let view = BusView::scoped(env.buses.0, env.bus_count, step.track);
+        if env.scoped {
+            view
+        } else {
+            BusView::unchecked(view)
+        }
+    };
+    if control {
+        run_track_control(env, t, &mut buses);
+    }
+    t.finish_block(env.time, env.ctx, &mut buses, env.mods, env.idle_sleep);
+    t.prepare_sends(frames, env.coeff);
+    t.cue_into(frames, env.coeff);
+    t.apply_mix(frames, env.coeff);
+    if t.silenced {
+        t.left[..frames].fill(0.0);
+        t.right[..frames].fill(0.0);
+    }
+    t.write_post_mix(&mut buses, frames);
+    t.feed_lines(frames);
+    for out in env.plan.taps_of(step.track) {
+        buses.finish(out.bus, frames);
+    }
+    if t.is_master() {
+        let (l, r) = t.output(frames);
+        env.shared.master_meter.update(l, r);
+    }
+    if let Some(started) = started {
+        t.out.busy_nanos += started.elapsed().as_nanos() as u64;
+    }
+}
+
+/// This track's control steps. Beyond level 0 a step's control depends only on its own track, so
+/// it can run with the rest of the track rather than in lockstep with the others.
+fn run_track_control(env: &StepEnv, t: &mut TrackNode, buses: &mut BusView) {
+    let (mut index, mut offset) = (0u32, 0usize);
+    while offset < env.ctx.frames {
+        t.control_step(index, offset, env.ctx, buses, env.mods, env.idle_sleep);
+        if !t.is_master() {
+            let crossfade = env
+                .crossfade
+                .get(index as usize)
+                .copied()
+                .unwrap_or((1.0, 1.0));
+            t.set_crossfade(crossfade);
+        }
+        t.update_mix(offset);
+        index += 1;
+        offset += CONTROL_STEP;
+    }
+}
+
+/// A raw pointer the scheduler can carry between threads, for the phases of a block.
+struct Raw<T>(*mut T);
+
+impl<T> Clone for Raw<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Raw<T> {}
+
+// SAFETY: `Raw` only crosses threads inside a `scatter` that the caller joins before the pointee
+// can change, and every access through it is either to different elements or under a view.
+unsafe impl<T> Send for Raw<T> {}
+// SAFETY: as above.
+unsafe impl<T> Sync for Raw<T> {}
+
+/// The track or master at `i`, by its place in the begin-of-block phase.
+///
+/// # Safety
+/// The returned reference must be the only one to that element while it lives.
+unsafe fn track_at<'a>(
+    tracks: Raw<Box<TrackNode>>,
+    master: Raw<TrackNode>,
+    count: usize,
+    i: usize,
+) -> &'a mut TrackNode {
+    // SAFETY: promised by the caller; `i` is in range.
+    unsafe {
+        if i < count {
+            &mut *tracks.0.add(i)
+        } else {
+            &mut *master.0
+        }
+    }
+}
+
+/// The track a step renders, if it is one the engine still has.
+///
+/// # Safety
+/// As [`track_at`].
+unsafe fn step_track<'a>(
+    tracks: Raw<Box<TrackNode>>,
+    master: Raw<TrackNode>,
+    count: usize,
+    master_id: u32,
+    step: &Step,
+) -> Option<&'a mut TrackNode> {
+    if step.track == master_id {
+        // SAFETY: promised by the caller.
+        return Some(unsafe { &mut *master.0 });
+    }
+    let i = step.track as usize;
+    if i >= count {
+        return None;
+    }
+    // SAFETY: in range, and promised by the caller.
+    Some(unsafe { &mut **tracks.0.add(i) })
 }
 
 /// Two different tracks at once.
@@ -2046,21 +2315,6 @@ fn add_input(
         return;
     }
     from.main_into(left, right, frames);
-}
-
-fn push_param_changed(
-    events: &mut rtrb::Producer<EngineEvent>,
-    target: TrackRef,
-    device: DeviceId,
-    param: u32,
-    value: f64,
-) {
-    let _ = events.push(EngineEvent::ParamChanged {
-        target,
-        device,
-        param,
-        value,
-    });
 }
 
 /// A jump of the playhead that happens at the next launch point.

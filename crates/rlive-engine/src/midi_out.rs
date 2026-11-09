@@ -3,6 +3,10 @@
 //! Everything bound for a port goes down one ring: a track's Ext. Out and an External Instrument
 //! alike. The audio thread only ever pushes [`HwMidi`]s onto it; whatever owns the ports reads
 //! them from another thread and sends each at its time, so nothing here can block.
+//!
+//! While tracks render on several threads the ring has a single producer to keep, so a track
+//! renders into a [`MidiOutBuffer`] of its own, and when every track has finished the block's
+//! buffers are merged in sample order, track by track, in plan order, and sent ([`MidiMerge`]).
 
 use rlive_core::MidiMessage;
 use std::time::{Duration, Instant};
@@ -31,6 +35,14 @@ pub struct PortRoute {
 pub struct HeldNotes([u128; 16]);
 
 impl HeldNotes {
+    fn track(&mut self, message: MidiMessage) {
+        match message {
+            MidiMessage::NoteOn { channel, key, .. } => self.note(channel, key, true),
+            MidiMessage::NoteOff { channel, key, .. } => self.note(channel, key, false),
+            _ => {}
+        }
+    }
+
     fn note(&mut self, channel: u8, key: u8, on: bool) {
         let bit = 1u128 << (key & 0x7f);
         let notes = &mut self.0[(channel & 0x0f) as usize];
@@ -38,6 +50,124 @@ impl HeldNotes {
             *notes |= bit;
         } else {
             *notes &= !bit;
+        }
+    }
+}
+
+/// Where outgoing MIDI goes on the audio thread or a worker. [`MidiOutSink`] is the ring itself;
+/// [`MidiOutBuffer`] holds a track's messages until the block's end.
+pub trait MidiPush {
+    /// Send a message exactly as it is, `offset` frames into the block.
+    fn push_midi(&mut self, port: u16, message: MidiMessage, offset: u32);
+
+    /// Send a message on the route's channel. Per-note expression can't be said on one channel of
+    /// MIDI 1.0, so it stays home unless an MPE encoder has spread the notes out first.
+    fn send(
+        &mut self,
+        route: PortRoute,
+        held: &mut HeldNotes,
+        mut message: MidiMessage,
+        offset: u32,
+    ) {
+        if matches!(message, MidiMessage::NoteExpr { .. }) {
+            return;
+        }
+        if let Some(channel) = route.channel {
+            message.set_channel(channel);
+        }
+        held.track(message);
+        self.push_midi(route.port, message, offset);
+    }
+
+    /// Send what an MPE encoder made: its channels are the ones it chose.
+    fn send_encoded(
+        &mut self,
+        route: PortRoute,
+        held: &mut HeldNotes,
+        message: MidiMessage,
+        offset: u32,
+    ) {
+        held.track(message);
+        self.push_midi(route.port, message, offset);
+    }
+
+    /// End every note in `held`.
+    fn release(&mut self, route: PortRoute, held: &mut HeldNotes, offset: u32) {
+        for channel in 0..16u8 {
+            let mut notes = held.0[channel as usize];
+            while notes != 0 {
+                let key = notes.trailing_zeros() as u8;
+                notes &= notes - 1;
+                let message = MidiMessage::NoteOff {
+                    channel,
+                    key,
+                    velocity: 0.0,
+                    note_id: 0,
+                };
+                self.push_midi(route.port, message, offset);
+            }
+            held.0[channel as usize] = 0;
+        }
+    }
+}
+
+/// A MIDI message a track made this block, on its way to the merge.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PendingMidi {
+    pub(crate) port: u16,
+    pub(crate) message: MidiMessage,
+    pub(crate) offset: u32,
+}
+
+/// The MIDI one track made this block. Fixed size; what doesn't fit is dropped, as a full ring is.
+#[derive(Default)]
+pub struct MidiOutBuffer(Vec<PendingMidi>);
+
+impl MidiOutBuffer {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    pub(crate) fn drain(&mut self) -> std::vec::Drain<'_, PendingMidi> {
+        self.0.drain(..)
+    }
+}
+
+impl MidiPush for MidiOutBuffer {
+    fn push_midi(&mut self, port: u16, message: MidiMessage, offset: u32) {
+        if self.0.len() < self.0.capacity() {
+            self.0.push(PendingMidi {
+                port,
+                message,
+                offset,
+            });
+        }
+    }
+}
+
+/// Room to sort a block's MIDI on its way to the ring. Fixed size: what doesn't fit is dropped.
+pub(crate) struct MidiMerge(Vec<(u32, u32, PendingMidi)>);
+
+impl MidiMerge {
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
+    /// One more message, in the order the engine rendered it.
+    pub(crate) fn add(&mut self, message: PendingMidi) {
+        if self.0.len() < self.0.capacity() {
+            let seq = self.0.len() as u32;
+            self.0.push((message.offset, seq, message));
+        }
+    }
+
+    /// Hand the block's MIDI to the ring, in sample order, then in the order it was made.
+    pub(crate) fn drain_into(&mut self, sink: &mut MidiOutSink) {
+        // Unstable is fine: the sequence number makes every key distinct, and it doesn't allocate.
+        self.0
+            .sort_unstable_by_key(|&(offset, seq, _)| (offset, seq));
+        for (_, _, m) in self.0.drain(..) {
+            sink.push_midi(m.port, m.message, m.offset);
         }
     }
 }
@@ -73,7 +203,7 @@ impl MidiOutSink {
     }
 
     /// Send a message exactly as it is, `offset` frames into the block.
-    pub(crate) fn push(&mut self, port: u16, message: MidiMessage, offset: u32) {
+    fn push_ring(&mut self, port: u16, message: MidiMessage, offset: u32) {
         let _ = self.queue.push(HwMidi {
             port,
             block: self.block,
@@ -81,63 +211,11 @@ impl MidiOutSink {
             message,
         });
     }
+}
 
-    fn track(held: &mut HeldNotes, message: MidiMessage) {
-        match message {
-            MidiMessage::NoteOn { channel, key, .. } => held.note(channel, key, true),
-            MidiMessage::NoteOff { channel, key, .. } => held.note(channel, key, false),
-            _ => {}
-        }
-    }
-
-    /// Send a message on the route's channel. Per-note expression can't be said on one channel of
-    /// MIDI 1.0, so it stays home unless an MPE encoder has spread the notes out first.
-    pub(crate) fn send(
-        &mut self,
-        route: PortRoute,
-        held: &mut HeldNotes,
-        mut message: MidiMessage,
-        offset: u32,
-    ) {
-        if matches!(message, MidiMessage::NoteExpr { .. }) {
-            return;
-        }
-        if let Some(channel) = route.channel {
-            message.set_channel(channel);
-        }
-        Self::track(held, message);
-        self.push(route.port, message, offset);
-    }
-
-    /// Send what an MPE encoder made: its channels are the ones it chose.
-    pub(crate) fn send_encoded(
-        &mut self,
-        route: PortRoute,
-        held: &mut HeldNotes,
-        message: MidiMessage,
-        offset: u32,
-    ) {
-        Self::track(held, message);
-        self.push(route.port, message, offset);
-    }
-
-    /// End every note in `held`.
-    pub(crate) fn release(&mut self, route: PortRoute, held: &mut HeldNotes, offset: u32) {
-        for channel in 0..16u8 {
-            let mut notes = held.0[channel as usize];
-            while notes != 0 {
-                let key = notes.trailing_zeros() as u8;
-                notes &= notes - 1;
-                let message = MidiMessage::NoteOff {
-                    channel,
-                    key,
-                    velocity: 0.0,
-                    note_id: 0,
-                };
-                self.push(route.port, message, offset);
-            }
-            held.0[channel as usize] = 0;
-        }
+impl MidiPush for MidiOutSink {
+    fn push_midi(&mut self, port: u16, message: MidiMessage, offset: u32) {
+        self.push_ring(port, message, offset);
     }
 }
 
@@ -177,12 +255,47 @@ mod tests {
     }
 
     #[test]
+    fn the_merge_puts_a_blocks_messages_in_sample_order() {
+        let (mut s, mut rx) = sink();
+        let mut merge = MidiMerge::new(8);
+        for (offset, key) in [(300u32, 60u8), (100, 61), (100, 62), (200, 63)] {
+            merge.add(PendingMidi {
+                port: 3,
+                message: on(key),
+                offset,
+            });
+        }
+        merge.drain_into(&mut s);
+        let mut out = Vec::new();
+        while let Ok(e) = rx.pop() {
+            let MidiMessage::NoteOn { key, .. } = e.message else {
+                panic!("not a note");
+            };
+            out.push(key);
+        }
+        assert_eq!(out, [61, 62, 63, 60], "by offset, then as they were made");
+    }
+
+    #[test]
+    fn the_merge_drops_what_it_has_no_room_for() {
+        let mut merge = MidiMerge::new(2);
+        for offset in 0..5 {
+            merge.add(PendingMidi {
+                port: 0,
+                message: on(60),
+                offset,
+            });
+        }
+        assert_eq!(merge.0.len(), 2);
+    }
+
+    #[test]
     fn a_later_block_starts_later() {
         let (mut s, mut rx) = sink();
         let start = Instant::now();
         s.begin_buffer(start);
         s.begin_block(48);
-        s.push(1, on(60), 0);
+        s.push_midi(1, on(60), 0);
         let e = rx.pop().unwrap();
         assert_eq!(e.block, start + Duration::from_millis(1));
     }

@@ -178,6 +178,10 @@ impl Utility {
 }
 
 impl Processor for Utility {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.gain_l.set_time(0.01, sample_rate as f32);
         self.gain_r.set_time(0.01, sample_rate as f32);

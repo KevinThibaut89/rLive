@@ -79,6 +79,8 @@ pub struct SessionLayout {
     pub show_crossfader: bool,
     /// A slot the keyboard moved to, to scroll into view next frame.
     pub reveal: Option<(TrackId, usize)>,
+    /// The Performance Impact meters.
+    pub show_impact: bool,
 }
 
 impl Default for SessionLayout {
@@ -90,6 +92,7 @@ impl Default for SessionLayout {
             show_in_out: false,
             show_crossfader: false,
             reveal: None,
+            show_impact: false,
         }
     }
 }
@@ -1490,6 +1493,11 @@ fn mixer_strip(
             y = send_knobs(ui, session, state, id, is_return, &sends, inner, y);
         }
         y = track_delay_row(ui, session, id, delay, inner, y);
+    }
+    if state.layout.show_impact {
+        let row = Rect::from_min_size(Pos2::new(inner.left(), y), Vec2::new(inner.width(), 7.0));
+        super::cpu_meter::paint_impact(ui.painter(), row, state.cpu.impact(id));
+        y += 11.0;
     }
 
     // Fader + meter take the remaining height above the buttons and dB box.

@@ -81,6 +81,8 @@ mod launch_tests;
 #[cfg(test)]
 mod modulator_tests;
 #[cfg(test)]
+mod multicore_tests;
+#[cfg(test)]
 mod plugin_tests;
 #[cfg(test)]
 mod preset_tests;

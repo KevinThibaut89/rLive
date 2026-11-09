@@ -1355,6 +1355,12 @@ impl AuProcessor {
 }
 
 impl Processor for AuProcessor {
+    fn thread_policy(&self) -> rlive_core::ThreadPolicy {
+        // The format's rules let `process` move between threads, but plug-ins are outside what we
+        // can check, so this stays on the thread it has always been on.
+        rlive_core::ThreadPolicy::AudioThread
+    }
+
     fn activate(&mut self, _sample_rate: f64, _max_block: usize) {}
 
     fn set_resource(&mut self, slot: u32, resource: Resource) -> Option<Resource> {

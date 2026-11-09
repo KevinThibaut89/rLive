@@ -497,6 +497,10 @@ impl Impulse {
 }
 
 impl Processor for Impulse {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, max_block: usize) {
         self.sr = sample_rate;
         self.left = vec![0.0; max_block * SLOTS];

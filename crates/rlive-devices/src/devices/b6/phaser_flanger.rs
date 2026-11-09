@@ -433,6 +433,10 @@ impl PhaserFlanger {
 }
 
 impl Processor for PhaserFlanger {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.sr = sample_rate as f32;
         let capacity = (sample_rate * 0.15) as usize;

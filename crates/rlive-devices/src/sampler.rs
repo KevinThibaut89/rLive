@@ -208,6 +208,10 @@ impl Sampler {
 }
 
 impl Processor for Sampler {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _max_block: usize) {
         self.sr = sample_rate;
         self.ext.activate(sample_rate);

@@ -231,6 +231,10 @@ impl DynamicTube {
 }
 
 impl Processor for DynamicTube {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, max_block: usize) {
         self.sr = sample_rate as f32;
         self.max_block = max_block.max(1);

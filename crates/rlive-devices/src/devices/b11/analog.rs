@@ -1995,6 +1995,10 @@ fn env_gain(env: f32, amount: f32) -> f32 {
 }
 
 impl Processor for Analog {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.sr = sample_rate as f32;
         self.dc_coeff = super::common::dc_coeff(self.sr);

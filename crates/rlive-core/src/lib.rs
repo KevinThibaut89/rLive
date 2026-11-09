@@ -41,7 +41,7 @@ pub use param::{
 };
 pub use processor::{
     AudioBuffer, AudioInput, AudioOutput, BlockStep, EventQueue, ParamOutQueue, ProcessContext,
-    Processor, Resource, Tail,
+    Processor, Resource, Tail, ThreadPolicy,
 };
 pub use sample::SampleBuffer;
 pub use time::{

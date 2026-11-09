@@ -9,7 +9,10 @@ pub mod measure;
 pub mod render;
 pub mod signal;
 
-pub use alloc_guard::{assert_no_alloc, count_allocs, AllocCounts};
+pub use alloc_guard::{
+    assert_no_alloc, count_allocs, helper_heap_touches, unwatch_helper_thread, watch_helper_thread,
+    AllocCounts,
+};
 pub use measure::{max_step, onset, peak, rms, tone_amplitude};
 pub use render::{render_chunks, render_processor, Harness};
 pub use signal::{dc, impulse, silence, sine};

@@ -242,6 +242,10 @@ impl<V: DrumVoice> DrumSynth<V> {
 }
 
 impl<V: DrumVoice> Processor for DrumSynth<V> {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _max_block: usize) {
         self.sample_rate = sample_rate.max(1.0) as f32;
     }

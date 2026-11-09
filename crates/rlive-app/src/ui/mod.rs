@@ -6,6 +6,7 @@ pub(crate) mod browser;
 pub mod clip_envelopes;
 pub(crate) mod clip_view;
 pub mod commands;
+mod cpu_meter;
 pub(crate) mod devices;
 mod export_dialog;
 mod file_manager;
@@ -38,6 +39,7 @@ mod timeline;
 mod tuning_section;
 pub mod widgets;
 
+use crate::audio::ChannelMasks;
 use crate::audio::{self, AudioOutput};
 use crate::midi_input::{self, MidiInput, MidiRouting, OutputBank, PortSwitches};
 use crate::session::InfoTarget;
@@ -48,6 +50,7 @@ use egui::{Align2, Key, Pos2, Rect, RichText, Sense, Stroke, UiBuilder, Vec2};
 use keymap::{FocusArea, KeyContext, KeyState, Platform};
 use rlive_core::param::{ParamId, ParamOwner, ParamRef};
 use rlive_core::{MidiMessage, Quantize, TimeSignature, TrackId};
+use rlive_engine::EngineCommand;
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_project::Project;
 use rlive_project::{MapTarget, RemoteControl};
@@ -187,6 +190,8 @@ pub struct UiState {
     pub undo_history_cursor: Option<usize>,
     pub meters: HashMap<TrackId, MeterState>,
     pub master_meter: MeterState,
+    /// The CPU meter, the Overload indicator and the Performance Impact meters.
+    pub cpu: cpu_meter::CpuMeterState,
     pub devices: devices::DeviceViewState,
     pub renaming: Option<(TrackId, String)>,
     pub piano: piano_roll::PianoState,
@@ -261,6 +266,7 @@ pub struct UiState {
 pub struct RliveApp {
     session: Session,
     audio: AudioOutput,
+    channel_masks: Arc<ChannelMasks>,
     midi: MidiInput,
     routing: MidiRouting,
     /// What the track MIDI output thread plays out of.
@@ -399,6 +405,7 @@ impl UiState {
             show_undo_history: false,
             undo_history_cursor: None,
             meters: HashMap::new(),
+            cpu: cpu_meter::CpuMeterState::default(),
             master_meter: MeterState::default(),
             devices: devices::DeviceViewState::default(),
             renaming: None,
@@ -460,8 +467,16 @@ impl RliveApp {
         theme::begin_frame(&cc.egui_ctx, &settings.theme);
         settings_window::apply_scroll_bars(&cc.egui_ctx, settings.scroll_bars);
         cc.egui_ctx.set_zoom_factor(settings.zoom());
-        let (audio, mut handle) =
-            audio::start(settings.audio_device.as_deref(), &settings.audio_input);
+        let channel_masks: Arc<ChannelMasks> = Arc::default();
+        let (audio, mut handle) = audio::start(
+            settings.audio_device.as_deref(),
+            &settings.audio_input,
+            &audio::AudioPrefs {
+                threads: settings.cpu.threads,
+                idle_sleep: settings.cpu.idle_sleep,
+                channels: channel_masks.clone(),
+            },
+        );
         let sender = handle.take_midi_sender();
         let hw_midi = handle.take_hw_midi();
         let hw_sync = handle.take_hw_sync();
@@ -527,6 +542,7 @@ impl RliveApp {
             }
         }
         let mut app = Self {
+            channel_masks,
             session,
             audio,
             midi,
@@ -689,6 +705,7 @@ impl RliveApp {
         let (audio, mut handle) = audio::start(
             self.settings.audio_device.as_deref(),
             &self.settings.audio_input,
+            &self.audio_prefs(),
         );
         *self.routing.sender.lock().unwrap() = handle.take_midi_sender();
         self.audio = audio;
@@ -1648,7 +1665,57 @@ impl RliveApp {
         }
         let m = self.session.engine.shared.master_meter.take();
         self.ui.master_meter.update(m, dt);
+        // The CPU meter, and whichever meters only run while they're shown.
+        self.ui
+            .cpu
+            .update(&self.session.engine.shared, self.session.take_dropped(), dt);
+        let show_impact = self.ui.layout.show_impact;
+        self.session
+            .engine
+            .shared
+            .measure_tracks
+            .store(show_impact, std::sync::atomic::Ordering::Relaxed);
+        if show_impact {
+            let times = self.session.track_shared.iter().map(|(id, shared)| {
+                (
+                    *id,
+                    shared.busy_nanos.load(std::sync::atomic::Ordering::Relaxed),
+                )
+            });
+            self.ui.cpu.update_tracks(times, dt);
+        }
         active || self.ui.master_meter.active()
+    }
+
+    /// How the audio callback is to run, from the Settings.
+    fn audio_prefs(&self) -> audio::AudioPrefs {
+        audio::AudioPrefs {
+            threads: self.settings.cpu.threads,
+            idle_sleep: self.settings.cpu.idle_sleep,
+            channels: self.channel_masks.clone(),
+        }
+    }
+
+    /// The engine's thread count or idle sleep changed in the Settings.
+    pub(super) fn apply_cpu_settings(&mut self) {
+        self.session.engine.shared.idle_sleep.store(
+            self.settings.cpu.idle_sleep,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        let device = self.settings.audio_device.clone();
+        let pool = audio::worker_pool(
+            self.settings.cpu.threads,
+            device.as_deref(),
+            self.audio.sample_rate,
+        );
+        if self
+            .session
+            .engine
+            .send(EngineCommand::SetWorkers(pool))
+            .is_err()
+        {
+            self.ui.status = "Couldn't change the engine's threads".to_string();
+        }
     }
 
     /// What the In/Out choosers can address: the device's channels, as configured.
@@ -1661,6 +1728,22 @@ impl RliveApp {
             outputs: bank(|c| &c.outputs, self.audio.output_channels),
             inputs: bank(|c| &c.inputs, self.audio.input_channels),
         };
+        // What the callback has to shuffle: channels nobody enabled cost nothing.
+        let mask = |bank: Option<&ChannelBank>, count: usize| {
+            let mut bits = 0u64;
+            for n in 0..count.min(64) {
+                if bank.is_none_or(|b| b.channel(n).enabled) {
+                    bits |= 1 << n;
+                }
+            }
+            bits
+        };
+        let inputs = config.map(|c| &c.inputs);
+        let outputs = config.map(|c| &c.outputs);
+        self.channel_masks.set(
+            mask(inputs, self.audio.input_channels),
+            mask(outputs, self.audio.output_channels),
+        );
     }
 
     /// Hold-to-nudge: a change of state goes to the engine, and it's only worth saying once.
@@ -2239,38 +2322,7 @@ impl RliveApp {
                 "Global Groove Amount — scales Timing, Random and Velocity, up to 130%",
             );
         }
-        // CPU meter
-        let load = self.session.engine.shared.cpu_load.load().clamp(0.0, 1.0);
-        let (cr, r) = ru.allocate_exact_size(
-            Vec2::new(if cramped { 34.0 } else { 70.0 }, h),
-            Sense::hover(),
-        );
-        ru.painter().rect_filled(cr, 1.0, pal().field_bg);
-        let bar = Rect::from_min_size(cr.min, Vec2::new(cr.width() * load, cr.height()));
-        ru.painter().rect_filled(
-            bar,
-            1.0,
-            if load > 0.8 {
-                pal().arm_red
-            } else {
-                shade(0x3c5a3c)
-            },
-        );
-        ru.painter().text(
-            cr.center(),
-            Align2::CENTER_CENTER,
-            if cramped {
-                format!("{:.0}%", load * 100.0)
-            } else {
-                format!("CPU {:.0}%", load * 100.0)
-            },
-            theme::font(10.5),
-            pal().text,
-        );
-        info(
-            r,
-            "CPU Load — how much of the audio deadline the engine is using",
-        );
+        self.cpu_meter(&mut ru, h, cramped);
         self.midi_lights(&mut ru, h);
         if !narrow {
             let keys = self.ui.computer_keys;

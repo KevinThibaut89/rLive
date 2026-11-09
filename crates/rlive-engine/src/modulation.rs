@@ -10,11 +10,16 @@
 //! Within a block a route ramps from the value before to the value published last block, one
 //! control step at a time, so a block-rate source moves a parameter smoothly.
 //!
+//! During a block several threads may be publishing at once, each for a device of its own track,
+//! so the buffers are atomics. Nothing there is ordered: reading and writing never meet in one
+//! block, since readers read what the last block finished.
+//!
 //! A modulator with `n` mappable outputs declares `2 * n` values: output `i` at `i`, and a flag
 //! at `n + i` that is above 0.5 for a Remote Control. A Remote Control's output is a position in
 //! the target's normalized range; a Modulation's is added to it.
 
 use crate::params::CellIx;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Values one engine's modulators can publish, all told.
 pub const MAX_MOD_VALUES: usize = 4096;
@@ -56,9 +61,13 @@ impl ModRoute {
 /// The double-buffered values of every modulator in the engine. Not finite means the source is
 /// switched off or hasn't run yet.
 pub struct ModBus {
-    prev: Box<[f32]>,
-    front: Box<[f32]>,
-    back: Box<[f32]>,
+    prev: Box<[AtomicU32]>,
+    front: Box<[AtomicU32]>,
+    back: Box<[AtomicU32]>,
+}
+
+fn nan() -> AtomicU32 {
+    AtomicU32::new(f32::NAN.to_bits())
 }
 
 impl Default for ModBus {
@@ -70,7 +79,11 @@ impl Default for ModBus {
 impl ModBus {
     /// Call on the UI thread.
     pub fn new() -> Self {
-        let silent = || vec![f32::NAN; MAX_MOD_VALUES].into_boxed_slice();
+        let silent = || {
+            (0..MAX_MOD_VALUES)
+                .map(|_| nan())
+                .collect::<Box<[AtomicU32]>>()
+        };
         Self {
             prev: silent(),
             front: silent(),
@@ -78,19 +91,24 @@ impl ModBus {
         }
     }
 
-    /// A device's values for this block. A range past the end of the bus is ignored.
-    pub(crate) fn publish(&mut self, base: u32, values: &[f32]) {
+    /// A device's values for this block. A range past the end of the bus is ignored. Safe from
+    /// any thread while the block renders.
+    pub(crate) fn publish(&self, base: u32, values: &[f32]) {
         let start = base as usize;
-        if let Some(to) = self.back.get_mut(start..start + values.len()) {
-            to.copy_from_slice(values);
+        if let Some(to) = self.back.get(start..start + values.len()) {
+            for (slot, v) in to.iter().zip(values) {
+                slot.store(v.to_bits(), Ordering::Relaxed);
+            }
         }
     }
 
     /// A source stops counting: the parameters it was moving go back to their knobs.
-    pub(crate) fn switch_off(&mut self, base: u32, len: usize) {
+    pub(crate) fn switch_off(&self, base: u32, len: usize) {
         let start = base as usize;
-        if let Some(to) = self.back.get_mut(start..start + len) {
-            to.fill(f32::NAN);
+        if let Some(to) = self.back.get(start..start + len) {
+            for slot in to {
+                slot.store(f32::NAN.to_bits(), Ordering::Relaxed);
+            }
         }
     }
 
@@ -98,9 +116,11 @@ impl ModBus {
     pub(crate) fn clear(&mut self, base: u32, len: usize) {
         let start = base as usize;
         if start + len <= MAX_MOD_VALUES {
-            self.prev[start..start + len].fill(f32::NAN);
-            self.front[start..start + len].fill(f32::NAN);
-            self.back[start..start + len].fill(f32::NAN);
+            for buffer in [&mut self.prev, &mut self.front, &mut self.back] {
+                for slot in &mut buffer[start..start + len] {
+                    *slot.get_mut() = f32::NAN.to_bits();
+                }
+            }
         }
     }
 
@@ -108,21 +128,24 @@ impl ModBus {
         self.clear(0, MAX_MOD_VALUES);
     }
 
-    /// The block is over: what was published in it becomes readable.
+    /// The block is over: what was published in it becomes readable. Takes the bus exclusively,
+    /// so it can only run with no worker in the middle of a block.
     pub(crate) fn end_block(&mut self) {
         std::mem::swap(&mut self.prev, &mut self.front);
         std::mem::swap(&mut self.front, &mut self.back);
-        self.back.copy_from_slice(&self.front);
+        for (to, from) in self.back.iter_mut().zip(self.front.iter_mut()) {
+            *to.get_mut() = *from.get_mut();
+        }
     }
 
     /// The value at `at` of the way through the block, if the source is running.
     pub(crate) fn value(&self, slot: u32, at: f32) -> Option<f32> {
         let slot = slot as usize;
-        let last = *self.front.get(slot)?;
+        let last = f32::from_bits(self.front.get(slot)?.load(Ordering::Relaxed));
         if !last.is_finite() {
             return None;
         }
-        let before = self.prev[slot];
+        let before = f32::from_bits(self.prev[slot].load(Ordering::Relaxed));
         Some(if before.is_finite() {
             before + (last - before) * at
         } else {
@@ -131,7 +154,9 @@ impl ModBus {
     }
 
     pub(crate) fn flag(&self, slot: u32) -> bool {
-        self.front.get(slot as usize).is_some_and(|v| *v > 0.5)
+        self.front
+            .get(slot as usize)
+            .is_some_and(|v| f32::from_bits(v.load(Ordering::Relaxed)) > 0.5)
     }
 }
 
@@ -182,7 +207,7 @@ mod tests {
 
     #[test]
     fn out_of_range_is_ignored() {
-        let mut bus = ModBus::new();
+        let bus = ModBus::new();
         bus.publish(MAX_MOD_VALUES as u32 - 1, &[0.1, 0.2]);
         bus.switch_off(u32::MAX - 1, 4);
         assert_eq!(bus.value(u32::MAX, 0.0), None);

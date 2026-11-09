@@ -393,6 +393,10 @@ fn transient_gain(amount: f32, fast: f32, slow: f32) -> f32 {
 }
 
 impl Processor for DrumBuss {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _max_block: usize) {
         self.sr = sample_rate as f32;
         self.prepare_smoothers();

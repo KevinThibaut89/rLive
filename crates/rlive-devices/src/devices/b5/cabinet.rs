@@ -387,6 +387,10 @@ impl Cabinet {
 }
 
 impl Processor for Cabinet {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, max_block: usize) {
         let (irs, partitions, longest) = build_all(sample_rate);
         self.irs = irs;

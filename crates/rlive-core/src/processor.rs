@@ -235,6 +235,19 @@ impl Tail {
     }
 }
 
+/// Which thread may call [`Processor::process`] once the engine renders on several.
+///
+/// A processor is only ever run by one thread at a time; this is about which one, block to block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThreadPolicy {
+    /// Any of the engine's real-time threads, and not necessarily the same one each block.
+    #[default]
+    AnyWorker,
+    /// Only the audio callback's own thread, as it has always been. Promoted by the driver and the
+    /// same every block, it is the conservative choice for code the engine can't see into.
+    AudioThread,
+}
+
 /// Something shared with a device that the UI loads, such as a sample. See
 /// [`Processor::set_resource`].
 pub type Resource = Arc<dyn Any + Send + Sync>;
@@ -276,6 +289,18 @@ pub trait Processor: Send {
     /// How long this processor rings on after its input stops.
     fn tail(&self) -> Tail {
         Tail::None
+    }
+
+    /// Whether the engine may stop calling this when it has been fed silence, and has put out
+    /// silence, for longer than its [`tail`](Self::tail). Declared one device at a time: leave
+    /// it off for anything with a memory the engine can't judge from outside, like a long delay.
+    fn sleeps_when_silent(&self) -> bool {
+        false
+    }
+
+    /// Which of the engine's threads may run this processor. See [`ThreadPolicy`].
+    fn thread_policy(&self) -> ThreadPolicy {
+        ThreadPolicy::AnyWorker
     }
 
     /// Replace a shared resource in `slot`, without interrupting voices. Called on the audio

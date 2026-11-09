@@ -167,6 +167,10 @@ impl Erosion {
 }
 
 impl Processor for Erosion {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.sr = sample_rate as f32;
         self.base = Self::base_for(self.sr);

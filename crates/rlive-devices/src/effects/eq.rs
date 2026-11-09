@@ -354,6 +354,10 @@ impl Eq3 {
 }
 
 impl Processor for Eq3 {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.sr = sample_rate as f32;
         self.dirty = true;

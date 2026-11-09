@@ -11,6 +11,23 @@
 //!
 //! Scanning untrusted plugin binaries can crash, so the app scans out of process:
 //! see [`scanner`].
+//!
+//! # Threads
+//!
+//! The engine renders on several real-time threads. Which of them may run a plugin is decided
+//! per format, through [`rlive_core::Processor::thread_policy`]:
+//!
+//! | Format | Runs on | Why |
+//! | --- | --- | --- |
+//! | CLAP | any engine thread | The spec names `process` an `[audio-thread]` role that any thread can fill, never two at once; the host's `is_audio_thread` is true on all of them |
+//! | VST3 | the audio callback's thread | Spec-permitted to move, but we can't check every plug-in, so it stays on the thread it has always been on |
+//! | Audio Unit | the audio callback's thread | As VST3 |
+//!
+//! A track holding something that must stay on the callback's thread runs entirely on it, in the
+//! same place in the plan it would have on any other thread: that thread is the driver's own, so
+//! it is promoted and joined to the device's workgroup by Core Audio itself, and it never sleeps
+//! between blocks. Plugins never go to sleep with the Idle Devices Sleep option either, as
+//! they report no tail as readily as a true one.
 
 #[cfg(target_os = "macos")]
 pub mod au;

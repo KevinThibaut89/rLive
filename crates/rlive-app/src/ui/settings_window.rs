@@ -489,6 +489,42 @@ impl RliveApp {
             .color(pal().text_dim),
         );
         ui.add_space(8.0);
+        widgets::section_label(ui, "CPU");
+        let mut threads = self.settings.cpu.threads;
+        let mut idle_sleep = self.settings.cpu.idle_sleep;
+        grid(ui, "cpu", |ui| {
+            label(ui, "Multi-Core Audio Threads");
+            let shown = match threads {
+                0 => format!("Auto ({})", crate::audio_threads::resolve_thread_count(0)),
+                1 => "1 (Off)".to_string(),
+                n => n.to_string(),
+            };
+            let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+            egui::ComboBox::from_id_salt("audio_threads")
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut threads, 0, "Auto");
+                    for n in 1..=cores.clamp(2, 16) as u32 {
+                        let text = if n == 1 {
+                            "1 (Off)".to_string()
+                        } else {
+                            n.to_string()
+                        };
+                        ui.selectable_value(&mut threads, n, text);
+                    }
+                });
+            ui.end_row();
+            label(ui, "Idle Devices Sleep");
+            ui.checkbox(&mut idle_sleep, "");
+            ui.end_row();
+        });
+        if threads != self.settings.cpu.threads || idle_sleep != self.settings.cpu.idle_sleep {
+            self.settings.cpu.threads = threads;
+            self.settings.cpu.idle_sleep = idle_sleep;
+            self.settings.save();
+            self.apply_cpu_settings();
+        }
+        ui.add_space(8.0);
         widgets::section_label(ui, "CHANNEL CONFIGURATION");
         let device = self.audio.device_name.clone();
         let (inputs, outputs) = (self.audio.input_channels, self.audio.output_channels);

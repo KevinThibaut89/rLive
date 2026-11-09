@@ -455,6 +455,10 @@ impl Limiter {
 }
 
 impl Processor for Limiter {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, max_block: usize) {
         self.allocate(sample_rate, max_block);
     }

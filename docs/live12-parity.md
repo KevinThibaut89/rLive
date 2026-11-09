@@ -629,7 +629,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[x]` Soloing a return mutes other mains but keeps send audio. S
 - `[~]` Cue mode: separate Main and Cue outputs, Cue Volume, headphone switches, browser preview goes to Cue. M. Needs 4 outputs.
 - `[~]` Track Delay in ms or samples; unavailable when PDC is off. M
-- `[ ]` Performance Impact meters: 6 segments per track, relative to Set. M. Needs per-track DSP timing.
+- `[x]` Performance Impact meters: 6 segments per track, relative to Set. M. Needs per-track DSP timing.
 
 
 ## 19. Recording New Clips (412-424)
@@ -1209,14 +1209,14 @@ Dependencies: audio clock, launch quantisation; Link and Follower drive tempo.
 **Milestones:** A12, A13
 
 
-- `[ ]` Multi-core graph processing [XL]
-- `[ ]` CPU meter: Average, Current, text choice; optional overload warning [S]
-- `[ ]` Disable unused I/O channels to save load [S]
-- `[ ]` Idle devices sleep, tail-aware [M]
-- `[ ]` Per-track Performance Impact 6-segment meter [M]
+- `[~]` Multi-core graph processing [XL]
+- `[x]` CPU meter: Average, Current, text choice; optional overload warning [S]
+- `[~]` Disable unused I/O channels to save load [S]
+- `[x]` Idle devices sleep, tail-aware [M]
+- `[x]` Per-track Performance Impact 6-segment meter [M]
 - `[~]` Freeze/Unfreeze clips to samples, frozen tails, edit limits while frozen, real-time freeze for external gear, Processed/Freeze folder, frozen-to-new-track drag [L]
-- `[ ]` RAM Mode; Bounce in Place including groups [M]
-- `[ ]` Overload indicator for Disk/CPU [S]
+- `[~]` RAM Mode; Bounce in Place including groups [M]
+- `[x]` Overload indicator for Disk/CPU [S]
 
 
 ## 39. Audio Fact Sheet (989-996)

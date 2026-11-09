@@ -1785,6 +1785,10 @@ fn lfo_tick(voice: &mut Voice) -> f32 {
 }
 
 impl Processor for Operator {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.sample_rate = sample_rate as f32;
         self.alloc.prepare(sample_rate);

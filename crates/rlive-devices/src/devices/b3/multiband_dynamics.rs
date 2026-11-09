@@ -452,6 +452,10 @@ fn band_gain_db(above: &mut f32, below: &mut f32, db: f32, knee: f32, s: &BandSe
 }
 
 impl Processor for MultibandDynamics {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, max_block: usize) {
         self.sr = sample_rate as f32;
         self.max_block = max_block.max(1);

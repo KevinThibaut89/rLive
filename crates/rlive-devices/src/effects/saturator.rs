@@ -363,6 +363,10 @@ pub const COLOR_RANGE_DB: f32 = 18.0;
 pub const COLOR_LOW_HZ: f32 = 300.0;
 
 impl Processor for Saturator {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, max_block: usize) {
         self.sr = sample_rate as f32;
         self.max_block = max_block.max(1);

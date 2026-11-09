@@ -101,6 +101,8 @@ pub struct TrackShared {
     pub overdubbing: AtomicBool,
     /// Counts the blocks with per-note expression in them, for the track meter's blue dot.
     pub expr_pulse: AtomicU32,
+    /// Accumulated rendering time, for the Performance Impact meter.
+    pub busy_nanos: AtomicU64,
 }
 
 impl Default for TrackShared {
@@ -116,6 +118,7 @@ impl Default for TrackShared {
             record_queued_slot: AtomicI32::new(NO_SLOT),
             overdubbing: AtomicBool::new(false),
             expr_pulse: AtomicU32::new(0),
+            busy_nanos: AtomicU64::new(0),
         }
     }
 }
@@ -127,8 +130,17 @@ pub struct EngineShared {
     /// Where playback starts and returns to on stop, in ticks.
     pub insert_marker: AtomicF64,
     pub tempo: AtomicF64,
-    /// DSP load of the last blocks, 0..1 (1 = using the whole buffer duration).
+    /// Average CPU load: how much of the buffer's duration each buffer takes, smoothed.
     pub cpu_load: AtomicF32,
+    /// Current CPU load: the worst buffer since the UI last looked.
+    pub cpu_current: AtomicF32,
+    /// How many buffers have taken longer than they last.
+    pub cpu_overloads: AtomicU32,
+    /// Measure how long each track renders, for the Performance Impact meter.
+    pub measure_tracks: AtomicBool,
+    /// Stop calling devices left idle long enough (manual p. 985). Off for offline renders,
+    /// whose result must not depend on what came before them.
+    pub idle_sleep: AtomicBool,
     pub master_meter: PeakMeter,
     pub sample_rate: AtomicF64,
     /// Ticks left of the count-in; 0 when there is none.
@@ -161,6 +173,10 @@ impl Default for EngineShared {
             insert_marker: AtomicF64::new(0.0),
             tempo: AtomicF64::new(120.0),
             cpu_load: AtomicF32::new(0.0),
+            cpu_current: AtomicF32::new(0.0),
+            cpu_overloads: AtomicU32::new(0),
+            measure_tracks: AtomicBool::new(false),
+            idle_sleep: AtomicBool::new(false),
             master_meter: PeakMeter::default(),
             sample_rate: AtomicF64::new(48_000.0),
             count_in_left: AtomicF64::new(0.0),

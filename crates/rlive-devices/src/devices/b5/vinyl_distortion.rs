@@ -236,6 +236,10 @@ pub const PINCH_RANGE: f32 = 0.5;
 pub const BAND_DRIVE: f32 = 2.0;
 
 impl Processor for VinylDistortion {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.sr = sample_rate as f32;
         self.tuned = [f32::NAN; 4];

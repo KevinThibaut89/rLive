@@ -17,6 +17,7 @@ super::domain! {
         ToggleMixer,
         ToggleInOut,
         ToggleCrossfader,
+        TogglePerformanceImpact,
         ToggleInfoView,
         ToggleClipView,
         ToggleDeviceView,
@@ -62,6 +63,7 @@ pub const MENU: &[Entry] = &[
     Item("Sends", M::View(View::ToggleSends)),
     Item("Return Tracks", M::View(View::ToggleReturns)),
     Item("Crossfader", M::View(View::ToggleCrossfader)),
+    Item("Performance Impact", M::View(View::TogglePerformanceImpact)),
     Item("Info View", M::View(View::ToggleInfoView)),
     Item(
         "Full-Height Browser",
@@ -97,6 +99,10 @@ impl RliveApp {
         s.check(
             M::View(View::ToggleCrossfader),
             self.ui.layout.show_crossfader,
+        );
+        s.check(
+            M::View(View::TogglePerformanceImpact),
+            self.ui.layout.show_impact,
         );
         s.check(M::View(View::ToggleInfoView), self.ui.show_info);
         let l = &self.session.project.window_layout;
@@ -242,6 +248,9 @@ impl RliveApp {
             View::ToggleInOut => self.ui.layout.show_in_out = !self.ui.layout.show_in_out,
             View::ToggleCrossfader => {
                 self.ui.layout.show_crossfader = !self.ui.layout.show_crossfader
+            }
+            View::TogglePerformanceImpact => {
+                self.ui.layout.show_impact = !self.ui.layout.show_impact
             }
             View::ToggleInfoView => self.toggle_info_view(),
             View::ToggleClipView => self.toggle_detail_side(Detail::Clip),

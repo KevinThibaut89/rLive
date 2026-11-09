@@ -451,7 +451,8 @@ impl ChainNode {
                     transport: &transport,
                     param_out: &mut *at.param_out,
                     bus: &mut *at.bus,
-                    on_param: &mut *at.on_param,
+                    out: &mut *at.out,
+                    owner: at.owner,
                     block: at.block,
                     coeff: at.coeff,
                     rack_outs: at.rack_outs.as_deref_mut(),
@@ -460,8 +461,8 @@ impl ChainNode {
                     buses: &mut *at.buses,
                     direct: at.direct,
                     merge: &mut *at.merge,
-                    mods: &mut *at.mods,
-                    midi_sink: &mut *at.midi_sink,
+                    mods: at.mods,
+                    idle_sleep: at.idle_sleep,
                 };
                 run_chain(
                     &mut self.devices,
@@ -512,7 +513,8 @@ impl ChainNode {
     /// Publish one of this chain's points, as it stands now.
     fn publish(&self, bus: Option<u32>, at: &mut Stretch<'_>, frames: usize) {
         if let Some(bus) = bus {
-            at.buses[bus as usize].write(
+            at.buses.write(
+                bus,
                 at.from as usize,
                 &self.left[..frames],
                 &self.right[..frames],

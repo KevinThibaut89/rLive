@@ -122,6 +122,14 @@ impl Processor for KeyedProcessor {
         self.inner.latency()
     }
 
+    fn sleeps_when_silent(&self) -> bool {
+        self.inner.sleeps_when_silent()
+    }
+
+    fn thread_policy(&self) -> rlive_core::ThreadPolicy {
+        self.inner.thread_policy()
+    }
+
     fn tail(&self) -> Tail {
         self.inner.tail()
     }

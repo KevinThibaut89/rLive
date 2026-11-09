@@ -466,6 +466,10 @@ fn shaped(gain: f32, vintage: bool) -> f32 {
 }
 
 impl Processor for AutoPanTremolo {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.sr = sample_rate as f32;
         self.lfo.prepare(sample_rate);

@@ -1595,6 +1595,10 @@ impl Roar {
 }
 
 impl Processor for Roar {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, max_block: usize) {
         let multiplier = OVERSAMPLE.multiplier();
         let rate = sample_rate * multiplier as f64;

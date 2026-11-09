@@ -1887,6 +1887,12 @@ mod event_tests {
 }
 
 impl Processor for Vst3Processor {
+    fn thread_policy(&self) -> rlive_core::ThreadPolicy {
+        // The format's rules let `process` move between threads, but plug-ins are outside what we
+        // can check, so this stays on the thread it has always been on.
+        rlive_core::ThreadPolicy::AudioThread
+    }
+
     fn activate(&mut self, sample_rate: f64, max_block: usize) {
         debug_assert!(sample_rate == self.sample_rate && max_block <= self.max_block);
     }

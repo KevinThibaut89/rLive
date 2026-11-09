@@ -711,6 +711,44 @@ pub struct Settings {
     pub collect_on_export: CollectFiles,
     /// The Sets opened or saved most recently, the last one first.
     pub recent_sets: Vec<PathBuf>,
+    /// How much of the machine the engine uses, and what the CPU meter shows.
+    pub cpu: CpuSettings,
+}
+
+/// Which reading the CPU meter puts in its text.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum CpuText {
+    #[default]
+    Average,
+    Current,
+}
+
+/// The engine's threads and what the CPU meter shows.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CpuSettings {
+    /// Threads the engine renders on, the audio thread included; 0 is Auto, 1 is single-core.
+    pub threads: u32,
+    /// Stop calling devices left with nothing to do (manual p. 985).
+    pub idle_sleep: bool,
+    pub meter_average: bool,
+    pub meter_current: bool,
+    pub meter_text: CpuText,
+    /// Warn on Current CPU Overload (manual p. 984).
+    pub warn_overload: bool,
+}
+
+impl Default for CpuSettings {
+    fn default() -> Self {
+        Self {
+            threads: 0,
+            idle_sleep: true,
+            meter_average: true,
+            meter_current: false,
+            meter_text: CpuText::Average,
+            warn_overload: false,
+        }
+    }
 }
 
 impl Default for Settings {
@@ -755,6 +793,7 @@ impl Default for Settings {
             recent_sets: Vec::new(),
             full_height_browser: true,
             sync: SyncSettings::default(),
+            cpu: CpuSettings::default(),
         }
     }
 }
@@ -937,6 +976,14 @@ mod tests {
                 show_follower_toggle: true,
                 start_playback_with_tap: true,
                 ..Default::default()
+            },
+            cpu: CpuSettings {
+                threads: 6,
+                idle_sleep: false,
+                meter_average: false,
+                meter_current: true,
+                meter_text: CpuText::Current,
+                warn_overload: true,
             },
         };
         let path = temp_file("round-trip.json");

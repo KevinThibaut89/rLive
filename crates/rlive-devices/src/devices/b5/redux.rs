@@ -215,6 +215,10 @@ impl Redux {
 }
 
 impl Processor for Redux {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.sr = sample_rate as f32;
         for chan in &mut self.chans {

@@ -504,6 +504,10 @@ fn run_bands(chain: &mut Chain, buf: &mut [f32]) {
 }
 
 impl Processor for EqEight {
+    fn sleeps_when_silent(&self) -> bool {
+        true
+    }
+
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.sr = sample_rate as f32;
         self.gain.set_time(0.01, self.sr);

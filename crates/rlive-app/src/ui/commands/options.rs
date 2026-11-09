@@ -21,6 +21,11 @@ super::domain! {
         ToggleChaseNotes,
         ToggleRetuneSet,
         ToggleExternalSync,
+        ToggleCpuAverage,
+        ToggleCpuCurrent,
+        CpuTextAverage,
+        CpuTextCurrent,
+        ToggleCpuOverloadWarning,
     }
 }
 
@@ -51,6 +56,12 @@ pub const MENU: &[Entry] = &[
     ),
     Item("External Sync", M::Options(Options::ToggleExternalSync)),
     Item("Rescan Plugins", M::Options(Options::RescanPlugins)),
+    Item("CPU Meter: Average", M::Options(Options::ToggleCpuAverage)),
+    Item("CPU Meter: Current", M::Options(Options::ToggleCpuCurrent)),
+    Item(
+        "Warn on Current CPU Overload",
+        M::Options(Options::ToggleCpuOverloadWarning),
+    ),
 ];
 
 /// How far C and V move the computer keyboard's velocity, as Live's steps of 20 out of 127.
@@ -89,6 +100,26 @@ impl RliveApp {
             self.ui.scan_rx.is_none(),
         );
         s.check(
+            M::Options(Options::ToggleCpuAverage),
+            self.settings.cpu.meter_average,
+        );
+        s.check(
+            M::Options(Options::ToggleCpuCurrent),
+            self.settings.cpu.meter_current,
+        );
+        s.check(
+            M::Options(Options::CpuTextAverage),
+            self.settings.cpu.meter_text == crate::settings::CpuText::Average,
+        );
+        s.check(
+            M::Options(Options::CpuTextCurrent),
+            self.settings.cpu.meter_text == crate::settings::CpuText::Current,
+        );
+        s.check(
+            M::Options(Options::ToggleCpuOverloadWarning),
+            self.settings.cpu.warn_overload,
+        );
+        s.check(
             M::Options(Options::ToggleComputerKeys),
             self.ui.computer_keys,
         );
@@ -111,7 +142,7 @@ impl RliveApp {
         );
     }
 
-    pub(super) fn options_command(&mut self, c: Options) {
+    pub(crate) fn options_command(&mut self, c: Options) {
         match c {
             Options::ToggleSoloInPlace => {
                 let on = !self.session.project.solo_in_place;
@@ -146,6 +177,31 @@ impl RliveApp {
                 self.set_external_sync(!on);
                 return;
             }
+            Options::ToggleCpuAverage => {
+                self.settings.cpu.meter_average = !self.settings.cpu.meter_average;
+                self.settings.save();
+                return;
+            }
+            Options::ToggleCpuCurrent => {
+                self.settings.cpu.meter_current = !self.settings.cpu.meter_current;
+                self.settings.save();
+                return;
+            }
+            Options::CpuTextAverage => {
+                self.settings.cpu.meter_text = crate::settings::CpuText::Average;
+                self.settings.save();
+                return;
+            }
+            Options::CpuTextCurrent => {
+                self.settings.cpu.meter_text = crate::settings::CpuText::Current;
+                self.settings.save();
+                return;
+            }
+            Options::ToggleCpuOverloadWarning => {
+                self.settings.cpu.warn_overload = !self.settings.cpu.warn_overload;
+                self.settings.save();
+                return;
+            }
             Options::ToggleChaseNotes => {
                 self.settings.chase_notes = !self.settings.chase_notes;
                 self.session.set_chase(self.settings.chase_notes);
@@ -172,7 +228,12 @@ impl RliveApp {
             | Options::ToggleMidiEnvelopeAutoReset
             | Options::ToggleChaseNotes
             | Options::ToggleExternalSync
-            | Options::ToggleRetuneSet => {}
+            | Options::ToggleRetuneSet
+            | Options::ToggleCpuAverage
+            | Options::ToggleCpuCurrent
+            | Options::CpuTextAverage
+            | Options::CpuTextCurrent
+            | Options::ToggleCpuOverloadWarning => {}
         }
     }
 }
