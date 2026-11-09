@@ -5,6 +5,7 @@
 
 mod analog_display;
 mod auto_filter_display;
+mod auto_shift_display;
 mod b1_leds;
 mod channel_eq_display;
 mod clip_led;
@@ -30,9 +31,13 @@ mod sample_ui;
 mod sampler_panels;
 mod scale_matrix;
 mod simpler_panels;
+mod spectrogram;
+mod spectrum_display;
 mod synth_matrix;
 mod tension_display;
+mod tuner_display;
 mod velocity_curve;
+mod vocoder_bands;
 mod wavetable_view;
 
 use super::devices::{Action, ActionQueue};
@@ -178,6 +183,12 @@ pub const PANELS: &[PanelDef] = &[
     electric_display::PANEL,
     tension_display::PANEL,
     operator_display::PANEL,
+    spectrum_display::PANEL,
+    tuner_display::PANEL,
+    vocoder_bands::PANEL,
+    auto_shift_display::PANEL,
+    spectrogram::TIME,
+    spectrogram::RESONATOR,
 ];
 
 /// What a panel takes up when the table has no entry for it.

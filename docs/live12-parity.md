@@ -871,7 +871,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 | Amp (552-554) | 7 models; mono or Dual | Gain, Volume, tone stack, Presence | Nonlinear amp modelling, interactive EQ | XL [P] | `[~]` |
 | Auto Filter (554-562) | 10 types; slopes 6-48 dB; circuits SVF, DFM, MS2, PRD | Filter, LFO, envelope, drive, soft clip, SC filter | ZDF filters, ladder and Sallen-Key models, vowel, resampling, comb | L [P] | `[~]` |
 | Auto Pan-Tremolo (562-566) | Panning, Tremolo; Harmonic (600 Hz split), Vintage | LFO, shape, attack, dynamic rate | LFO amplitude, crossover, transient detect | M | `[~]` |
-| Auto Shift (566-573) | Quantizer or MIDI; Mono or Poly to 8; Live Mode; pitch ranges | Input, correction, scale, MIDI mods, LFO, formant, vibrato | Mono pitch detection, formant-preserving shift, polyphonic voices | XL [P] | `[ ]` |
+| Auto Shift (566-573) | Quantizer or MIDI; Mono or Poly to 8; Live Mode; pitch ranges | Input, correction, scale, MIDI mods, LFO, formant, vibrato | Mono pitch detection, formant-preserving shift, polyphonic voices | XL [P] | `[~]` |
 | Beat Repeat (574-575) | Variation modes; Mix, Insert, Gate | Interval, Offset, Chance, Gate, Grid, Pitch decay, filter | Tempo-locked buffer, resampling | M | `[x]` |
 | Cabinet (576-578) | 5 speakers; 3 mic positions; dynamic or condenser; mono or Dual | Speaker, mic | IR or filter modelling; needs own measurements | L [P] | `[~]` |
 | Channel EQ (578-579) | HP 80 toggle | Low, Mid sweep, High | Adaptive shelf and peak, LP-combined high | S | `[~]` |
@@ -903,13 +903,13 @@ Overview chapter; only behaviours stated here or foundational are listed.
 | Roar (651-660) | 7 routings; 12 shapers; 9 filters; 5 feedback modes | Input, stages, mod matrix (2 LFO, Env, Noise), feedback, comp, MIDI sidechain | Waveshapers, dispersion, feedback routing, matrix UI | XL [P] | `[~]` |
 | Saturator (660-663) | 8 curves; Post Clip; Hi-Quality; Pre-DC | Drive, color filters, waveshaper params | Waveshapers, mirrored EQ | M | `[~]` |
 | Shifter (663-668) | Pitch, Freq, Ring; Internal or MIDI | Tuning, delay, LFO, envelope, glide | Pitch shift window, Hilbert shift, ring mod | L | `[~]` |
-| Spectral Resonator (668-673) | Internal or MIDI; Mono or Poly to 16; 4 mod modes | Freq, stretch, shift, decay, damp, harmonics, unison | STFT partial resonance, spectrogram | XL | `[ ]` |
-| Spectral Time (673-676) | Manual, Retrigger (Onsets, Sync); Crossfade, Envelope; effect order | Freezer, spectral delay tilt, spray, mask, resolution; Zero Dry Signal Latency | STFT freeze, up to 8 stacked; onset detect; per-bin delay | XL | `[ ]` |
-| Spectrum (677-678) | Linear, log, semitone; Auto, Range; expanded | Block, channel, refresh, avg, max | FFT analysis (no audio change) | S | `[ ]` |
-| Tuner (678-683) | Classic (Target, Strobe), Histogram; Hz or cents; note spelling | Reference 410-480 Hz | Mono pitch detection (no audio change) | M | `[ ]` |
+| Spectral Resonator (668-673) | Internal or MIDI; Mono or Poly to 16; 4 mod modes | Freq, stretch, shift, decay, damp, harmonics, unison | STFT partial resonance, spectrogram | XL | `[~]` |
+| Spectral Time (673-676) | Manual, Retrigger (Onsets, Sync); Crossfade, Envelope; effect order | Freezer, spectral delay tilt, spray, mask, resolution; Zero Dry Signal Latency | STFT freeze, up to 8 stacked; onset detect; per-bin delay | XL | `[~]` |
+| Spectrum (677-678) | Linear, log, semitone; Auto, Range; expanded | Block, channel, refresh, avg, max | FFT analysis (no audio change) | S | `[x]` |
+| Tuner (678-683) | Classic (Target, Strobe), Histogram; Hz or cents; note spelling | Reference 410-480 Hz | Mono pitch detection (no audio change) | M | `[x]` |
 | Utility (684-685) | Channel select; Width or Mid/Side | Phase, gain, balance, mute, DC, Bass Mono with audition | M/S matrix, crossover, DC filter | S | `[x]` |
 | Vinyl Distortion (686-687) | Soft, Hard; stereo or mono pinch | Tracing, pinch, crackle | Even and odd harmonic shaping, noise | S [P] | `[~]` |
-| Vocoder (687-690), not in Intro or Lite | Carrier Noise, External, Modulator, Pitch Tracking; Precise, Retro; Mono, Stereo, L/R | Bands, range, BW, gate, depth, envelope, formant, unvoiced | Filterbank, pitch tracker, unvoiced detection | L | `[ ]` |
+| Vocoder (687-690), not in Intro or Lite | Carrier Noise, External, Modulator, Pitch Tracking; Precise, Retro; Mono, Stereo, L/R | Bands, range, BW, gate, depth, envelope, formant, unvoiced | Filterbank, pitch tracker, unvoiced detection | L | `[~]` |
 
 **Dependencies between effects**
 - `[ ]` Amp and Cabinet are designed as a pair.

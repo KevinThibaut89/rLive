@@ -171,6 +171,12 @@ const EXISTING: &[(&str, &str)] = &[
     ("rlive.electric", "Electric"),
     ("rlive.tension", "Tension"),
     ("rlive.collision", "Collision"),
+    ("rlive.spectrum", "Spectrum"),
+    ("rlive.tuner", "Tuner"),
+    ("rlive.spectral_resonator", "Spectral Resonator"),
+    ("rlive.spectral_time", "Spectral Time"),
+    ("rlive.vocoder", "Vocoder"),
+    ("rlive.auto_shift", "Auto Shift"),
 ];
 
 #[test]

@@ -1560,6 +1560,191 @@ rlive.corpus	34	Last/Low
 rlive.corpus	35	PB Range
 rlive.corpus	36	Off Decay
 rlive.corpus	37	Off Decay Amount
+rlive.spectrum	0	Block
+rlive.spectrum	1	Channel
+rlive.spectrum	2	Refresh
+rlive.spectrum	3	Avg
+rlive.spectrum	4	Graph
+rlive.spectrum	5	Max
+rlive.spectrum	6	Scale X
+rlive.spectrum	7	Auto
+rlive.spectrum	8	Range Min
+rlive.spectrum	9	Range Max
+rlive.spectrum	10	Reset Max
+rlive.tuner	0	Reference
+rlive.tuner	1	View
+rlive.tuner	2	Classic Mode
+rlive.tuner	3	Display
+rlive.tuner	4	Note Spelling
+rlive.tuner	5	Auto
+rlive.spectral_resonator	0	Pitch Mode
+rlive.spectral_resonator	1	Frequency Mode
+rlive.spectral_resonator	2	Freq
+rlive.spectral_resonator	3	Note
+rlive.spectral_resonator	4	Use Current Scale
+rlive.spectral_resonator	5	SD Shift
+rlive.spectral_resonator	6	Transp.
+rlive.spectral_resonator	7	Mono/Poly
+rlive.spectral_resonator	8	Polyphony
+rlive.spectral_resonator	9	MIDI Gate
+rlive.spectral_resonator	10	Glide
+rlive.spectral_resonator	11	PB
+rlive.spectral_resonator	12	Stretch
+rlive.spectral_resonator	13	Shift
+rlive.spectral_resonator	14	Decay
+rlive.spectral_resonator	15	HF Damp
+rlive.spectral_resonator	16	LF Damp
+rlive.spectral_resonator	17	Modulation
+rlive.spectral_resonator	18	Mod Rate
+rlive.spectral_resonator	19	Pch. Mod
+rlive.spectral_resonator	20	Harmonics
+rlive.spectral_resonator	21	Quantize
+rlive.spectral_resonator	22	Show Spectrogram
+rlive.spectral_resonator	23	Input Send
+rlive.spectral_resonator	24	Unison
+rlive.spectral_resonator	25	Uni. Amt
+rlive.spectral_resonator	26	Dry/Wet
+rlive.spectral_time	0	Freezer On
+rlive.spectral_time	1	Freeze
+rlive.spectral_time	2	Freezer Mode
+rlive.spectral_time	3	Retrigger Mode
+rlive.spectral_time	4	Sensitivity
+rlive.spectral_time	5	Freezer Time Unit
+rlive.spectral_time	6	Interval
+rlive.spectral_time	7	Interval Notes
+rlive.spectral_time	8	Fade Shape
+rlive.spectral_time	9	X-Fade
+rlive.spectral_time	10	Fade In
+rlive.spectral_time	11	Fade Out
+rlive.spectral_time	12	Delay On
+rlive.spectral_time	13	Mode
+rlive.spectral_time	14	Time
+rlive.spectral_time	15	Time Notes
+rlive.spectral_time	16	Time 16ths
+rlive.spectral_time	17	Feedback
+rlive.spectral_time	18	Shift
+rlive.spectral_time	19	Stereo
+rlive.spectral_time	20	Delay Dry/Wet
+rlive.spectral_time	21	Tilt
+rlive.spectral_time	22	Spray
+rlive.spectral_time	23	Mask
+rlive.spectral_time	24	Resolution
+rlive.spectral_time	25	Input Send
+rlive.spectral_time	26	Order
+rlive.spectral_time	27	Dry/Wet
+rlive.spectral_time	28	Zero Dry Signal Latency
+rlive.spectral_time	29	Show Spectrogram
+rlive.vocoder	0	Carrier
+rlive.vocoder	1	Noise Rate
+rlive.vocoder	2	Noise Density
+rlive.vocoder	3	Low
+rlive.vocoder	4	High
+rlive.vocoder	5	Wave
+rlive.vocoder	6	Pitch
+rlive.vocoder	7	Enhance
+rlive.vocoder	8	Unvoiced
+rlive.vocoder	9	Sens.
+rlive.vocoder	10	Fast/Slow
+rlive.vocoder	11	Bands
+rlive.vocoder	12	Range Low
+rlive.vocoder	13	Range High
+rlive.vocoder	14	BW
+rlive.vocoder	15	Precise/Retro
+rlive.vocoder	16	Gate
+rlive.vocoder	17	Level
+rlive.vocoder	18	Depth
+rlive.vocoder	19	Attack
+rlive.vocoder	20	Release
+rlive.vocoder	21	Mono/Stereo
+rlive.vocoder	22	Formant
+rlive.vocoder	23	Dry/Wet
+rlive.vocoder	24	Band 1 Level
+rlive.vocoder	25	Band 2 Level
+rlive.vocoder	26	Band 3 Level
+rlive.vocoder	27	Band 4 Level
+rlive.vocoder	28	Band 5 Level
+rlive.vocoder	29	Band 6 Level
+rlive.vocoder	30	Band 7 Level
+rlive.vocoder	31	Band 8 Level
+rlive.vocoder	32	Band 9 Level
+rlive.vocoder	33	Band 10 Level
+rlive.vocoder	34	Band 11 Level
+rlive.vocoder	35	Band 12 Level
+rlive.vocoder	36	Band 13 Level
+rlive.vocoder	37	Band 14 Level
+rlive.vocoder	38	Band 15 Level
+rlive.vocoder	39	Band 16 Level
+rlive.vocoder	40	Band 17 Level
+rlive.vocoder	41	Band 18 Level
+rlive.vocoder	42	Band 19 Level
+rlive.vocoder	43	Band 20 Level
+rlive.vocoder	44	Band 21 Level
+rlive.vocoder	45	Band 22 Level
+rlive.vocoder	46	Band 23 Level
+rlive.vocoder	47	Band 24 Level
+rlive.vocoder	48	Band 25 Level
+rlive.vocoder	49	Band 26 Level
+rlive.vocoder	50	Band 27 Level
+rlive.vocoder	51	Band 28 Level
+rlive.vocoder	52	Band 29 Level
+rlive.vocoder	53	Band 30 Level
+rlive.vocoder	54	Band 31 Level
+rlive.vocoder	55	Band 32 Level
+rlive.vocoder	56	Band 33 Level
+rlive.vocoder	57	Band 34 Level
+rlive.vocoder	58	Band 35 Level
+rlive.vocoder	59	Band 36 Level
+rlive.vocoder	60	Band 37 Level
+rlive.vocoder	61	Band 38 Level
+rlive.vocoder	62	Band 39 Level
+rlive.vocoder	63	Band 40 Level
+rlive.auto_shift	0	Pitch Range
+rlive.auto_shift	1	Input Gain
+rlive.auto_shift	2	Live Mode
+rlive.auto_shift	3	MIDI On
+rlive.auto_shift	4	Voice Mode
+rlive.auto_shift	5	Voice Count
+rlive.auto_shift	6	Glide
+rlive.auto_shift	7	Attack Time
+rlive.auto_shift	8	Release Time
+rlive.auto_shift	9	Note Latch
+rlive.auto_shift	10	Pitch Bend Range
+rlive.auto_shift	11	Correction Strength
+rlive.auto_shift	12	Smooth
+rlive.auto_shift	13	Smoothing Time
+rlive.auto_shift	14	Root
+rlive.auto_shift	15	Scale
+rlive.auto_shift	16	Custom Scale
+rlive.auto_shift	17	Pitch Shift Degrees
+rlive.auto_shift	18	Use Current Scale
+rlive.auto_shift	19	LFO Reset
+rlive.auto_shift	20	LFO Delay
+rlive.auto_shift	21	LFO Attack
+rlive.auto_shift	22	LFO Waveform
+rlive.auto_shift	23	LFO Sync
+rlive.auto_shift	24	LFO Rate
+rlive.auto_shift	25	LFO Division
+rlive.auto_shift	26	LFO Pitch
+rlive.auto_shift	27	LFO Formant
+rlive.auto_shift	28	LFO Volume
+rlive.auto_shift	29	LFO Pan
+rlive.auto_shift	30	Pitch Shift
+rlive.auto_shift	31	Pitch Shift Fine
+rlive.auto_shift	32	Formant Shift
+rlive.auto_shift	33	Formant Follow
+rlive.auto_shift	34	Vibrato Amount
+rlive.auto_shift	35	Vibrato Rate
+rlive.auto_shift	36	Vibrato Fade In
+rlive.auto_shift	37	Natural Vibrato
+rlive.auto_shift	38	Dry/Wet
+rlive.auto_shift	39	Pitch Mod Source
+rlive.auto_shift	40	Pitch Mod Depth
+rlive.auto_shift	41	Formant Mod Source
+rlive.auto_shift	42	Formant Mod Depth
+rlive.auto_shift	43	Volume Mod Source
+rlive.auto_shift	44	Volume Mod Depth
+rlive.auto_shift	45	Pan Mod Source
+rlive.auto_shift	46	Pan Mod Depth
 rlive.simpler	0	Mode
 rlive.simpler	1	Sample Start
 rlive.simpler	2	Sample End
