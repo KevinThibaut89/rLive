@@ -174,6 +174,10 @@ impl Session {
         // Group, send and return changes all end up here: the sends' positions settle last.
         self.push_all_sends();
         self.send_track_edits(Vec::new());
+        let tracks: Vec<TrackId> = self.project.tracks.iter().map(|t| t.id).collect();
+        for track in tracks {
+            self.send_midi_output(track);
+        }
         self.refresh_wiring();
     }
 
@@ -352,6 +356,8 @@ impl Session {
         p.metronome = *metronome;
         p.crossfader = *crossfader;
         p.cue = cue.clone();
+        let grooves_changed = p.groove_pool != *groove_pool;
+        let tuning_changed = p.tuning != *tuning;
         p.groove_pool = groove_pool.clone();
         p.tuning = tuning.clone();
         p.midi_mappings = midi_mappings.clone();
@@ -366,6 +372,12 @@ impl Session {
         p.midi_arrangement_overdub = *midi_arrangement_overdub;
         for c in commands {
             self.send(EngineCommand::Transport(c));
+        }
+        if grooves_changed {
+            self.send_grooves();
+        }
+        if tuning_changed {
+            self.send_tuning();
         }
     }
 
@@ -691,12 +703,14 @@ impl Session {
             expanded: _,
             info,
             sidechain,
+            mpe,
         } = d;
         *name = s.shell.name.clone();
         *bypass = s.shell.bypass;
         params.clone_from(&s.shell.params);
         *info = s.shell.info.clone();
         *sidechain = s.shell.sidechain;
+        *mpe = s.shell.mpe;
         match (kind, &s.shell.kind) {
             (
                 DeviceKind::Builtin {

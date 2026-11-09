@@ -3,6 +3,8 @@
 //! Every edit goes through [`Session`] so the project (what gets saved) and the engine (what
 //! you hear) never drift apart.
 
+#[cfg(test)]
+mod a14_tests;
 mod arrange_edit;
 mod arrangement;
 mod automation;
@@ -21,6 +23,7 @@ mod devices;
 mod export;
 mod freeze;
 mod graph;
+mod grooves;
 mod info;
 mod io;
 mod launch;
@@ -37,6 +40,7 @@ mod takes;
 mod timing;
 mod tracks;
 mod transport;
+pub mod tuning;
 mod undo;
 mod warping;
 #[cfg(test)]
@@ -129,6 +133,10 @@ pub struct Session {
     pub samples: SampleCache,
     /// Tracks that receive live MIDI; shared with the MIDI-input thread.
     pub midi_targets: Arc<Mutex<Vec<TrackId>>>,
+    /// The hardware MIDI outputs tracks can play out of, by the number the engine uses.
+    pub midi_out_ports: Vec<String>,
+    /// Controllers with MPE Mode on: tracks taking input from one hear all its channels.
+    pub mpe_ports: std::collections::HashSet<String>,
     pub messages: Vec<String>,
     pub dirty: bool,
     pub history: History,
@@ -222,6 +230,8 @@ impl Session {
             plugins,
             samples: SampleCache::default(),
             midi_targets: Arc::new(Mutex::new(Vec::new())),
+            midi_out_ports: Vec::new(),
+            mpe_ports: std::collections::HashSet::new(),
             messages: Vec::new(),
             dirty: false,
             history,
@@ -317,6 +327,8 @@ impl Session {
                     .edge_fades
                     .then(|| arrange_edit::edge_fade_ticks(self.project.tempo)),
                 frozen: false,
+                grooves: &self.project.groove_pool,
+                tuning_loaded: self.project.tuning.is_some(),
             },
             &self.project,
         )
@@ -373,6 +385,12 @@ impl Session {
         ];
         for c in cmds {
             self.send(c);
+        }
+        self.send_grooves();
+        self.send_tuning();
+        let tracks: Vec<TrackId> = self.project.tracks.iter().map(|t| t.id).collect();
+        for track in tracks {
+            self.send_midi_output(track);
         }
         self.send_automation_arm();
         self.sync_scenes();

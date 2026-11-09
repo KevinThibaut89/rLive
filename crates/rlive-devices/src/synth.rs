@@ -136,7 +136,7 @@ impl PolySynth {
         self.dirty = false;
     }
 
-    fn note_on(&mut self, channel: u8, key: u8, velocity: f32) {
+    fn note_on(&mut self, channel: u8, key: u8, velocity: f32, tuning: f32) {
         self.clock += 1;
         // Reuse a voice already playing this key, else a free one, else the oldest.
         let idx = self
@@ -161,8 +161,9 @@ impl PolySynth {
         v.gate = true;
         v.velocity = velocity;
         v.age = self.clock;
-        v.target_pitch = key as f32;
-        v.pitch = if glide { self.last_pitch } else { key as f32 };
+        let pitch = key as f32 + tuning;
+        v.target_pitch = pitch;
+        v.pitch = if glide { self.last_pitch } else { pitch };
         if !was_active {
             v.osc1.phase = 0.0;
             v.osc2.phase = 0.25;
@@ -173,7 +174,7 @@ impl PolySynth {
         v.amp.gate_on();
         v.flt.gate_on();
         v.control_counter = 0;
-        self.last_pitch = key as f32;
+        self.last_pitch = pitch;
     }
 
     /// A MIDI channel holds one note per key, so channel and key name a voice: MPE notes that
@@ -279,8 +280,9 @@ impl Processor for PolySynth {
                 channel,
                 key,
                 velocity,
+                tuning,
                 ..
-            }) => self.note_on(channel, key, velocity),
+            }) => self.note_on(channel, key, velocity, tuning),
             BlockStep::Midi(MidiMessage::NoteOff { channel, key, .. }) => {
                 self.note_off(channel, key)
             }

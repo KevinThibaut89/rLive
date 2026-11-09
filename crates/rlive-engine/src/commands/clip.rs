@@ -3,7 +3,7 @@
 use crate::clip::{ClipUpdate, Pending, Playing, SlotLaunch};
 use crate::track::MAX_SCENES;
 use crate::{retire, ArrangementLane, ClipData, Engine, Garbage};
-use rlive_core::TrackId;
+use rlive_core::{GrooveBank, TrackId};
 use std::sync::Arc;
 
 pub enum ClipCmd {
@@ -31,6 +31,8 @@ pub enum ClipCmd {
     SetMidiAutoReset(bool),
     /// Clip Update Rate: edits reach a running clip on this grid of ticks. 0 is at once.
     SetUpdateRate(u64),
+    /// The Set's grooves, after Global Amount. Every playing clip hears the change at once.
+    SetGrooves(Arc<GrooveBank>),
 }
 
 /// In [`ClipCmd::RemapSlots`], a slot that is new.
@@ -125,6 +127,11 @@ impl Engine {
             }
             C::SetMidiAutoReset(on) => self.midi_auto_reset = on,
             C::SetUpdateRate(rate) => self.clip_update_rate = rate,
+            C::SetGrooves(bank) => {
+                if let Some(old) = self.grooves.replace(bank) {
+                    retire(&mut self.garbage, Garbage::Shared(old));
+                }
+            }
             C::SetLane { track, lane } => {
                 let tick = self.tick;
                 let old = match self.tracks.iter_mut().find(|t| t.id == track) {

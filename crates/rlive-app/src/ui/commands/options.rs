@@ -19,6 +19,7 @@ super::domain! {
         ToggleLockEnvelopes,
         ToggleMidiEnvelopeAutoReset,
         ToggleChaseNotes,
+        ToggleRetuneSet,
     }
 }
 
@@ -43,6 +44,10 @@ pub const MENU: &[Entry] = &[
         M::Options(Options::ToggleMidiEnvelopeAutoReset),
     ),
     Item("Chase MIDI Notes", M::Options(Options::ToggleChaseNotes)),
+    Item(
+        "Retune Set On Loading Tuning Systems",
+        M::Options(Options::ToggleRetuneSet),
+    ),
     Item("Rescan Plugins", M::Options(Options::RescanPlugins)),
 ];
 
@@ -64,6 +69,10 @@ impl RliveApp {
         s.check(
             M::Options(Options::ToggleChaseNotes),
             self.settings.chase_notes,
+        );
+        s.check(
+            M::Options(Options::ToggleRetuneSet),
+            self.settings.retune_on_load,
         );
         s.enable(
             M::Options(Options::RescanPlugins),
@@ -117,6 +126,11 @@ impl RliveApp {
                 self.session.send_midi_envelope_auto_reset(on);
                 return;
             }
+            Options::ToggleRetuneSet => {
+                self.settings.retune_on_load = !self.settings.retune_on_load;
+                self.settings.save();
+                return;
+            }
             Options::ToggleChaseNotes => {
                 self.settings.chase_notes = !self.settings.chase_notes;
                 self.session.set_chase(self.settings.chase_notes);
@@ -141,7 +155,8 @@ impl RliveApp {
             | Options::ToggleReducedLatency
             | Options::ToggleLockEnvelopes
             | Options::ToggleMidiEnvelopeAutoReset
-            | Options::ToggleChaseNotes => {}
+            | Options::ToggleChaseNotes
+            | Options::ToggleRetuneSet => {}
         }
     }
 }

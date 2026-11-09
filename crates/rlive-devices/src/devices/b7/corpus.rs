@@ -404,6 +404,8 @@ pub struct Corpus {
     frames: usize,
     dirty: bool,
     held: [u8; MAX_HELD_NOTES],
+    /// Each key's offset from 12-TET, as last heard from a tuning system.
+    key_tuning: [f32; 128],
     held_count: usize,
     bend: f32,
     midi_note: Option<f32>,
@@ -438,6 +440,7 @@ impl Default for Corpus {
             frames: 0,
             dirty: true,
             held: [0; MAX_HELD_NOTES],
+            key_tuning: [0.0; 128],
             held_count: 0,
             bend: 0.0,
             midi_note: None,
@@ -816,12 +819,13 @@ impl Corpus {
         } else {
             keys[self.held_count - 1]
         };
-        self.midi_note = Some(note as f32);
+        self.midi_note = Some(note as f32 + self.key_tuning[(note & 127) as usize]);
     }
 
     fn midi(&mut self, message: MidiMessage) {
         match message {
-            MidiMessage::NoteOn { key, .. } => {
+            MidiMessage::NoteOn { key, tuning, .. } => {
+                self.key_tuning[(key & 127) as usize] = tuning;
                 self.note_off(key);
                 if self.held_count == MAX_HELD_NOTES {
                     self.held.copy_within(1.., 0);

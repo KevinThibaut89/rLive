@@ -7,6 +7,7 @@ pub mod clip_envelopes;
 pub(crate) mod clip_view;
 pub mod commands;
 pub(crate) mod devices;
+mod groove_pool;
 mod icons;
 mod in_out;
 mod info_view;
@@ -14,6 +15,7 @@ pub mod keymap;
 mod launch_panel;
 #[cfg(target_os = "macos")]
 mod mac_menu;
+pub mod midi_settings;
 pub(crate) mod panels;
 pub(crate) mod piano_roll;
 mod rack_mixer;
@@ -26,6 +28,7 @@ mod session_view;
 mod settings_window;
 pub mod theme;
 mod timeline;
+mod tuning_section;
 pub mod widgets;
 
 use crate::audio::{self, AudioOutput};
@@ -107,6 +110,13 @@ pub struct UiState {
     pub layout: session_view::SessionLayout,
     pub arr: arrangement::ArrangementState,
     pub show_browser: bool,
+    pub show_groove_pool: bool,
+    pub show_tuning: bool,
+    /// Lowest and Highest are showing.
+    pub tuning_open: bool,
+    pub pending_tuning: Option<tuning_section::PendingTuning>,
+    pub mpe_dialog: Option<midi_settings::MpeTarget>,
+    pub layout_dialog: Option<rlive_core::TrackId>,
     pub show_detail: bool,
     pub show_info: bool,
     pub computer_keys: bool,
@@ -156,6 +166,10 @@ pub struct RliveApp {
     audio: AudioOutput,
     midi: MidiInput,
     routing: MidiRouting,
+    /// What the track MIDI output thread plays out of.
+    track_outs: midi_input::TrackOutputs,
+    /// What it reads from.
+    track_midi: midi_input::TrackMidiFeed,
     settings: Settings,
     ui: UiState,
     last_frame: std::time::Instant,
@@ -280,6 +294,12 @@ impl UiState {
             layout: session_view::SessionLayout::default(),
             arr: arrangement::ArrangementState::default(),
             show_browser: settings.show_browser.unwrap_or(true),
+            show_groove_pool: false,
+            show_tuning: false,
+            tuning_open: false,
+            pending_tuning: None,
+            mpe_dialog: None,
+            layout_dialog: None,
             show_detail: settings.show_detail.unwrap_or(true),
             show_info: settings.show_info,
             computer_keys: true,
@@ -325,6 +345,7 @@ impl RliveApp {
         let (audio, mut handle) =
             audio::start(settings.audio_device.as_deref(), &settings.audio_input);
         let sender = handle.take_midi_sender();
+        let hw_midi = handle.take_hw_midi();
         let plugins = PluginCache::load(&PluginCache::default_path());
         let mut session = Session::new(handle, Project::new_default(), plugins);
         session
@@ -342,6 +363,10 @@ impl RliveApp {
             mpe: Default::default(),
         };
         let midi = MidiInput::none();
+        let track_outs = midi_input::TrackOutputs::default();
+        let track_midi = midi_input::TrackMidiFeed::default();
+        *track_midi.lock().unwrap() = hw_midi;
+        midi_input::spawn_track_output(track_midi.clone(), track_outs.clone());
         let repaint = cc.egui_ctx.clone();
         session
             .remote
@@ -367,6 +392,8 @@ impl RliveApp {
             audio,
             midi,
             routing,
+            track_outs,
+            track_midi,
             settings,
             ui,
             last_frame: std::time::Instant::now(),
@@ -412,8 +439,12 @@ impl RliveApp {
             .filter_map(|s| s.input.clone())
             .collect();
         let mut in_mask = 0u64;
+        self.session.mpe_ports.clear();
         for (i, name) in inputs.iter().enumerate().take(64) {
             let cfg = self.settings.remote.input(name, legacy.as_deref());
+            if cfg.mpe {
+                self.session.mpe_ports.insert(name.clone());
+            }
             if cfg.remote {
                 in_mask |= 1 << i;
             }
@@ -421,11 +452,16 @@ impl RliveApp {
                 continue;
             }
             let switches = Arc::new(PortSwitches::new(cfg.track, cfg.sync, cfg.remote));
+            // MPE Mode is a setting of the controller, so each port has its own switch.
+            let routing = MidiRouting {
+                mpe: Arc::new(std::sync::atomic::AtomicBool::new(cfg.mpe)),
+                ..self.routing.clone()
+            };
             let port = self
                 .session
                 .remote
                 .hub
-                .open_port(i as u32, self.routing.clone(), switches);
+                .open_port(i as u32, routing, switches);
             if let Err(e) = self.midi.connect_port(name, port) {
                 log::info!("MIDI input {name}: {e}");
             }
@@ -440,6 +476,7 @@ impl RliveApp {
             .collect();
         let mut out_mask = 0u64;
         let mut bank = OutputBank::new(self.session.remote.hub.shared.clone());
+        let mut track_outs = Vec::new();
         for (i, name) in outputs.iter().enumerate().take(64) {
             let cfg = self.settings.remote.output(name);
             if cfg.remote {
@@ -453,7 +490,11 @@ impl RliveApp {
             } else {
                 None
             });
+            let connection = cfg.track.then(|| midi_input::connect_output(name).ok());
+            track_outs.push(connection.flatten());
         }
+        *self.track_outs.lock().unwrap() = track_outs;
+        self.session.midi_out_ports = outputs.clone();
         self.session.set_remote_ports(RemotePorts {
             in_names: inputs,
             in_mask,
@@ -473,6 +514,9 @@ impl RliveApp {
         );
         *self.routing.sender.lock().unwrap() = handle.take_midi_sender();
         self.audio = audio;
+        if let Some(rx) = handle.take_hw_midi() {
+            *self.track_midi.lock().unwrap() = Some(rx);
+        }
         self.session.replace_engine(handle);
         self.session.set_chase(self.settings.chase_notes);
         self.ui.status = match &self.audio.error {
@@ -1473,6 +1517,25 @@ impl RliveApp {
         );
         ru.spacing_mut().item_spacing.x = if cramped { 3.0 } else { 6.0 };
         self.map_switches(&mut ru, h);
+        // Global Amount appears only once a clip is using a groove.
+        if self.session.any_groove_in_use() {
+            let mut amount = self.session.project.groove_pool.amount * 100.0;
+            let r = ru.add_sized(
+                [56.0, h],
+                egui::DragValue::new(&mut amount)
+                    .range(0.0..=130.0)
+                    .speed(0.5)
+                    .suffix(" %")
+                    .max_decimals(0),
+            );
+            if r.changed() {
+                self.session.set_groove_amount(amount / 100.0);
+            }
+            info(
+                r,
+                "Global Groove Amount — scales Timing, Random and Velocity, up to 130%",
+            );
+        }
         // CPU meter
         let load = self.session.engine.shared.cpu_load.load().clamp(0.0, 1.0);
         let (cr, r) = ru.allocate_exact_size(
@@ -1754,6 +1817,12 @@ impl RliveApp {
 
     fn dialogs(&mut self, ctx: &egui::Context) {
         self.settings_window(ctx);
+        if let Some(t) = self.ui.devices.ui.mpe_settings.take() {
+            self.ui.mpe_dialog = Some(t);
+        }
+        tuning_section::retune_dialog(ctx, &mut self.session, &mut self.ui);
+        midi_settings::mpe_dialog(ctx, &mut self.session, &mut self.ui);
+        midi_settings::layout_dialog(ctx, &mut self.session, &mut self.ui);
 
         let mut open = self.ui.show_export;
         egui::Window::new("Export Audio")
@@ -1993,8 +2062,43 @@ impl eframe::App for RliveApp {
                             &mut self.ui,
                         );
                     } else if self.ui.show_browser {
-                        let mut bu = ui.new_child(UiBuilder::new().max_rect(top));
+                        let groove_h = if self.ui.show_groove_pool {
+                            groove_pool::HEIGHT
+                        } else {
+                            0.0
+                        };
+                        let tuning_h = match (self.ui.show_tuning, self.ui.tuning_open) {
+                            (false, _) => 0.0,
+                            (true, false) => tuning_section::HEIGHT,
+                            (true, true) => tuning_section::HEIGHT_OPEN,
+                        };
+                        let browser_bottom = (top.bottom() - groove_h - tuning_h).max(top.top());
+                        let browser_rect =
+                            Rect::from_min_max(top.min, Pos2::new(top.right(), browser_bottom));
+                        let mut bu = ui.new_child(UiBuilder::new().max_rect(browser_rect));
                         browser::show(&mut bu, &mut self.session, &mut self.ui, &mut self.settings);
+                        if self.ui.show_tuning {
+                            let at = Rect::from_min_size(
+                                Pos2::new(top.left(), browser_bottom),
+                                Vec2::new(top.width(), tuning_h),
+                            );
+                            ui.painter().rect_filled(at, 0.0, pal().panel_dark);
+                            tuning_section::show(
+                                ui,
+                                at,
+                                &mut self.session,
+                                &mut self.ui,
+                                self.settings.retune_on_load,
+                            );
+                        }
+                        if self.ui.show_groove_pool {
+                            let at = Rect::from_min_max(
+                                Pos2::new(top.left(), top.bottom() - groove_h),
+                                top.max,
+                            );
+                            ui.painter().rect_filled(at, 0.0, pal().panel_dark);
+                            groove_pool::show(ui, at, &mut self.session, &mut self.ui);
+                        }
                     }
                     if self.ui.show_info {
                         let bottom = Rect::from_min_max(Pos2::new(full.left(), split), full.max);

@@ -149,8 +149,11 @@ pub struct Voice {
     pitch: f32,
     target: f32,
     step: f32,
-    /// Semitones on top of the key: note-on tuning, later replaced by per-note pitch.
+    /// Semitones on top of the key: note-on tuning, later replaced by per-note pitch. A tuning
+    /// system's offset is in both, as every source of tuning has to add it to Pitch values too.
     note_pitch: f32,
+    /// How much of `note_pitch` is the tuning system's, as the note started.
+    tuning: f32,
     level: f32,
     sustained: bool,
     stolen: bool,
@@ -177,6 +180,7 @@ const EMPTY_VOICE: Voice = Voice {
     target: 60.0,
     step: 0.0,
     note_pitch: 0.0,
+    tuning: 0.0,
     level: 0.0,
     sustained: false,
     stolen: false,
@@ -294,11 +298,19 @@ impl VoiceAllocator {
         v.pitch + v.note_pitch + bend * self.settings.bend_range
     }
 
-    /// The per-note pitch part of [`pitch`](Self::pitch), in semitones: the note-on tuning, later
-    /// replaced by per-note expression. For a device with its own per-note bend range or switch.
+    /// The per-note pitch part of [`pitch`](Self::pitch) that comes from expression, in semitones.
+    /// For a device with its own per-note bend range or switch: a tuning system's offset is left
+    /// out of it, so such a switch never turns the tuning off.
     #[inline]
     pub fn note_bend(&self, voice: usize) -> f32 {
-        self.voices[voice].note_pitch
+        let v = &self.voices[voice];
+        v.note_pitch - v.tuning
+    }
+
+    /// The part of a voice's pitch set by the tuning system, in semitones.
+    #[inline]
+    pub fn tuning(&self, voice: usize) -> f32 {
+        self.voices[voice].tuning
     }
 
     /// The channel pitch bend on a voice's channel, -1..1, before `bend_range`.
@@ -444,6 +456,7 @@ impl VoiceAllocator {
         voice.target = note.key as f32;
         voice.step = step;
         voice.note_pitch = note.tuning;
+        voice.tuning = note.tuning;
         voice.sustained = false;
         voice.stolen = false;
         voice.note
@@ -653,6 +666,7 @@ impl VoiceAllocator {
                 voice.note.note_id = note.note_id;
                 voice.note.velocity = note.velocity;
                 voice.note_pitch = note.tuning;
+                voice.tuning = note.tuning;
                 voice.state = VoiceState::Held;
                 voice.target = target;
             }

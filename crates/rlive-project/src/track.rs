@@ -240,6 +240,12 @@ pub struct Track {
     /// Plays 12-TET even when the project has a tuning loaded.
     #[serde(default, skip_serializing_if = "is_default")]
     pub bypass_tuning: bool,
+    /// What this track's controller keys play while a tuning is loaded.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub tuning_layout: crate::TuningLayout,
+    /// The MPE/Multi-channel Settings of the track's MIDI output. `None` plays on one channel.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mpe_out: Option<rlive_core::MpeOutput>,
     /// Automation of this track's parameters. Sorted by target only for stable files.
     #[serde(default, skip_serializing_if = "is_default")]
     pub automation: Vec<Envelope>,
@@ -285,6 +291,8 @@ impl Track {
             pan_mode: PanMode::default(),
             delay: TrackDelay::default(),
             bypass_tuning: false,
+            tuning_layout: crate::TuningLayout::default(),
+            mpe_out: None,
             automation: Vec::new(),
             take_lanes: Vec::new(),
             keep_monitor_latency: true,
@@ -292,6 +300,21 @@ impl Track {
             info: String::new(),
             ui: TrackUi::default(),
         }
+    }
+
+    /// Whether this track plays 12-TET under a loaded tuning: asked to, or holding a Drum Rack,
+    /// whose pads aren't pitches.
+    pub fn tuning_bypassed(&self) -> bool {
+        self.bypass_tuning
+            || self.devices.iter().any(|d| {
+                matches!(
+                    d.kind,
+                    crate::DeviceKind::Rack {
+                        kind: crate::RackKind::Drum,
+                        ..
+                    }
+                )
+            })
     }
 
     pub fn is_frozen(&self) -> bool {

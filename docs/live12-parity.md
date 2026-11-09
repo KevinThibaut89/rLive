@@ -278,8 +278,8 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[x]` Loop toggle (needs Warp for audio); Position, Length, on-the-fly Set buttons [M]
 - `[~]` Loop controls MIDI mappable [S] → MIDI Map
 - `[x]` Clip time signature, display only, polymeter aid [S]
-- `[ ]` Clip Groove chooser, hot-swap, Commit [S] → ch. 14
-- `[ ]` Commit positive-velocity groove writes volume envelope, overwriting [S]
+- `[~]` Clip Groove chooser, hot-swap, Commit [S] → ch. 14
+- `[x]` Commit positive-velocity groove writes volume envelope, overwriting [S]
 - `[x]` Clip scale on audio forwards to scale-aware devices only [S]
 - `[~]` Extended properties, launch controls only for Session clips [S]
 - `[x]` Bank/sub-bank/program per MIDI clip, 128 each, sent on launch [S]
@@ -440,8 +440,8 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** A14, C10
 
-- `[ ]` MPE Mode per controller; input channel locked to All [M]
-- `[ ]` Five dimensions: Pitch, Slide, Pressure, Velocity, Release Velocity [L] → per-note data model
+- `[~]` MPE Mode per controller; input channel locked to All [M]
+- `[x]` Five dimensions: Pitch, Slide, Pressure, Velocity, Release Velocity [L] → per-note data model
 - `[ ]` Editable on all MIDI clips regardless of source [S]
 - `[ ]` Lanes show/hide, resize; Pitch overlaid on notes [M]
 - `[ ]` Track meter blue dot for per-note activity [S]
@@ -458,8 +458,8 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Live devices with MPE and Push 2 poly aftertouch [L HW] → instruments
 - `[ ]` Plug-in MPE: state in default config, MPE out from plug-ins [M] → VST3/CLAP/AU hosting
 - `[ ]` MPE/Multi-channel dialog from External Instrument, mixer I/O, plug-in menu [M]
-- `[ ]` Output zones lower/upper, channel count; global channels 1 and 16; one zone per track; zones output-only [M]
-- `[ ]` Multi-channel mode with arbitrary range for multitimbral targets [S]
+- `[~]` Output zones lower/upper, channel count; global channels 1 and 16; one zone per track; zones output-only [M]
+- `[x]` Multi-channel mode with arbitrary range for multitimbral targets [S]
 
 
 ## 13. Converting Audio to MIDI (pp. 340-344)
@@ -481,37 +481,37 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** A14
 
-- `[ ]` .agr library [S]; format PROP if interop wanted; factory grooves CONTENT
-- `[ ]` Drag onto clip; hot-swap during playback [S]
-- `[ ]` Audio applied through warping, Warp required [M] → warp
-- `[ ]` Groove Pool panel, inactive greyed, load, save, hot-swap [M]
-- `[ ]` Parameters real-time: Base, Quantize, Timing, Random (per voice), Velocity -100 to +100 [L] → non-destructive player timing layer
-- `[ ]` Global Amount to 130%, appears in Control Bar when used [S]
-- `[ ]` Commit: MIDI moves notes, audio creates markers, chooser resets [M]
-- `[ ]` Edit by dropping groove to MIDI track [S]
-- `[ ]` Extract Groove from audio or MIDI, playing region only, timing and volume [M] → transients
-- `[ ]` Quantize-only pattern gives live non-destructive quantize [S]
-- `[ ]` Extract chain to groove a single voice [S] → Racks ch. 25
+- `[x]` .agr library [S]; format PROP if interop wanted; factory grooves CONTENT
+- `[~]` Drag onto clip; hot-swap during playback [S]
+- `[x]` Audio applied through warping, Warp required [M] → warp
+- `[~]` Groove Pool panel, inactive greyed, load, save, hot-swap [M]
+- `[x]` Parameters real-time: Base, Quantize, Timing, Random (per voice), Velocity -100 to +100 [L] → non-destructive player timing layer
+- `[x]` Global Amount to 130%, appears in Control Bar when used [S]
+- `[x]` Commit: MIDI moves notes, audio creates markers, chooser resets [M]
+- `[~]` Edit by dropping groove to MIDI track [S]
+- `[x]` Extract Groove from audio or MIDI, playing region only, timing and volume [M] → transients
+- `[x]` Quantize-only pattern gives live non-destructive quantize [S]
+- `[x]` Extract chain to groove a single voice [S] → Racks ch. 25
 
 
 ## 15. Using Tuning Systems (pp. 351-359)
 
 **Milestones:** A14
 
-- `[ ]` Scala .scl load [M]; ASCL extension [S PROP, spec is published]; bundled tunings CONTENT
-- `[ ]` Per-octave and pseudo-octave scales; description in Info View [S]
+- `[x]` Scala .scl load [M]; ASCL extension [S PROP, spec is published]; bundled tunings CONTENT
+- `[x]` Per-octave and pseudo-octave scales; description in Info View [S]
 - `[ ]` Tunings label, User tag, drag or Enter loads, saved with Set [S]
-- `[ ]` All native instruments support tuning [L] → every instrument
-- `[ ]` MPE plug-ins and Max instruments need 48-semitone bend [M; Max path MAX]
-- `[ ]` Note ruler shows tuning pitches; hover shows pitch and frequency [M]
-- `[ ]` Default change keeps note positions; Retune Set option maps by nearest pitch, confirm dialog, may delete or shorten overlaps [M]
-- `[ ]` Scale Mode and Use Current Scale disabled while tuning loaded [S]
-- `[ ]` Tuning section: Octave, Note, Ref Pitch/Freq; only frequency is audible [S]
-- `[ ]` Lowest/Highest note linked [S]
+- `[~]` All native instruments support tuning [L] → every instrument
+- `[~]` MPE plug-ins and Max instruments need 48-semitone bend [M; Max path MAX]
+- `[~]` Note ruler shows tuning pitches; hover shows pitch and frequency [M]
+- `[~]` Default change keeps note positions; Retune Set option maps by nearest pitch, confirm dialog, may delete or shorten overlaps [M]
+- `[~]` Scale Mode and Use Current Scale disabled while tuning loaded [S]
+- `[x]` Tuning section: Octave, Note, Ref Pitch/Freq; only frequency is audible [S]
+- `[x]` Lowest/Highest note linked [S]
 - `[out]` Save .ascl; external tuning website link [S CLOUD for link]
-- `[ ]` Delete returns to 12TET [S]
-- `[ ]` Per-track Bypass Tuning; Drum Racks auto-bypass [S]
-- `[ ]` Controller layouts: All, Black, White, Closest, Custom dialog saved in Set [M]
+- `[x]` Delete returns to 12TET [S]
+- `[x]` Per-track Bypass Tuning; Drum Racks auto-bypass [S]
+- `[x]` Controller layouts: All, Black, White, Closest, Custom dialog saved in Set [M]
 
 
 ## 16. Launching Clips (pp. 360-371)
@@ -1328,7 +1328,6 @@ Requirement: Cmd+Shift+F, Cmd+Shift+E, Cmd+I, Cmd+E and Z/X all change meaning b
 Shortcuts declared in the keymap that do nothing yet, by milestone. This list is generated from `crates/rlive-app/src/ui/keymap/bindings.rs`.
 
 <!-- pending-shortcuts:begin -->
-- `[ ]` **A14:** Focus Groove Pool; Hide/show Groove Pool
 - `[ ]` **A17:** Hide/show plug-in windows; Keep several plug-in windows open
 - `[ ]` **A19:** Next similar sample; Previous similar sample; Return to reference; Save as similarity reference; Show similar-sample swap controls; Similarity search
 - `[ ]` **A5:** Audio engine on/off

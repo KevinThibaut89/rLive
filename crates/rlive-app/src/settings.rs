@@ -376,6 +376,9 @@ pub struct MidiPortConfig {
     #[serde(default)]
     pub sync: bool,
     pub remote: bool,
+    /// MPE Mode: the controller's per-note channels are per-note expression.
+    #[serde(default)]
+    pub mpe: bool,
 }
 
 /// One row of the Control Surface table.
@@ -412,6 +415,7 @@ impl RemoteSettings {
                 track: legacy.is_none_or(|l| l == name),
                 sync: false,
                 remote: true,
+                mpe: false,
             })
     }
 
@@ -426,6 +430,7 @@ impl RemoteSettings {
                 track: false,
                 sync: false,
                 remote: false,
+                mpe: false,
             })
     }
 
@@ -495,6 +500,8 @@ pub struct Settings {
     /// Short default fades at clip edges, and crossfades where audio clips touch.
     pub create_fades: bool,
     pub chase_notes: bool,
+    /// Options > Retune Set On Loading Tuning Systems.
+    pub retune_on_load: bool,
     /// MIDI ports' switches, control surfaces and takeover.
     pub remote: RemoteSettings,
 }
@@ -530,6 +537,7 @@ impl Default for Settings {
             record_session_automation_in: SessionAutomationIn::default(),
             create_fades: true,
             chase_notes: true,
+            retune_on_load: false,
             remote: RemoteSettings::default(),
         }
     }
@@ -689,6 +697,7 @@ mod tests {
             record_session_automation_in: SessionAutomationIn::AllTracks,
             create_fades: false,
             chase_notes: false,
+            retune_on_load: false,
             remote: RemoteSettings::default(),
         };
         let path = temp_file("round-trip.json");

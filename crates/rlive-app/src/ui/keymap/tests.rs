@@ -195,7 +195,10 @@ fn moving_focus_commands_exist_for_each_built_view() {
             Resolution::Run(MenuCommand::View(view))
         );
     }
-    assert_eq!(resolve(alt(Key::Num6), &c), Resolution::Pending);
+    assert_eq!(
+        resolve(alt(Key::Num6), &c),
+        Resolution::Run(MenuCommand::View(View::FocusGroovePool))
+    );
 }
 
 // ---------------------------------------------------------------- precedence

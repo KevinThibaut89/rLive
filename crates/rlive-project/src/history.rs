@@ -187,6 +187,7 @@ fn device_shell(d: &Device) -> Device {
         expanded: true,
         info: d.info.clone(),
         sidechain: d.sidechain,
+        mpe: d.mpe,
     }
 }
 
@@ -280,6 +281,8 @@ fn track_shell(t: &Track) -> Track {
         pan_mode: t.pan_mode,
         delay: t.delay,
         bypass_tuning: t.bypass_tuning,
+        tuning_layout: t.tuning_layout.clone(),
+        mpe_out: t.mpe_out,
         automation: Vec::new(),
         take_lanes: Vec::new(),
         keep_monitor_latency: t.keep_monitor_latency,

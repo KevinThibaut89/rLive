@@ -9,6 +9,7 @@
 use crate::{
     ExprKind, MidiEvent, MidiMessage, NoteId, NoteIds, NoteSpace, MPE_BEND_RANGE, SLIDE_CC,
 };
+use serde::{Deserialize, Serialize};
 
 /// Notes tracked per member channel. MPE gives each note its own channel, so this is generous.
 const NOTES_PER_CHANNEL: usize = 8;
@@ -20,10 +21,15 @@ const MCM_RPN: u8 = 6;
 const BEND_RANGE_RPN: u8 = 0;
 const SLIDE_CENTER: f32 = 64.0 / 127.0;
 
+/// The resource slot a plug-in's MPE Mode is delivered on, as an `Option<MpeOutput>`. See
+/// [`Processor::set_resource`](crate::Processor::set_resource).
+pub const MPE_SLOT: u32 = u32::MAX - 1;
+
 /// Which end of the channel range a zone uses. The lower zone's global channel is channel 1,
 /// the upper zone's is channel 16 (0 and 15 here).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum MpeZone {
+    #[default]
     Lower,
     Upper,
 }
@@ -47,6 +53,58 @@ impl MpeZone {
 
     fn slot(self) -> usize {
         self as usize
+    }
+}
+
+/// The channels a track or plug-in plays out on, from the MPE/Multi-channel Settings dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MpeOutput {
+    /// An MPE zone with this many note channels.
+    Zone { zone: MpeZone, members: u8 },
+    /// Each note on its own channel of `first..=last`, for multitimbral instruments.
+    MultiChannel { first: u8, last: u8 },
+}
+
+impl Default for MpeOutput {
+    fn default() -> Self {
+        Self::Zone {
+            zone: MpeZone::Lower,
+            members: 15,
+        }
+    }
+}
+
+impl MpeOutput {
+    /// How many note channels it has.
+    pub fn channels(self) -> u8 {
+        match self {
+            Self::Zone { members, .. } => members.clamp(1, 15),
+            Self::MultiChannel { first, last } => {
+                let (first, last) = (first.min(15), last.min(15));
+                last.max(first) - first + 1
+            }
+        }
+    }
+
+    /// The `index`th note channel.
+    pub fn channel(self, index: u8) -> u8 {
+        match self {
+            Self::Zone { zone, .. } => zone.member(index.min(14)),
+            Self::MultiChannel { first, .. } => (first.min(15) + index).min(15),
+        }
+    }
+
+    /// The zone's global channel, if it has one.
+    pub fn global_channel(self) -> Option<u8> {
+        match self {
+            Self::Zone { zone, .. } => Some(zone.manager()),
+            Self::MultiChannel { .. } => None,
+        }
+    }
+
+    /// Which note channel `channel` is, if it is one.
+    fn slot_of(self, channel: u8) -> Option<usize> {
+        (0..self.channels()).position(|i| self.channel(i) == channel)
     }
 }
 
@@ -343,11 +401,12 @@ struct Member {
 /// it, because poly aftertouch needs no member channel. Once engaged, each note takes its own
 /// member channel and the zone is announced with an MPE configuration message.
 pub struct MpeEncoder {
-    zone: MpeZone,
-    members: u8,
+    output: MpeOutput,
+    /// Set up by the user, so every note goes to its own channel from the start.
+    configured: bool,
     notes: [EncodedNote; MAX_ENCODED_NOTES],
     len: usize,
-    channels: [Member; 15],
+    channels: [Member; 16],
     clock: u64,
     engaged: bool,
 }
@@ -355,9 +414,25 @@ pub struct MpeEncoder {
 impl MpeEncoder {
     /// An encoder for `zone` using `members` note channels (1 to 15).
     pub fn new(zone: MpeZone, members: u8) -> Self {
+        Self::build(
+            MpeOutput::Zone {
+                zone,
+                members: members.clamp(1, 15),
+            },
+            false,
+        )
+    }
+
+    /// An encoder following the MPE/Multi-channel Settings: every note takes a channel of its own
+    /// from the first, as the target has been set up to expect.
+    pub fn configured(output: MpeOutput) -> Self {
+        Self::build(output, true)
+    }
+
+    fn build(output: MpeOutput, configured: bool) -> Self {
         Self {
-            zone,
-            members: members.clamp(1, 15),
+            output,
+            configured,
             notes: [EncodedNote::default(); MAX_ENCODED_NOTES],
             len: 0,
             channels: [Member {
@@ -366,10 +441,15 @@ impl MpeEncoder {
                 bend: 0.0,
                 slide: SLIDE_CENTER,
                 pressure: 0.0,
-            }; 15],
+            }; 16],
             clock: 0,
             engaged: false,
         }
+    }
+
+    /// The channels it plays out on.
+    pub fn output(&self) -> MpeOutput {
+        self.output
     }
 
     /// Whether pitch or slide expression has switched this encoder to member channels.
@@ -379,12 +459,14 @@ impl MpeEncoder {
 
     /// Forget all notes and go back to being transparent.
     pub fn reset(&mut self) {
-        *self = Self::new(self.zone, self.members);
+        *self = Self::build(self.output, self.configured);
     }
 
     /// Encode one block of events, sending the results to `out`.
     pub fn encode(&mut self, events: &[MidiEvent], out: &mut impl FnMut(MidiEvent)) {
-        if !self.engaged && events.iter().any(needs_member_channels) {
+        let configured = self.configured;
+        let engages = |e: &MidiEvent| needs_member_channels(e) || (configured && is_note(e));
+        if !self.engaged && events.iter().any(engages) {
             self.engaged = true;
             self.announce_zone(events[0].offset, out);
         }
@@ -399,8 +481,10 @@ impl MpeEncoder {
 
     /// The MPE configuration message: RPN 6, member count, on the manager channel.
     fn announce_zone(&self, offset: u32, out: &mut impl FnMut(MidiEvent)) {
-        let channel = self.zone.manager();
-        for (cc, value) in [(101, 0), (100, MCM_RPN), (6, self.members)] {
+        let Some(channel) = self.output.global_channel() else {
+            return;
+        };
+        for (cc, value) in [(101, 0), (100, MCM_RPN), (6, self.output.channels())] {
             out(MidiEvent::new(
                 offset,
                 MidiMessage::ControlChange { channel, cc, value },
@@ -423,7 +507,7 @@ impl MpeEncoder {
                     out(e);
                     return;
                 }
-                let member = self.claim_member(offset, out);
+                let member = self.claim_member(offset, tuning / MPE_BEND_RANGE, out);
                 self.notes[self.len] = EncodedNote {
                     id: note_id,
                     source_channel: channel,
@@ -509,11 +593,11 @@ impl MpeEncoder {
                 None => {}
             },
             MidiMessage::AllNotesOff => {
-                for index in 0..self.members {
+                for index in 0..self.output.channels() {
                     out(MidiEvent::new(
                         offset,
                         MidiMessage::ControlChange {
-                            channel: self.zone.member(index),
+                            channel: self.output.channel(index),
                             cc: 123,
                             value: 0,
                         },
@@ -540,33 +624,32 @@ impl MpeEncoder {
     }
 
     fn channel_slot(&self, member: u8) -> usize {
-        match self.zone {
-            MpeZone::Lower => member as usize - 1,
-            MpeZone::Upper => 14 - member as usize,
-        }
+        self.output.slot_of(member).unwrap_or(0)
     }
 
     /// Pick the least recently used free member channel, or share the quietest if all are
-    /// busy, and clear what the last note left on it.
-    fn claim_member(&mut self, offset: u32, out: &mut impl FnMut(MidiEvent)) -> u8 {
+    /// busy, clear what the last note left on it, and set the bend the new note starts at.
+    fn claim_member(&mut self, offset: u32, bend: f32, out: &mut impl FnMut(MidiEvent)) -> u8 {
         let in_use = |c: &Member| (c.notes, c.last_used);
-        let slot = self.channels[..self.members as usize]
+        let count = self.output.channels() as usize;
+        let slot = self.channels[..count]
             .iter()
             .enumerate()
             .min_by_key(|(_, c)| in_use(c))
             .map_or(0, |(i, _)| i);
         self.clock += 1;
-        let channel = self.zone.member(slot as u8);
+        let channel = self.output.channel(slot as u8);
         let state = &mut self.channels[slot];
         state.notes += 1;
         state.last_used = self.clock;
-        if state.bend != 0.0 {
-            state.bend = 0.0;
+        let bend = bend.clamp(-1.0, 1.0);
+        if state.bend != bend {
+            state.bend = bend;
             out(MidiEvent::new(
                 offset,
                 MidiMessage::PitchBend {
                     channel,
-                    value: 0.0,
+                    value: bend,
                 },
             ));
         }
@@ -595,14 +678,18 @@ impl MpeEncoder {
     }
 }
 
+/// Whether this event only makes sense with a channel per note: per-note pitch or slide, or a
+/// note whose tuning needs a bend of its own.
 fn needs_member_channels(e: &MidiEvent) -> bool {
-    matches!(
-        e.message,
-        MidiMessage::NoteExpr {
-            kind: ExprKind::Pitch | ExprKind::Slide,
-            ..
-        }
-    )
+    match e.message {
+        MidiMessage::NoteExpr { kind, .. } => matches!(kind, ExprKind::Pitch | ExprKind::Slide),
+        MidiMessage::NoteOn { tuning, .. } => tuning != 0.0,
+        _ => false,
+    }
+}
+
+fn is_note(e: &MidiEvent) -> bool {
+    matches!(e.message, MidiMessage::NoteOn { .. })
 }
 
 #[cfg(test)]
@@ -1066,5 +1153,92 @@ mod tests {
                 ..
             }
         )));
+    }
+    #[test]
+    fn a_tuned_note_starts_with_its_bend_on_a_channel_of_its_own() {
+        let mut e = MpeEncoder::new(MpeZone::Lower, 15);
+        let tuned = MidiEvent::new(
+            0,
+            MidiMessage::NoteOn {
+                channel: 0,
+                key: 60,
+                velocity: 1.0,
+                note_id: 1,
+                tuning: 12.0,
+            },
+        );
+        let out = messages(&encoded(&mut e, &[tuned]));
+        assert!(e.engaged(), "a tuned note can't share channel 1");
+        assert_eq!(
+            out[3],
+            MidiMessage::PitchBend {
+                channel: 1,
+                value: 0.25
+            }
+        );
+        assert!(matches!(out[4], MidiMessage::NoteOn { channel: 1, .. }));
+    }
+
+    #[test]
+    fn a_configured_zone_is_used_from_the_first_note() {
+        let mut e = MpeEncoder::configured(MpeOutput::Zone {
+            zone: MpeZone::Upper,
+            members: 4,
+        });
+        let out = messages(&encoded(&mut e, &[id_on(1, 60), id_on(2, 62)]));
+        assert_eq!(
+            out[2],
+            MidiMessage::ControlChange {
+                channel: 15,
+                cc: 6,
+                value: 4
+            }
+        );
+        assert!(matches!(out[3], MidiMessage::NoteOn { channel: 14, .. }));
+        assert!(matches!(out[4], MidiMessage::NoteOn { channel: 13, .. }));
+    }
+
+    #[test]
+    fn two_zones_can_share_one_port_without_touching_each_other() {
+        let lower = MpeOutput::Zone {
+            zone: MpeZone::Lower,
+            members: 10,
+        };
+        let upper = MpeOutput::Zone {
+            zone: MpeZone::Upper,
+            members: 4,
+        };
+        let channels =
+            |o: MpeOutput| -> Vec<u8> { (0..o.channels()).map(|i| o.channel(i)).collect() };
+        assert_eq!(channels(lower), (1..=10).collect::<Vec<u8>>());
+        assert_eq!(channels(upper), vec![14, 13, 12, 11]);
+        assert_eq!(lower.global_channel(), Some(0));
+        assert_eq!(upper.global_channel(), Some(15));
+    }
+
+    #[test]
+    fn multi_channel_mode_cycles_its_range_with_no_zone_message() {
+        let mut e = MpeEncoder::configured(MpeOutput::MultiChannel { first: 4, last: 5 });
+        let out = messages(&encoded(
+            &mut e,
+            &[id_on(1, 60), id_on(2, 62), id_off(1, 60), id_on(3, 64)],
+        ));
+        assert!(matches!(out[0], MidiMessage::NoteOn { channel: 4, .. }));
+        assert!(matches!(out[1], MidiMessage::NoteOn { channel: 5, .. }));
+        assert!(matches!(out[2], MidiMessage::NoteOff { channel: 4, .. }));
+        assert!(matches!(out[3], MidiMessage::NoteOn { channel: 4, .. }));
+        assert!(!out
+            .iter()
+            .any(|m| matches!(m, MidiMessage::ControlChange { .. })));
+    }
+
+    #[test]
+    fn a_reset_keeps_the_channels_it_was_given() {
+        let out = MpeOutput::MultiChannel { first: 2, last: 9 };
+        let mut e = MpeEncoder::configured(out);
+        e.reset();
+        assert_eq!(e.output(), out);
+        let sent = messages(&encoded(&mut e, &[id_on(1, 60)]));
+        assert!(matches!(sent[0], MidiMessage::NoteOn { channel: 2, .. }));
     }
 }

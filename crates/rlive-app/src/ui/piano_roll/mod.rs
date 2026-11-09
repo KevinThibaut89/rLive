@@ -582,15 +582,7 @@ fn visible_rows(session: &Session, state: &UiState, shown: &[Shown], fg: usize) 
     let scale = Session::pitch_scale(&shown[fg].clip).filter(|_| state.piano.fold_scale);
     let pads = rulers::drum_pads(session, shown[fg].r.track());
     let pad_keys: Vec<u8> = pads.iter().map(|(k, _)| *k).collect();
-    let mut rows =
-        rlive_project::note_view::visible_keys(&used, state.piano.fold_notes, scale, &pad_keys);
-    if let Some(t) = session.project.tuning.as_ref() {
-        rows.retain(|k| (t.lowest_note..=t.highest_note).contains(k) || used.contains(k));
-        if rows.is_empty() {
-            rows = (0..=127u8).rev().collect();
-        }
-    }
-    rows
+    rlive_project::note_view::visible_keys(&used, state.piano.fold_notes, scale, &pad_keys)
 }
 
 pub(super) fn note_editor(

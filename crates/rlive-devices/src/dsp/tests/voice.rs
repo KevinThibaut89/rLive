@@ -236,6 +236,19 @@ fn note_tuning_is_part_of_the_pitch() {
         },
     );
     assert_eq!(a.pitch(0), 59.5);
+    assert_eq!(a.note_bend(0), 0.0, "tuning isn't the player's bend");
+    run(
+        &mut a,
+        MidiMessage::NoteExpr {
+            channel: 0,
+            key: 60,
+            note_id: 0,
+            kind: rlive_core::ExprKind::Pitch,
+            value: 1.5,
+        },
+    );
+    assert_eq!(a.pitch(0), 61.5);
+    assert_eq!(a.note_bend(0), 2.0);
 }
 
 #[test]

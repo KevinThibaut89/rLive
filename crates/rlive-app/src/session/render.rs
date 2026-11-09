@@ -270,6 +270,8 @@ impl Session {
                 .edge_fades
                 .then(|| super::arrange_edit::edge_fade_ticks(project.tempo)),
             frozen: false,
+            grooves: &project.groove_pool,
+            tuning_loaded: project.tuning.is_some(),
         };
         let mut tracks = Vec::with_capacity(MAX_TRACKS);
         let returns: Vec<_> = project.returns.iter().map(|t| t.id).collect();
@@ -305,8 +307,12 @@ impl Session {
             EngineCommand::Graph(GraphTxn::new(ops, Some(plan))),
             EngineCommand::Transport(TransportCmd::SetTimeMaps(Arc::new(maps.clone()))),
             EngineCommand::Transport(TransportCmd::SetQuantize(Quantize::None)),
+            EngineCommand::Clip(rlive_engine::ClipCmd::SetGrooves(
+                super::grooves::groove_bank(&project.groove_pool),
+            )),
         ];
-        for c in cmds {
+        let tuning = super::tuning::tuning_commands(&project);
+        for c in cmds.into_iter().chain(tuning) {
             if handle.send(c).is_err() {
                 return Err("engine queue full".into());
             }

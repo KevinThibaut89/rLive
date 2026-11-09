@@ -1171,6 +1171,16 @@ fn lane_interaction(
         }
     }
     resp.context_menu(|ui| clip_context_menu(ui, session, state));
+    if let (Some(g), Some(h)) = (
+        resp.dnd_release_payload::<crate::ui::groove_pool::GrooveDrag>(),
+        pointer.and_then(hit),
+    ) {
+        let target = ClipRef::Arr {
+            track: h.track,
+            id: h.id,
+        };
+        session.apply_groove(&[target], Some(g.0));
+    }
 
     if resp.drag_started() {
         if let Some(pos) = pointer {
@@ -1544,6 +1554,13 @@ fn clip_context_menu(ui: &mut egui::Ui, session: &mut Session, state: &mut UiSta
             state,
             InfoTarget::Clip(ClipRef::Arr { track, id }),
         );
+        if ui.button("Extract Groove").clicked() {
+            if session.extract_groove(ClipRef::Arr { track, id }).is_some() {
+                state.show_groove_pool = true;
+                state.show_browser = true;
+            }
+            ui.close();
+        }
         if ui.button("Duplicate").clicked() {
             let items = state.arr.selection.clone();
             state.arr.selection = session.arr_duplicate(&items);

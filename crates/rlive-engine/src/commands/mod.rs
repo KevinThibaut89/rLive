@@ -8,6 +8,7 @@ mod param;
 mod preview;
 mod record;
 mod transport;
+mod tuning;
 
 pub use clip::{ClipCmd, NO_OLD_SLOT};
 pub use graph::{GraphOp, GraphTxn};
@@ -17,3 +18,4 @@ pub(crate) use preview::Preview;
 pub use preview::PreviewCmd;
 pub use record::RecordCmd;
 pub use transport::TransportCmd;
+pub use tuning::TuningCmd;

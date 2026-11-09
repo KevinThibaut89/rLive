@@ -725,9 +725,17 @@ impl Session {
 
     /// Apply edits that change the list of tracks, along with the plan for the result. Call after
     /// the project reflects them.
+    /// A device that reads the tuning system needs it however it arrived.
+    pub(super) fn send_tuning_if_loaded(&mut self) {
+        if self.project.tuning.is_some() {
+            self.send_tuning();
+        }
+    }
+
     pub(super) fn send_track_edits(&mut self, ops: Vec<GraphOp>) {
         let timing = self.measure_timing();
         self.send_recompiled(ops, timing);
+        self.send_tuning_if_loaded();
     }
 
     fn send_recompiled(&mut self, mut ops: Vec<GraphOp>, timing: Timing) {

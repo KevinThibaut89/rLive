@@ -1255,6 +1255,21 @@ fn arpeggiator_velocity_retrigger_restarts_the_slope() {
 }
 
 #[test]
+fn arpeggiator_groove_follows_global_amount() {
+    let delay_of = |amount: f32| {
+        let mut rig = Rig::new(Arpeggiator::with_seed(3));
+        rig.harness.transport.groove_amount = amount;
+        set(&mut rig.device, arp::GROOVE, 2.0); // Swing 16.
+        let log = rig.run_frames(&[note_on(0, 60, 0.5)], &[], SIXTEENTH * 3);
+        log.ons()[1].0 - SIXTEENTH
+    };
+    let full = delay_of(1.0);
+    assert_eq!(delay_of(0.0), 0, "none at 0%");
+    assert!(delay_of(1.3) > full, "more past 100%");
+    assert!(full > 0);
+}
+
+#[test]
 fn arpeggiator_swing_groove_delays_off_grid_steps() {
     let mut rig = Rig::new(Arpeggiator::with_seed(3));
     set(&mut rig.device, arp::GROOVE, 2.0); // Swing 16.

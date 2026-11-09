@@ -1046,6 +1046,14 @@ fn track_column(
         if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
             drop_on_track(session, state, id, &item, Some(slot));
         }
+        // A groove on a clip applies it; on an empty MIDI slot, it becomes notes to edit.
+        if let Some(g) = resp.dnd_release_payload::<super::groove_pool::GrooveDrag>() {
+            if session.clip(id, slot).is_some() {
+                session.apply_groove(&[ClipRef::slot(id, slot)], Some(g.0));
+            } else if kind == TrackKind::Midi {
+                session.groove_to_clip(g.0, id, slot);
+            }
+        }
         if clip_info.is_some() {
             resp.dnd_set_drag_payload(ClipDrag { track: id, slot });
         }
@@ -2273,6 +2281,13 @@ fn clip_menu(
     );
     if ui.button("Launch").clicked() {
         session.launch_clip(id, slot);
+        ui.close();
+    }
+    if ui.button("Extract Groove").clicked() {
+        if session.extract_groove(ClipRef::slot(id, slot)).is_some() {
+            state.show_groove_pool = true;
+            state.show_browser = true;
+        }
         ui.close();
     }
     if ui.button("Add to Arrangement at Marker").clicked() {

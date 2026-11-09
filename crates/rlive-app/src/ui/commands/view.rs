@@ -18,6 +18,8 @@ super::domain! {
         ToggleInfoView,
         ToggleClipView,
         ToggleDeviceView,
+        ToggleGroovePool,
+        ToggleTuning,
         ToggleFullScreen,
         ZoomIn,
         ZoomOut,
@@ -30,6 +32,7 @@ super::domain! {
         FocusClip,
         FocusDevice,
         FocusBrowser,
+        FocusGroovePool,
         CloseDialog,
     }
 }
@@ -43,6 +46,8 @@ pub const MENU: &[Entry] = &[
     ),
     Separator,
     Item("Browser", M::View(View::ToggleBrowser)),
+    Item("Groove Pool", M::View(View::ToggleGroovePool)),
+    Item("Tuning", M::View(View::ToggleTuning)),
     Item("Detail View", M::View(View::ToggleDetail)),
     Item("Mixer", M::View(View::ToggleMixer)),
     Item("In/Out", M::View(View::ToggleInOut)),
@@ -58,6 +63,8 @@ impl RliveApp {
     pub(super) fn view_state(&self, s: &mut MenuState) {
         s.check(M::View(View::ToggleAutomationMode), self.ui.arr.auto.mode);
         s.check(M::View(View::ToggleBrowser), self.ui.show_browser);
+        s.check(M::View(View::ToggleGroovePool), self.ui.show_groove_pool);
+        s.check(M::View(View::ToggleTuning), self.ui.show_tuning);
         s.check(M::View(View::ToggleDetail), self.ui.show_detail);
         s.check(M::View(View::ToggleMixer), self.ui.layout.show_mixer);
         s.check(M::View(View::ToggleInOut), self.ui.layout.show_in_out);
@@ -142,6 +149,23 @@ impl RliveApp {
                 };
             }
             View::ToggleBrowser => self.toggle_browser(),
+            View::ToggleGroovePool => {
+                self.ui.show_groove_pool = !self.ui.show_groove_pool;
+                if self.ui.show_groove_pool {
+                    self.ui.show_browser = true;
+                }
+            }
+            View::ToggleTuning => {
+                self.ui.show_tuning = !self.ui.show_tuning;
+                if self.ui.show_tuning {
+                    self.ui.show_browser = true;
+                }
+            }
+            View::FocusGroovePool => {
+                self.ui.show_groove_pool = true;
+                self.ui.show_browser = true;
+                self.move_focus(FocusArea::Browser);
+            }
             View::ToggleDetail => self.toggle_detail(),
             View::ToggleMixer => self.ui.layout.show_mixer = !self.ui.layout.show_mixer,
             View::ToggleInOut => self.ui.layout.show_in_out = !self.ui.layout.show_in_out,

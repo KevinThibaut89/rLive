@@ -468,6 +468,41 @@ impl FeedbackSink for OutputBank {
     }
 }
 
+/// What tracks play out of, by port number, shared with the output thread.
+pub type TrackOutputs = Arc<Mutex<Vec<Option<midir::MidiOutputConnection>>>>;
+/// Where the output thread reads MIDI from. Swapped when the audio engine is replaced.
+pub type TrackMidiFeed = Arc<Mutex<Option<rtrb::Consumer<rlive_engine::HwMidi>>>>;
+
+/// How long the output thread waits for more to play, and how far ahead it will wait.
+const OUTPUT_POLL: std::time::Duration = std::time::Duration::from_millis(1);
+const MAX_OUTPUT_WAIT: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Plays what tracks send to hardware MIDI, when it is due. Never touched by the audio thread.
+pub fn spawn_track_output(feed: TrackMidiFeed, outputs: TrackOutputs) {
+    let run = move || loop {
+        let next = feed.lock().unwrap().as_mut().and_then(|c| c.pop().ok());
+        let Some(m) = next else {
+            std::thread::sleep(OUTPUT_POLL);
+            continue;
+        };
+        let due = m.block + std::time::Duration::from_secs_f64(m.offset);
+        let now = std::time::Instant::now();
+        if due > now {
+            std::thread::sleep((due - now).min(MAX_OUTPUT_WAIT));
+        }
+        let (bytes, len) = m.message.to_bytes();
+        if let Some(Some(c)) = outputs.lock().unwrap().get_mut(m.port as usize) {
+            let _ = c.send(&bytes[..len]);
+        }
+    };
+    if let Err(e) = std::thread::Builder::new()
+        .name("rlive-track-midi".into())
+        .spawn(run)
+    {
+        log::warn!("track MIDI output: {e}");
+    }
+}
+
 /// The names of the output ports.
 pub fn output_names() -> Vec<String> {
     let Ok(out) = midir::MidiOutput::new("rLive") else {

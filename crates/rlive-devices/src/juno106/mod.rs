@@ -626,7 +626,10 @@ impl Juno106 {
 
     fn handle(&mut self, message: MidiMessage) {
         match message {
-            MidiMessage::NoteOn { key, .. } => self.fw.note_on(key),
+            MidiMessage::NoteOn { key, tuning, .. } => {
+                self.fw.key_tuning[(key & 127) as usize] = tuning;
+                self.fw.note_on(key);
+            }
             MidiMessage::NoteOff { key, .. } => self.fw.note_off(key),
             MidiMessage::AllNotesOff => self.fw.all_off(),
             MidiMessage::PitchBend { value, .. } => self.fw.bend = value,

@@ -7,6 +7,7 @@ use super::midi::{chase, Voices};
 use super::{render_range, BlockTime};
 use rlive_core::time::BarMap;
 use rlive_core::warp::StretchBank;
+use rlive_core::GrooveBank;
 use rlive_core::{
     ClipRegion, FollowActions, LaunchMode, MidiEvent, MidiMessage, NoteSpace, Quantize,
 };
@@ -191,6 +192,17 @@ pub(crate) struct ClipPlayer {
 }
 
 impl ClipPlayer {
+    /// Reads the Set's grooves from now on. `spent` gets whatever it stops reading.
+    pub(crate) fn adopt_grooves(
+        &mut self,
+        bank: &Option<Arc<GrooveBank>>,
+        spent: &mut dyn FnMut(Arc<GrooveBank>),
+    ) {
+        if let Some(old) = self.voices.adopt_grooves(bank) {
+            spent(old);
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             playing: None,

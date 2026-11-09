@@ -180,6 +180,9 @@ impl Session {
             }
         }
         self.apply_routing("Change Output");
+        for id in ids {
+            self.send_midi_output(*id);
+        }
         true
     }
 
@@ -488,6 +491,10 @@ impl Session {
                         channel: None,
                     }),
                 )];
+                // An MPE controller's channels are its notes, so none can be singled out.
+                if port.as_ref().is_some_and(|p| self.mpe_ports.contains(p)) {
+                    return out;
+                }
                 out.extend((0..16u8).map(|c| {
                     RouteChoice::of(
                         format!("Ch. {}", c + 1),
@@ -514,6 +521,15 @@ impl Session {
         if midi_out {
             out[0].label = "No Output".into();
             out[0].route = Route::None;
+            out.extend(self.midi_out_ports.iter().map(|name| {
+                RouteChoice::of(
+                    name.clone(),
+                    Route::External(ExternalRoute::Midi {
+                        port: Some(name.clone()),
+                        channel: None,
+                    }),
+                )
+            }));
         } else if let Some((_, first)) = hw.outputs.first() {
             out.push(RouteChoice::of("Ext. Out", Route::External(first.clone())));
         }
@@ -541,6 +557,19 @@ impl Session {
             return Vec::new();
         };
         match &t.routing.output {
+            Route::External(ExternalRoute::Midi { port, .. }) => {
+                let at = |channel: Option<u8>| {
+                    Route::External(ExternalRoute::Midi {
+                        port: port.clone(),
+                        channel,
+                    })
+                };
+                let mut out = vec![RouteChoice::of("All Channels", at(None))];
+                out.extend(
+                    (0..16u8).map(|c| RouteChoice::of(format!("Ch. {}", c + 1), at(Some(c)))),
+                );
+                out
+            }
             Route::Track { track, .. } | Route::TrackChannel { track, .. } => {
                 let track_id = *track;
                 let Some(target) = self.project.track(track_id) else {

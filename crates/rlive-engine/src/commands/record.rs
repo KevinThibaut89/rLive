@@ -200,17 +200,19 @@ impl Engine {
             message,
             MidiMessage::NoteOn { .. } | MidiMessage::NoteOff { .. }
         );
-        if !is_note {
+        if !is_note && !matches!(message, MidiMessage::NoteExpr { .. }) {
             return;
         }
         let ago = at.elapsed().as_secs_f64();
         // Every note goes to the buffer Capture MIDI looks back through.
-        let _ = self.played.push(PlayedNote {
-            track,
-            seconds: self.clock as f64 / self.sample_rate - ago,
-            tick: self.playing.then(|| self.tick_seconds_ago(ago)),
-            message,
-        });
+        if is_note {
+            let _ = self.played.push(PlayedNote {
+                track,
+                seconds: self.clock as f64 / self.sample_rate - ago,
+                tick: self.playing.then(|| self.tick_seconds_ago(ago)),
+                message,
+            });
+        }
         if !self.playing {
             return;
         }
@@ -249,6 +251,19 @@ impl Engine {
 
     /// Route played MIDI to its track and the recorder.
     pub(crate) fn play_midi(&mut self, track: TrackId, message: MidiMessage, at: Instant) {
+        // The controller's layout comes first: what's recorded is what was heard.
+        let message = match self
+            .tracks
+            .iter()
+            .find(|t| t.id == track)
+            .and_then(|t| t.key_layout.as_deref())
+        {
+            Some(layout) => match layout.apply(message) {
+                Some(m) => m,
+                None => return,
+            },
+            None => message,
+        };
         self.record_midi(track, message, at);
         if let Some(t) = self.track_mut(track) {
             if t.live.len() < t.live.capacity() {

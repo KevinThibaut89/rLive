@@ -15,8 +15,8 @@ use objc2_core_foundation::{
 };
 use objc2_foundation::{NSBundle, NSSize, NSString, NSURL};
 use rlive_core::{
-    MidiMessage, MpeEncoder, MpeZone, ParamInfo, ParamKind, PluginFormat, ProcessContext,
-    Processor, Tail,
+    MidiMessage, MpeEncoder, MpeOutput, MpeZone, ParamInfo, ParamKind, PluginFormat,
+    ProcessContext, Processor, Resource, Tail, MPE_SLOT,
 };
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -908,6 +908,19 @@ static WARNED: AtomicBool = AtomicBool::new(false);
 
 impl Processor for AuProcessor {
     fn activate(&mut self, _sample_rate: f64, _max_block: usize) {}
+
+    fn set_resource(&mut self, slot: u32, resource: Resource) -> Option<Resource> {
+        if slot != MPE_SLOT {
+            return Some(resource);
+        }
+        if let Some(output) = resource.downcast_ref::<Option<MpeOutput>>() {
+            self.mpe = match output {
+                Some(o) => MpeEncoder::configured(*o),
+                None => MpeEncoder::new(MpeZone::Lower, 15),
+            };
+        }
+        Some(resource)
+    }
 
     fn process(&mut self, ctx: &mut ProcessContext) {
         let unit = self.inst.unit;

@@ -242,6 +242,8 @@ pub struct Arpeggiator {
     scale: usize,
     use_scale: bool,
     groove: usize,
+    /// Global Groove Amount, scaling the groove as it does a clip's.
+    groove_amount: f32,
     retrigger: Retrigger,
     interval: usize,
     repeats: usize,
@@ -292,6 +294,7 @@ impl Arpeggiator {
             scale: 0,
             use_scale: false,
             groove: 0,
+            groove_amount: 1.0,
             retrigger: Retrigger::Off,
             interval: 4,
             repeats: INFINITE_REPEATS,
@@ -520,7 +523,9 @@ impl Arpeggiator {
         }
         let units = (self.core.beat() / unit + 1e-6).floor() as i64;
         if units.rem_euclid(2) == 1 {
-            self.core.beats_to_frames(unit * SWING).round() as u64
+            self.core
+                .beats_to_frames(unit * SWING * f64::from(self.groove_amount))
+                .round() as u64
         } else {
             0
         }
@@ -801,6 +806,7 @@ impl MidiFx for Arpeggiator {
     }
 
     fn begin(&mut self, transport: &TransportInfo) {
+        self.groove_amount = transport.groove_amount;
         self.transposer = self.resolve_transposer(transport);
         self.beats_per_bar = transport.time_signature.numerator as f64 * 4.0
             / transport.time_signature.denominator as f64;

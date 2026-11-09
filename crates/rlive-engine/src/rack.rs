@@ -446,6 +446,8 @@ impl ChainNode {
                 let mut transport = at.block.at(at.from as usize + from);
                 transport.scale = at.transport.scale;
                 let mut stretch = Stretch {
+                    tuning: at.tuning,
+                    tuned: &mut *at.tuned,
                     transport: &transport,
                     param_out: &mut *at.param_out,
                     bus: &mut *at.bus,

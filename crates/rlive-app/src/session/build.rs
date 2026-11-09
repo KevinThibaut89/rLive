@@ -1,6 +1,7 @@
 //! Builds engine nodes from project data.
 
 use super::automation::routes_for;
+use super::grooves::grooved_warp;
 use super::ChainRef;
 use rlive_audio_io::{SampleCache, SampleStatus};
 use rlive_core::envelope::segment_value;
@@ -24,8 +25,8 @@ use rlive_plugin_host::{PluginDescriptor, PluginHandle};
 use rlive_project::arrangement_edit::effective_fades;
 use rlive_project::{
     clip_envelope, ArrangementClip, BeatsPreserve, Breakpoint, Chain, Clip, ClipContent,
-    ClipEnvelope, ClipScale, Device, DeviceKind, DrumPad as ProjectPad, FrozenAudio, Project,
-    RackKind, Track, TrackKind, Warp, WarpMode as ProjectWarpMode, Zone as ProjectZone,
+    ClipEnvelope, ClipScale, Device, DeviceKind, DrumPad as ProjectPad, FrozenAudio, GroovePool,
+    Project, RackKind, Track, TrackKind, Warp, WarpMode as ProjectWarpMode, Zone as ProjectZone,
     Zones as ProjectZones,
 };
 use std::collections::{HashMap, HashSet};
@@ -272,6 +273,10 @@ pub struct Builder<'a> {
     pub edge_fade: Option<u64>,
     /// The clips being built belong to a frozen track, and play their frozen audio.
     pub frozen: bool,
+    /// The Set's Groove Pool, for clips to find theirs in.
+    pub grooves: &'a GroovePool,
+    /// With a tuning system loaded, clips have no scale.
+    pub tuning_loaded: bool,
 }
 
 /// Which plug-ins have something routed to or tapped from their extra buses.
@@ -565,6 +570,10 @@ impl Builder<'_> {
             return self.frozen_clip(frozen);
         }
         let region = clip.region();
+        let groove = clip.groove.and_then(|id| self.grooves.get(id));
+        let scale = (!self.tuning_loaded)
+            .then(|| clip_scale(&clip.scale))
+            .flatten();
         let mut hi_q_needed = false;
         let mut edge_fade_on = false;
         let data = match &clip.content {
@@ -595,10 +604,12 @@ impl Builder<'_> {
                         expr: n.expr.as_deref().map(engine_expression).map(Box::new),
                     })
                     .collect();
+                let slot = clip.groove.and_then(|id| self.grooves.index_of(id));
                 ClipData::Midi(
                     MidiClip::new(clip.length, notes, clip.looped)
-                        .with_scale(clip_scale(&clip.scale))
-                        .with_program(program.map(engine_program)),
+                        .with_scale(scale)
+                        .with_program(program.map(engine_program))
+                        .with_groove(slot),
                 )
             }
             ClipContent::Audio {
@@ -622,11 +633,20 @@ impl Builder<'_> {
                     length: clip.length,
                     looped: clip.looped,
                     gain: rlive_core::db_to_gain(*gain_db),
-                    scale: clip_scale(&clip.scale),
+                    scale,
                 };
                 if warp.enabled {
-                    let map = warp_map(warp, sample_rate);
                     let found = self.samples.transients(&file.path);
+                    // The groove moves the markers, and what's between them follows.
+                    let grooved = groove.map(|g| {
+                        let found = found.as_ref().map_or(&[][..], |f| f.as_slice());
+                        let transients =
+                            rlive_project::warp_edit::resolve_transients(found, &warp.transients);
+                        let map = self.grooves.map_of(g);
+                        grooved_warp(warp, &map, &transients, clip.loop_end() as f64)
+                    });
+                    let warp = grooved.as_ref().unwrap_or(warp);
+                    let map = warp_map(warp, sample_rate);
                     ClipData::Warped(WarpedClip {
                         slices: beats_slices(
                             warp,
@@ -1012,6 +1032,7 @@ fn engine_expression(expr: &rlive_project::NoteExpression) -> NoteExpression {
             .map(|p| ExprPoint {
                 time: p.time,
                 value: p.value as f32,
+                curve: p.curve,
             })
             .collect()
     };
@@ -1187,6 +1208,8 @@ mod tests {
             chain_shared: None,
             edge_fade: None,
             frozen: false,
+            grooves: &GroovePool::default(),
+            tuning_loaded: false,
         };
         let mut clip = Clip {
             length: 4 * PPQ,

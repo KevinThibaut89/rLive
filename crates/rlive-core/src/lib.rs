@@ -8,6 +8,7 @@ pub mod crossfade;
 pub mod device;
 pub mod envelope;
 pub mod fade;
+pub mod groove;
 pub mod ids;
 pub mod launch;
 pub mod midi;
@@ -17,6 +18,7 @@ pub mod param;
 pub mod processor;
 pub mod sample;
 pub mod time;
+pub mod tuning;
 pub mod view;
 pub mod warp;
 
@@ -24,12 +26,13 @@ pub use clip_region::ClipRegion;
 pub use crossfade::CrossfadeCurve;
 pub use device::{DeviceDesc, Item, Ports, SampleSlot, ScopeKind, Section, Status};
 pub use fade::{fade_gain, EdgeFades};
+pub use groove::{GrooveAmounts, GrooveBank, GrooveHit, GrooveMap};
 pub use ids::{ArrClipId, ChainId, DeviceId, GrooveId, TrackId};
 pub use launch::{FollowAction, FollowActions, LaunchMode};
 pub use midi::{
     ExprKind, MidiEvent, MidiMessage, NoteId, NoteIds, NoteSpace, MPE_BEND_RANGE, SLIDE_CC,
 };
-pub use mpe::{MpeDecoder, MpeEncoder, MpeZone};
+pub use mpe::{MpeDecoder, MpeEncoder, MpeOutput, MpeZone, MPE_SLOT};
 pub use param::{
     ClipParam, EnvTarget, ModMode, ParamEvent, ParamFlags, ParamId, ParamInfo, ParamKind,
     ParamOwner, ParamRange, ParamRef, ACTIVATOR,
@@ -42,6 +45,7 @@ pub use sample::SampleBuffer;
 pub use time::{
     BarMap, Quantize, ScaleInfo, TempoMap, TempoPoint, TimeMaps, TimeSignature, TransportInfo, PPQ,
 };
+pub use tuning::{KeyLayout, TuningTable, TUNING_SLOT};
 pub use view::{ViewChannel, ViewId, ViewReader, ViewWriter, METER_VALUES, SCOPE_VALUES};
 
 /// Third-party plugin formats rLive can host.

@@ -89,6 +89,13 @@ fn port_switches(ui: &mut egui::Ui, cfg: &mut crate::settings::MidiPortConfig) -
     track || sync || remote
 }
 
+/// An input port's MPE switch: its per-note channels are expression.
+fn port_mpe(ui: &mut egui::Ui, cfg: &mut crate::settings::MidiPortConfig) -> bool {
+    ui.checkbox(&mut cfg.mpe, "")
+        .on_hover_text("MPE Mode — treat this controller's per-note channels as expression")
+        .changed()
+}
+
 /// A chooser of one MIDI port or none.
 fn port_chooser(
     ui: &mut egui::Ui,
@@ -498,18 +505,20 @@ impl RliveApp {
         }
         let legacy = self.settings.midi_input.clone();
         egui::Grid::new("midi_ports")
-            .num_columns(4)
+            .num_columns(5)
             .spacing([18.0, 4.0])
             .show(ui, |ui| {
                 label(ui, "Port");
                 label(ui, "Track");
                 label(ui, "Sync");
                 label(ui, "Remote");
+                label(ui, "MPE");
                 ui.end_row();
                 for name in &inputs {
                     let mut cfg = self.settings.remote.input(name, legacy.as_deref());
                     ui.label(RichText::new(format!("In: {name}")).color(pal().text));
                     changed |= port_switches(ui, &mut cfg);
+                    changed |= port_mpe(ui, &mut cfg);
                     ui.end_row();
                     self.settings.remote.set_input(cfg);
                 }

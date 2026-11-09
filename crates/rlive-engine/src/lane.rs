@@ -142,6 +142,17 @@ pub(crate) struct LanePlayer {
 }
 
 impl LanePlayer {
+    /// Reads the Set's grooves from now on. `spent` gets whatever it stops reading.
+    pub(crate) fn adopt_grooves(
+        &mut self,
+        bank: &Option<Arc<rlive_core::GrooveBank>>,
+        spent: &mut dyn FnMut(Arc<rlive_core::GrooveBank>),
+    ) {
+        if let Some(old) = self.voices.adopt_grooves(bank) {
+            spent(old);
+        }
+    }
+
     pub fn new(lane: Arc<ArrangementLane>) -> Self {
         Self {
             lane,

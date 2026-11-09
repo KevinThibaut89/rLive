@@ -7,7 +7,7 @@ use super::UiState;
 use crate::session::{RouteChoice, Session};
 use egui::{Align2, ComboBox, Id, Pos2, Rect, Sense, Stroke, UiBuilder, Vec2};
 use rlive_core::{CrossfadeCurve, TrackId};
-use rlive_project::{Crossfade, Monitor, Route, Tap, TrackKind};
+use rlive_project::{Crossfade, CustomLayout, Monitor, Route, Tap, TrackKind, TuningLayout};
 
 /// How tall the section is in a mixer strip, and how wide beside an Arrangement lane.
 pub(super) const IN_OUT_H: f32 = 132.0;
@@ -297,8 +297,95 @@ pub(super) fn strip_section(
         n = 4;
     }
     small(&p, row(n), if audio { "Audio To" } else { "MIDI To" });
+    if kind == TrackKind::Midi {
+        let at = Rect::from_min_size(
+            Pos2::new(row(n).right() - 20.0, row(n).top()),
+            Vec2::new(20.0, ROW_H),
+        );
+        midi_options(ui, session, state, id, at);
+    }
     output_pair(ui, session, state, id, [row(n + 1), row(n + 2)]);
     y + IN_OUT_H
+}
+
+/// A MIDI track's tuning and MPE settings, behind one small button.
+fn midi_options(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    id: TrackId,
+    at: Rect,
+) {
+    let tuning = session.tuning().is_some();
+    let mut child = ui.new_child(UiBuilder::new().max_rect(at));
+    let r = child.menu_button("…", |ui| {
+        if tuning {
+            let Some(t) = session.project.track(id) else {
+                return;
+            };
+            let (bypass, drum) = (t.bypass_tuning, t.tuning_bypassed() && !t.bypass_tuning);
+            let label = if drum {
+                "Bypass Tuning (Drum Rack)"
+            } else {
+                "Bypass Tuning"
+            };
+            if ui
+                .add_enabled(!drum, egui::Button::selectable(bypass, label))
+                .clicked()
+            {
+                session.set_bypass_tuning(id, !bypass);
+                ui.close();
+            }
+            ui.separator();
+            let layout = session
+                .project
+                .track(id)
+                .map(|t| t.tuning_layout.clone())
+                .unwrap_or_default();
+            ui.label(egui::RichText::new("MIDI Controller Layout").color(pal().text_dim));
+            for (name, choice) in [
+                (TuningLayout::NAMES[0], TuningLayout::All),
+                (TuningLayout::NAMES[1], TuningLayout::Black),
+                (TuningLayout::NAMES[2], TuningLayout::White),
+                (TuningLayout::NAMES[3], TuningLayout::Closest),
+                (
+                    TuningLayout::NAMES[4],
+                    TuningLayout::Custom(CustomLayout::default()),
+                ),
+            ] {
+                let checked = std::mem::discriminant(&layout) == std::mem::discriminant(&choice);
+                if ui.selectable_label(checked, name).clicked() {
+                    session.set_tuning_layout(id, choice);
+                    ui.close();
+                }
+            }
+            if matches!(layout, TuningLayout::Custom(_)) && ui.button("Configure…").clicked() {
+                state.layout_dialog = Some(id);
+                ui.close();
+            }
+            ui.separator();
+        }
+        let on = session
+            .project
+            .track(id)
+            .is_some_and(|t| t.mpe_out.is_some());
+        if ui.selectable_label(on, "Send MPE").clicked() {
+            let out = (!on).then(rlive_core::MpeOutput::default);
+            session.set_track_mpe_out(id, out);
+            ui.close();
+        }
+        if ui.button("MPE Settings…").clicked() {
+            if !on {
+                session.set_track_mpe_out(id, Some(rlive_core::MpeOutput::default()));
+            }
+            state.mpe_dialog = Some(super::midi_settings::MpeTarget::Track(id));
+            ui.close();
+        }
+    });
+    info(
+        r.response,
+        "MIDI Options — tuning, controller layout and MPE settings for this track",
+    );
 }
 
 /// The In/Out controls beside an Arrangement lane.
@@ -330,6 +417,13 @@ pub(super) fn header_section(
         Pos2::new(area.right(), area.top() + 2.0 + ROW_H),
     );
     let two_rows = area.height() >= 2.0 * ROW_H + 4.0;
+    if kind == TrackKind::Midi {
+        let at = Rect::from_min_size(
+            Pos2::new(area.right() - 98.0, area.top() + 2.0),
+            Vec2::new(20.0, ROW_H),
+        );
+        midi_options(ui, session, state, id, at);
+    }
     if has_input {
         input_pair(ui, session, state, id, [cell(0, 0), cell(1, 0)]);
         monitor_row(ui, session, state, id, right);

@@ -1,6 +1,7 @@
 //! The clip content the engine plays.
 
 use super::envelopes::{ClipEnvelopes, EnvelopedClip};
+use rlive_core::envelope::EnvPoint;
 use rlive_core::warp::{WarpMap, WarpMode};
 use rlive_core::{ClipRegion, SampleBuffer, ScaleInfo};
 use std::sync::Arc;
@@ -10,6 +11,20 @@ use std::sync::Arc;
 pub struct ExprPoint {
     pub time: f64,
     pub value: f32,
+    /// Shape of the segment leaving this point, as [`rlive_core::envelope`] defines it.
+    pub curve: f32,
+}
+
+impl EnvPoint for ExprPoint {
+    fn time(&self) -> f64 {
+        self.time
+    }
+    fn value(&self) -> f64 {
+        f64::from(self.value)
+    }
+    fn curve(&self) -> f32 {
+        self.curve
+    }
 }
 
 /// A note's expression envelopes, each sorted by time and possibly empty.
@@ -102,6 +117,8 @@ pub struct MidiClip {
     pub scale: Option<ScaleInfo>,
     /// What it sends when it starts.
     pub program: Option<ProgramChange>,
+    /// Where in the engine's groove bank its groove is, if it has one.
+    pub groove: Option<u32>,
 }
 
 impl MidiClip {
@@ -117,7 +134,14 @@ impl MidiClip {
             max_len,
             scale: None,
             program: None,
+            groove: None,
         }
+    }
+
+    /// The clip played through a groove in the engine's bank.
+    pub fn with_groove(mut self, groove: Option<u32>) -> Self {
+        self.groove = groove;
+        self
     }
 
     /// The clip with a scale for scale-aware devices.

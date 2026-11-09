@@ -24,6 +24,7 @@ mod routing;
 mod scene;
 mod tempo_leader;
 mod track;
+pub mod tuning;
 pub mod warp_edit;
 
 pub use arrangement::{
@@ -40,7 +41,10 @@ pub use device::{
 };
 pub use envelope::{Breakpoint, ClipEnvelope, EnvLoop, EnvMode, Envelope};
 pub use file_ref::FileRef;
-pub use groove::{Groove, GroovePool, Tuning};
+pub use groove::{
+    commit_notes, extract_from_events, extract_from_notes, factory_grooves, groove_markers, Groove,
+    GroovePattern, GroovePool, BASE_CHOICES, GROOVE_EXTENSION,
+};
 pub use id_walk::walk_ids;
 pub use mapping::{
     CcEncoding, ControlKind, CrossfaderPoint, KeyMapping, MapTarget, MidiMapping, MidiSource,
@@ -54,3 +58,4 @@ pub use track::{
     ChainTap, Crossfade, ExternalRoute, MainLane, Monitor, PanMode, Route, Routing, Tap, Track,
     TrackDelay, TrackFreeze, TrackKind, TrackSend, TrackUi,
 };
+pub use tuning::{factory_tunings, CustomLayout, ScaleNote, Tuning, TuningLayout};

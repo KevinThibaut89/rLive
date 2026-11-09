@@ -505,7 +505,10 @@ fn main_panel(
         });
 
     groove_row(ui, session, state, cref, group, &clip);
-    scale_rows(ui, session, group, &clip);
+    // A tuning system has its own notes: there is no scale to choose.
+    if session.tuning().is_none() {
+        scale_rows(ui, session, group, &clip);
+    }
 }
 
 fn groove_row(
@@ -548,7 +551,26 @@ fn groove_row(
         {
             state.clip_view.tools.hot_swap = !hot;
         }
+        let audio_unwarped = matches!(
+            &clip.content,
+            ClipContent::Audio { warp, .. } if !warp.enabled
+        );
+        if clip.groove.is_some() && !audio_unwarped {
+            let r = ui.button("Commit");
+            if info(
+                r,
+                "Commit Groove — write the groove into the clip and set the chooser back to None",
+            )
+            .clicked()
+            {
+                session.commit_groove(group_primary(group));
+            }
+        }
     });
+}
+
+fn group_primary(group: &[ClipRef]) -> ClipRef {
+    group[0]
 }
 
 /// Whether every clip agrees on `f`.

@@ -24,8 +24,9 @@ use clap_sys::process::clap_process;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
 use rlive_core::{
-    ExprKind, MidiEvent, MidiMessage, MpeEncoder, MpeZone, NoteId, ParamFlags, ParamInfo,
-    ParamKind, ParamOutQueue, PluginFormat, ProcessContext, Processor, Tail,
+    ExprKind, MidiEvent, MidiMessage, MpeEncoder, MpeOutput, MpeZone, NoteId, ParamFlags,
+    ParamInfo, ParamKind, ParamOutQueue, PluginFormat, ProcessContext, Processor, Resource, Tail,
+    MPE_SLOT,
 };
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
@@ -1328,6 +1329,19 @@ impl Processor for ClapProcessor {
 
     fn set_param(&mut self, id: u32, value: f64) {
         self.defer_param(id, value);
+    }
+
+    fn set_resource(&mut self, slot: u32, resource: Resource) -> Option<Resource> {
+        if slot != MPE_SLOT {
+            return Some(resource);
+        }
+        if let Some(output) = resource.downcast_ref::<Option<MpeOutput>>() {
+            self.mpe = match output {
+                Some(o) => MpeEncoder::configured(*o),
+                None => MpeEncoder::new(MpeZone::Lower, 15),
+            };
+        }
+        Some(resource)
     }
 
     fn stop_processing(&mut self) {

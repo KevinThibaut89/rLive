@@ -271,6 +271,9 @@ pub struct Device {
     /// Where the device's own sidechain chooser takes its input from.
     #[serde(default, skip_serializing_if = "is_default")]
     pub sidechain: Option<SidechainSource>,
+    /// A plug-in's MPE Mode: the channels it receives on, when its MPE Mode is on.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mpe: Option<rlive_core::MpeOutput>,
 }
 
 /// The source a device's sidechain input is set to, as its built-in chooser shows it.
@@ -311,6 +314,7 @@ impl Device {
             expanded: true,
             info: String::new(),
             sidechain: None,
+            mpe: None,
         }
     }
 

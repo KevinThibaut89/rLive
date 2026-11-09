@@ -338,15 +338,24 @@ fn the_v2_schema_round_trips_when_it_is_used() {
         timing: 75.0,
         random: 2.0,
         velocity: -20.0,
+        pattern: Default::default(),
     });
     p.tuning = Some(Tuning {
         name: "19 EDO".into(),
         description: String::new(),
         cents: (1..=19).map(|i| i as f64 * 1200.0 / 19.0).collect(),
-        reference_note: 69,
+        reference: rlive_project::ScaleNote {
+            octave: 3,
+            degree: 0,
+        },
         reference_hz: 440.0,
-        lowest_note: 0,
-        highest_note: 127,
+        lowest: rlive_project::ScaleNote {
+            octave: 0,
+            degree: 0,
+        },
+        note_names: Vec::new(),
+        source: String::new(),
+        link: String::new(),
     });
     p.midi_mappings.push(MidiMapping {
         channel: 0,

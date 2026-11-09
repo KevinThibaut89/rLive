@@ -126,6 +126,8 @@ pub struct TransportInfo {
     pub bar_start: f64,
     /// The Arrangement loop as (start, end) ticks, when it is on.
     pub loop_range: Option<(f64, f64)>,
+    /// Global Groove Amount: how hard grooves in devices are pushed, as in clips. 0..1.3.
+    pub groove_amount: f32,
     /// The current clip's scale, for devices with Use Current Scale. `None` when there is none
     /// or nothing is delivering one; those devices then work in semitones.
     pub scale: Option<ScaleInfo>,
@@ -163,6 +165,7 @@ impl Default for TransportInfo {
             bar_start: 0.0,
             loop_range: None,
             scale: None,
+            groove_amount: 1.0,
         }
     }
 }

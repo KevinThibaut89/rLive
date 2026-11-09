@@ -4,8 +4,8 @@
 pub mod capture_midi;
 pub mod disk;
 
-use rlive_core::{ArrClipId, MidiMessage, TimeSignature, TrackId};
-use rlive_project::{Clip, ClipContent, NoteData};
+use rlive_core::{ArrClipId, ExprKind, MidiMessage, NoteId, TimeSignature, TrackId};
+use rlive_project::{Breakpoint, Clip, ClipContent, NoteData, NoteExpression};
 use std::collections::HashMap;
 
 /// The shortest note a press and release can make, in ticks.
@@ -14,9 +14,17 @@ const MIN_NOTE: u64 = 10;
 /// Release velocity of a note that ended with no key-up (a jump or the end of recording).
 const DEFAULT_RELEASE: f32 = 0.5;
 
+/// A key that is down, and what it has done so far.
+struct OpenNote {
+    start: f64,
+    velocity: f32,
+    id: NoteId,
+    expr: NoteExpression,
+}
+
 #[derive(Default)]
 struct Take {
-    open: HashMap<u8, (f64, f32)>,
+    open: HashMap<u8, OpenNote>,
     notes: Vec<NoteData>,
     /// The timeline clip holding this take, once it's been placed.
     clip: Option<ArrClipId>,
@@ -26,11 +34,12 @@ struct Take {
 
 impl Take {
     fn close(&mut self, key: u8, until: f64, release: f32) {
-        if let Some((start, velocity)) = self.open.remove(&key) {
-            let start = start.max(0.0).round() as u64;
+        if let Some(open) = self.open.remove(&key) {
+            let start = open.start.max(0.0).round() as u64;
             let length = (until.round() as u64).saturating_sub(start).max(MIN_NOTE);
-            let mut note = NoteData::new(start, length, key, velocity);
+            let mut note = NoteData::new(start, length, key, open.velocity);
             note.release = release;
+            note.expr = thinned(open.expr).map(Box::new);
             self.notes.push(note);
         }
     }
@@ -42,6 +51,77 @@ impl Take {
             self.close(key, until, DEFAULT_RELEASE);
         }
     }
+}
+
+/// The finest detail recorded expression keeps, in ticks: about 2 ms at 120 BPM.
+const POINT_SPACING: f64 = 4.0;
+/// How far a straight line may stray from the played gesture before a point is kept.
+const THIN_TOLERANCE: f64 = 0.004;
+
+fn curve_of(expr: &mut NoteExpression, kind: ExprKind) -> &mut Vec<Breakpoint> {
+    match kind {
+        ExprKind::Pitch => &mut expr.pitch,
+        ExprKind::Slide => &mut expr.slide,
+        ExprKind::Pressure => &mut expr.pressure,
+    }
+}
+
+/// One more value of a gesture. Bursts closer than [`POINT_SPACING`] keep their latest.
+pub(crate) fn push_point(points: &mut Vec<Breakpoint>, time: f64, value: f64) {
+    if points.last().is_some_and(|p| p.value == value) {
+        return;
+    }
+    match points.last_mut() {
+        Some(last) if time - last.time < POINT_SPACING => last.value = value,
+        _ => points.push(Breakpoint::new(time, value)),
+    }
+}
+
+/// Keeps the points that matter to the shape of a gesture: a played bend is thousands of them,
+/// most of them on the way from one to the next.
+fn thin_points(points: &[Breakpoint], tolerance: f64) -> Vec<Breakpoint> {
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+    let mut keep = vec![false; points.len()];
+    keep[0] = true;
+    keep[points.len() - 1] = true;
+    let mut spans = vec![(0, points.len() - 1)];
+    while let Some((from, to)) = spans.pop() {
+        if to <= from + 1 {
+            continue;
+        }
+        let (a, b) = (points[from], points[to]);
+        let span = (b.time - a.time).max(1e-9);
+        let (mut worst, mut at) = (0.0, from);
+        for (i, p) in points.iter().enumerate().take(to).skip(from + 1) {
+            let line = a.value + (b.value - a.value) * (p.time - a.time) / span;
+            let error = (p.value - line).abs();
+            if error > worst {
+                (worst, at) = (error, i);
+            }
+        }
+        if worst > tolerance {
+            keep[at] = true;
+            spans.push((from, at));
+            spans.push((at, to));
+        }
+    }
+    points
+        .iter()
+        .zip(keep)
+        .filter_map(|(p, k)| k.then_some(*p))
+        .collect()
+}
+
+/// A note's expression as it should be kept, or nothing if it has none.
+pub(crate) fn thinned(expr: NoteExpression) -> Option<NoteExpression> {
+    let thin = NoteExpression {
+        pitch: thin_points(&expr.pitch, 0.01),
+        slide: thin_points(&expr.slide, THIN_TOLERANCE),
+        pressure: thin_points(&expr.pressure, THIN_TOLERANCE),
+    };
+    (!thin.pitch.is_empty() || !thin.slide.is_empty() || !thin.pressure.is_empty()).then_some(thin)
 }
 
 /// One finished stretch of a take, ready to go on the timeline.
@@ -68,12 +148,39 @@ impl Recording {
     pub fn message(&mut self, track: TrackId, tick: f64, message: MidiMessage) {
         let take = self.takes.entry(track).or_default();
         match message {
-            MidiMessage::NoteOn { key, velocity, .. } if velocity > 0.0 => {
+            MidiMessage::NoteOn {
+                key,
+                velocity,
+                note_id,
+                ..
+            } if velocity > 0.0 => {
                 take.close(key, tick, DEFAULT_RELEASE);
-                take.open.insert(key, (tick, velocity));
+                take.open.insert(
+                    key,
+                    OpenNote {
+                        start: tick,
+                        velocity,
+                        id: note_id,
+                        expr: NoteExpression::default(),
+                    },
+                );
             }
             MidiMessage::NoteOn { key, .. } => take.close(key, tick, DEFAULT_RELEASE),
             MidiMessage::NoteOff { key, velocity, .. } => take.close(key, tick, velocity),
+            MidiMessage::NoteExpr {
+                key,
+                note_id,
+                kind,
+                value,
+                ..
+            } => {
+                if let Some(open) = take.open.get_mut(&key) {
+                    if note_id == 0 || open.id == 0 || open.id == note_id {
+                        let time = (tick - open.start).max(0.0);
+                        push_point(curve_of(&mut open.expr, kind), time, f64::from(value));
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -81,10 +188,22 @@ impl Recording {
     /// The playhead jumped: held notes end where it left and continue where it lands.
     pub fn jumped(&mut self, from: f64, to: f64) {
         for take in self.takes.values_mut() {
-            let held: Vec<(u8, f32)> = take.open.iter().map(|(k, (_, v))| (*k, *v)).collect();
+            let held: Vec<(u8, f32, NoteId)> = take
+                .open
+                .iter()
+                .map(|(k, n)| (*k, n.velocity, n.id))
+                .collect();
             take.close_all(from);
-            for (key, velocity) in held {
-                take.open.insert(key, (to, velocity));
+            for (key, velocity, id) in held {
+                take.open.insert(
+                    key,
+                    OpenNote {
+                        start: to,
+                        velocity,
+                        id,
+                        expr: NoteExpression::default(),
+                    },
+                );
             }
         }
     }
@@ -257,5 +376,128 @@ mod tests {
         let mut r = Recording::new(0);
         r.message(t, 100.0, off(60));
         assert!(r.placements(sig()).is_empty());
+    }
+    fn expr(key: u8, id: rlive_core::NoteId, kind: ExprKind, value: f32) -> MidiMessage {
+        MidiMessage::NoteExpr {
+            channel: 0,
+            key,
+            note_id: id,
+            kind,
+            value,
+        }
+    }
+
+    #[test]
+    fn played_expression_lands_in_the_notes_dimensions() {
+        let t = TrackId::new();
+        let mut r = Recording::new(0);
+        r.message(t, 0.0, on(60));
+        r.message(t, 100.0, expr(60, 0, ExprKind::Pitch, 2.0));
+        r.message(t, 200.0, expr(60, 0, ExprKind::Slide, 0.25));
+        r.message(t, 300.0, expr(60, 0, ExprKind::Pressure, 0.5));
+        r.message(t, 400.0, off(60));
+        let p = &r.placements(sig())[0];
+        let e = notes(p)[0].expr.as_deref().unwrap();
+        assert_eq!((e.pitch[0].time, e.pitch[0].value), (100.0, 2.0));
+        assert_eq!((e.slide[0].time, e.slide[0].value), (200.0, 0.25));
+        assert_eq!((e.pressure[0].time, e.pressure[0].value), (300.0, 0.5));
+    }
+
+    #[test]
+    fn a_plain_note_gets_no_expression_at_all() {
+        let t = TrackId::new();
+        let mut r = Recording::new(0);
+        r.message(t, 0.0, on(60));
+        r.message(t, 100.0, off(60));
+        assert!(notes(&r.placements(sig())[0])[0].expr.is_none());
+    }
+
+    #[test]
+    fn expression_for_a_note_id_stays_with_that_note() {
+        let t = TrackId::new();
+        let mut r = Recording::new(0);
+        r.message(
+            t,
+            0.0,
+            MidiMessage::NoteOn {
+                channel: 0,
+                key: 60,
+                velocity: 0.7,
+                note_id: 11,
+                tuning: 0.0,
+            },
+        );
+        r.message(t, 100.0, expr(60, 99, ExprKind::Pitch, 5.0));
+        r.message(t, 200.0, expr(60, 11, ExprKind::Pitch, 3.0));
+        r.message(t, 300.0, off(60));
+        let e = notes(&r.placements(sig())[0])[0].expr.clone().unwrap();
+        assert_eq!(e.pitch.len(), 1);
+        assert_eq!(e.pitch[0].value, 3.0);
+    }
+
+    #[test]
+    fn a_flood_of_values_thins_to_a_gesture() {
+        let t = TrackId::new();
+        let mut r = Recording::new(0);
+        r.message(t, 0.0, on(60));
+        for i in 0..960 {
+            let v = (i as f32 / 960.0).sin();
+            r.message(t, i as f64 + 1.0, expr(60, 0, ExprKind::Pressure, v));
+        }
+        r.message(t, 1000.0, off(60));
+        let e = notes(&r.placements(sig())[0])[0].expr.clone().unwrap();
+        assert!(
+            e.pressure.len() > 2 && e.pressure.len() < 60,
+            "{}",
+            e.pressure.len()
+        );
+    }
+
+    #[test]
+    fn mpe_input_decodes_into_recorded_expression() {
+        let t = TrackId::new();
+        let mut r = Recording::new(0);
+        let mut d = rlive_core::MpeDecoder::new();
+        let mut feed = |tick: f64, m: MidiMessage, r: &mut Recording| {
+            d.feed(m, &mut |out| r.message(t, tick, out));
+        };
+        let pre_bend = MidiMessage::PitchBend {
+            channel: 3,
+            value: 0.25,
+        };
+        feed(0.0, pre_bend, &mut r);
+        feed(
+            0.0,
+            MidiMessage::NoteOn {
+                channel: 3,
+                key: 62,
+                velocity: 0.8,
+                note_id: 0,
+                tuning: 0.0,
+            },
+            &mut r,
+        );
+        feed(
+            480.0,
+            MidiMessage::ChannelPressure {
+                channel: 3,
+                value: 0.5,
+            },
+            &mut r,
+        );
+        feed(
+            960.0,
+            MidiMessage::NoteOff {
+                channel: 3,
+                key: 62,
+                velocity: 0.5,
+                note_id: 0,
+            },
+            &mut r,
+        );
+        let e = notes(&r.placements(sig())[0])[0].expr.clone().unwrap();
+        assert_eq!(e.pitch[0].value, 12.0, "a quarter of the 48-semitone range");
+        assert_eq!(e.pitch[0].time, 0.0);
+        assert_eq!((e.pressure[0].time, e.pressure[0].value), (480.0, 0.5));
     }
 }

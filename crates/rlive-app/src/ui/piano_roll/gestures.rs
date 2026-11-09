@@ -315,6 +315,17 @@ pub(super) fn grid(
         state.piano.lanes.hover_note = hit(geo, shown, fg, focused, pos)
             .filter(|(s, _, _)| *s == fg)
             .map(|(_, n, _)| n);
+        if let Some(t) = session.track_tuning(shown[fg].r.track()) {
+            let key = state
+                .piano
+                .lanes
+                .hover_note
+                .and_then(|n| shown[fg].clip.notes().get(n))
+                .map(|n| n.key);
+            if let Some(key) = key {
+                info(resp.clone(), super::rulers::tuned_note_text(key, t));
+            }
+        }
     } else if !resp.dragged() {
         state.piano.lanes.hover_note = None;
     }

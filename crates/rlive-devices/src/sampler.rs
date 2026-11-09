@@ -124,10 +124,10 @@ impl Sampler {
         self.values[id as usize]
     }
 
-    fn note_on(&mut self, channel: u8, key: u8, velocity: f32) {
+    fn note_on(&mut self, channel: u8, key: u8, velocity: f32, tuning: f32) {
         let Some(sample) = &self.sample else { return };
         self.clock += 1;
-        let semis = key as f64 - self.v(p::ROOT) + self.v(p::TUNE);
+        let semis = key as f64 + f64::from(tuning) - self.v(p::ROOT) + self.v(p::TUNE);
         let step = 2f64.powf(semis / 12.0) * sample.sample_rate / self.sr;
         let start = self.v(p::START).clamp(0.0, 1.0) * sample.len() as f64;
         let vel_sens = self.v(p::VELOCITY) as f32;
@@ -235,8 +235,9 @@ impl Processor for Sampler {
                         channel,
                         key,
                         velocity,
+                        tuning,
                         ..
-                    } if !extended => self.note_on(channel, key, velocity),
+                    } if !extended => self.note_on(channel, key, velocity, tuning),
                     MidiMessage::NoteOff { channel, key, .. } => self.note_off(channel, key),
                     MidiMessage::AllNotesOff => {
                         for v in self.voices.iter_mut() {

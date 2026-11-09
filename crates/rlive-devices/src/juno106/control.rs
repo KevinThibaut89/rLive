@@ -229,6 +229,8 @@ pub struct ScanOut {
 const MAX_HELD: usize = 16;
 
 pub struct Firmware {
+    /// Each key's offset from 12-TET, as last heard from a tuning system.
+    pub key_tuning: [f32; 128],
     channels: [Channel; VOICES],
     rotary_next: usize,
     clock: u64,
@@ -252,6 +254,7 @@ impl Firmware {
             held_count: 0,
             assign: 0,
             bend: 0.0,
+            key_tuning: [0.0; 128],
             mod_wheel: 0.0,
             pedal: false,
             lfo_phase: 0.0,
@@ -435,7 +438,7 @@ impl Firmware {
             }
             c.env.step(attack, decay, sustain, release);
 
-            let target = c.key as f32;
+            let target = c.key as f32 + self.key_tuning[(c.key & 127) as usize];
             let step = (target - c.pitch).clamp(-porta_st, porta_st);
             c.pitch += step;
 

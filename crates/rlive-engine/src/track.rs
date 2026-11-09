@@ -18,9 +18,9 @@ use rlive_core::param::{mixer, ParamId};
 use rlive_core::time::BarMap;
 use rlive_core::warp::StretchBank;
 use rlive_core::{
-    db_to_gain, AudioBuffer, AudioOutput, ChainId, DeviceId, EventQueue, MidiEvent, MidiMessage,
-    ParamOutQueue, Ports, ProcessContext, Processor, Resource, TrackId, TransportInfo, ViewChannel,
-    ViewWriter,
+    db_to_gain, AudioBuffer, AudioOutput, ChainId, DeviceId, EventQueue, GrooveBank, KeyLayout,
+    MidiEvent, MidiMessage, MpeEncoder, ParamOutQueue, Ports, ProcessContext, Processor, Resource,
+    TrackId, TransportInfo, TuningTable, ViewChannel, ViewWriter,
 };
 use std::ops::Range;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -727,6 +727,10 @@ pub(crate) struct Stretch<'a> {
     pub direct: &'a [(DeviceId, MidiEvent)],
     /// Room to merge a device's own MIDI with what was addressed to it.
     pub merge: &'a mut EventQueue,
+    /// The track's tuning system, if it plays one.
+    pub tuning: Option<&'a TuningTable>,
+    /// Room to write MIDI with the tuning applied.
+    pub tuned: &'a mut EventQueue,
 }
 
 /// One stretch of a block running through a device chain.
@@ -808,6 +812,17 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
                 } else {
                     heard
                 };
+                // After the MIDI effects, which work in notes of the tuning, not frequencies.
+                let heard = match at.tuning.filter(|_| !dev.midi_effect && !flush) {
+                    Some(table) => {
+                        at.tuned.clear();
+                        for e in heard {
+                            at.tuned.push(table.tune(*e));
+                        }
+                        at.tuned.as_slice()
+                    }
+                    None => heard,
+                };
                 let (frames, params) = if flush {
                     // No audio to touch, no input, and parameters wait for the device's return.
                     (0, &[][..])
@@ -883,6 +898,8 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
                     buses: &mut *at.buses,
                     direct: at.direct,
                     merge: &mut *at.merge,
+                    tuning: at.tuning,
+                    tuned: &mut *at.tuned,
                 };
                 rack.run(
                     &mut left[..0],
@@ -1040,6 +1057,15 @@ pub struct TrackNode {
     /// MIDI addressed to one device in this track this block.
     pub(crate) direct: Vec<(DeviceId, MidiEvent)>,
     merge: EventQueue,
+    /// The tuning system this track plays, if it plays one.
+    pub(crate) tuning: Option<Arc<TuningTable>>,
+    /// What the controller's keys play under that tuning.
+    pub(crate) key_layout: Option<Arc<KeyLayout>>,
+    tuned: EventQueue,
+    /// Puts each note on a channel of its own on the way out of the track.
+    pub(crate) mpe_out: Option<Box<MpeEncoder>>,
+    /// The hardware MIDI port this track plays out of, by its number.
+    pub(crate) hw_port: Option<u16>,
     /// How this track's input is monitored.
     pub(crate) gate: InputGate,
     /// Holds clips back to meet later inputs.
@@ -1117,6 +1143,11 @@ impl TrackNode {
             midi_out: Vec::with_capacity(MAX_EVENTS),
             direct: Vec::with_capacity(MAX_EVENTS),
             merge: EventQueue::with_capacity(MAX_EVENTS),
+            tuning: None,
+            key_layout: None,
+            tuned: EventQueue::with_capacity(MAX_EVENTS),
+            mpe_out: None,
+            hw_port: None,
             gate: InputGate::default(),
             own_line: None,
             own_delay: FadingDelay::default(),
@@ -1360,11 +1391,21 @@ impl TrackNode {
         self.own_delay.set_target(io.own_delay);
     }
 
+    /// Keeps this track's players reading the Set's grooves.
+    pub(crate) fn adopt_grooves(
+        &mut self,
+        bank: &Option<Arc<GrooveBank>>,
+        spent: &mut dyn FnMut(Arc<GrooveBank>),
+    ) {
+        self.player.adopt_grooves(bank, spent);
+        self.lane.adopt_grooves(bank, spent);
+    }
+
     /// Forget everything the running plan wired up here.
     pub(crate) fn clear_routing(&mut self) {
         self.taps = TapSlots::default();
         self.rack_out_taps = [None; MAX_SENDS];
-        self.midi_tap = false;
+        self.midi_tap = self.hw_port.is_some() || self.mpe_out.is_some();
         self.gate = InputGate::default();
         self.own_delay.set_target(0);
         self.devices.iter_mut().for_each(|d| d.clear_routing());
@@ -1542,6 +1583,8 @@ impl TrackNode {
                         buses: &mut *buses,
                         direct: &self.direct,
                         merge: &mut self.merge,
+                        tuning: self.tuning.as_deref(),
+                        tuned: &mut self.tuned,
                     },
                 },
             )
@@ -1551,12 +1594,24 @@ impl TrackNode {
         }
         if self.midi_tap {
             let out = held.map_or(&*segment, |q| self.midi[q].as_slice());
-            for e in out {
-                if self.midi_out.len() < self.midi_out.capacity() {
-                    let mut e = *e;
+            let midi_out = &mut self.midi_out;
+            let mut send = |mut e: MidiEvent| {
+                if midi_out.len() < midi_out.capacity() {
                     e.offset += from as u32;
-                    self.midi_out.push(e);
+                    midi_out.push(e);
                 }
+            };
+            match self.mpe_out.as_deref_mut() {
+                Some(encoder) => {
+                    // A target with no idea of tuning hears it as each note's own bend.
+                    let tuned = &mut self.tuned;
+                    tuned.clear();
+                    for e in out {
+                        tuned.push(self.tuning.as_deref().map_or(*e, |t| t.tune(*e)));
+                    }
+                    encoder.encode(tuned.as_slice(), &mut send);
+                }
+                None => out.iter().for_each(|e| send(*e)),
             }
         }
         self.cursor.frames = to;

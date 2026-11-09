@@ -37,11 +37,14 @@ fn pads_of(d: &Device) -> Option<Vec<(u8, String)>> {
     }
 }
 
+/// What the Info View says about a note under a tuning system.
+pub(super) fn tuned_note_text(key: u8, t: &Tuning) -> String {
+    format!("{} — {:.2} Hz", t.key_label(key), t.key_hz(key))
+}
+
 /// A key on a loaded tuning, as degree and pseudo-octave.
 pub(super) fn tuning_label(key: u8, t: &Tuning) -> String {
-    let steps = t.cents.len().saturating_sub(1).max(1) as i32;
-    let from = key as i32 - t.reference_note as i32;
-    format!("{}.{}", from.rem_euclid(steps) + 1, from.div_euclid(steps))
+    t.key_label(key)
 }
 
 /// What a double click on the time ruler zooms to: the selection, or from first note to last.
@@ -187,7 +190,7 @@ pub(super) fn keys(
     let clip = &shown[fg].clip;
     let scale = Session::pitch_scale(clip);
     let pads = drum_pads(session, shown[fg].r.track());
-    let tuning = session.project.tuning.as_ref();
+    let tuning = session.track_tuning(shown[fg].r.track());
     let spelling = state.piano.spelling;
     let first = ((geo.scroll.y / geo.kh).floor() as usize).min(geo.rows.len());
     let last = (((geo.scroll.y + geo.grid.height()) / geo.kh).ceil() as usize).min(geo.rows.len());
@@ -217,6 +220,14 @@ pub(super) fn keys(
             r
         };
         p.rect_filled(kr.shrink2(Vec2::new(0.0, 0.5)), 0.0, fill);
+        if let Some(t) = tuning.filter(|_| ui.rect_contains_pointer(kr)) {
+            let resp = ui.interact(
+                kr,
+                ui.scope_id().with(("ruler_pitch", key)),
+                egui::Sense::hover(),
+            );
+            info(resp, tuned_note_text(key, t));
+        }
         let name = pads
             .iter()
             .find(|(k, _)| *k == key)

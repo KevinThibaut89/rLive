@@ -258,6 +258,8 @@ pub struct Shifter {
     tone: [Biquad; 2],
     tone_dirty: bool,
     held: [u8; MAX_HELD_NOTES],
+    /// Each key's offset from 12-TET, as last heard from a tuning system.
+    key_tuning: [f32; 128],
     held_count: usize,
     bend: f32,
     /// The MIDI pitch and where it's gliding to, in semitones.
@@ -288,6 +290,7 @@ impl Default for Shifter {
             tone: [Biquad::default(); 2],
             tone_dirty: true,
             held: [0; MAX_HELD_NOTES],
+            key_tuning: [0.0; 128],
             held_count: 0,
             bend: 0.0,
             midi_pitch: 0.0,
@@ -369,7 +372,8 @@ impl Shifter {
 
     fn midi(&mut self, message: MidiMessage) {
         match message {
-            MidiMessage::NoteOn { key, .. } => {
+            MidiMessage::NoteOn { key, tuning, .. } => {
+                self.key_tuning[(key & 127) as usize] = tuning;
                 self.note_off(key);
                 if self.held_count == MAX_HELD_NOTES {
                     self.held.copy_within(1.., 0);
@@ -377,7 +381,7 @@ impl Shifter {
                 }
                 self.held[self.held_count] = key;
                 self.held_count += 1;
-                self.midi_target = key as f32;
+                self.midi_target = key as f32 + tuning;
                 if !self.midi_seen {
                     self.midi_pitch = self.midi_target;
                     self.midi_seen = true;
@@ -386,7 +390,8 @@ impl Shifter {
             MidiMessage::NoteOff { key, .. } => {
                 self.note_off(key);
                 if self.held_count > 0 {
-                    self.midi_target = self.held[self.held_count - 1] as f32;
+                    let top = self.held[self.held_count - 1];
+                    self.midi_target = top as f32 + self.key_tuning[(top & 127) as usize];
                 }
             }
             MidiMessage::PitchBend { value, .. } => self.bend = value,

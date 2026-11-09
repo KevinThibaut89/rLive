@@ -67,6 +67,7 @@ pub(super) struct MidiSlotTake {
 #[derive(Default)]
 pub(super) struct OverdubState {
     open: HashMap<(TrackId, u8), (f64, f32)>,
+    expr: HashMap<(TrackId, u8), rlive_project::NoteExpression>,
     /// Which pass of its loop each track's clip was on, to see it come around.
     last: HashMap<TrackId, i64>,
 }
@@ -927,12 +928,33 @@ impl Session {
                 self.overdubs
                     .open
                     .insert((track, key), (position, velocity));
+                self.overdubs.expr.remove(&(track, key));
+            }
+            M::NoteExpr {
+                key, kind, value, ..
+            } => {
+                let Some((start, _)) = self.overdubs.open.get(&(track, key)).copied() else {
+                    return;
+                };
+                let time = if position >= start {
+                    position - start
+                } else {
+                    position - start + len
+                };
+                let expr = self.overdubs.expr.entry((track, key)).or_default();
+                let points = match kind {
+                    rlive_core::ExprKind::Pitch => &mut expr.pitch,
+                    rlive_core::ExprKind::Slide => &mut expr.slide,
+                    rlive_core::ExprKind::Pressure => &mut expr.pressure,
+                };
+                crate::recording::push_point(points, time, f64::from(value));
             }
             M::NoteOn { key, .. } | M::NoteOff { key, .. } => {
                 let q = self.project.record_quantize;
                 let Some((start, velocity)) = self.overdubs.open.remove(&(track, key)) else {
                     return;
                 };
+                let expr = self.overdubs.expr.remove(&(track, key));
                 let Some(clip) = self.clip_mut(track, slot) else {
                     return;
                 };
@@ -949,12 +971,10 @@ impl Session {
                 .round()
                 .max(10.0) as u64;
                 if let Some(notes) = clip.notes_mut() {
-                    notes.push(rlive_project::NoteData::new(
-                        start_tick % len,
-                        length,
-                        key,
-                        velocity,
-                    ));
+                    let mut note =
+                        rlive_project::NoteData::new(start_tick % len, length, key, velocity);
+                    note.expr = expr.and_then(crate::recording::thinned).map(Box::new);
+                    notes.push(note);
                 }
                 self.sync_clip(track, slot);
                 self.mark_edit("Record");

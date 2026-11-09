@@ -36,7 +36,7 @@ pub use clip::{
 };
 pub use commands::{
     ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, PreviewCmd, RecordCmd, SceneInfo,
-    TransportCmd, NO_OLD_SLOT,
+    TransportCmd, TuningCmd, NO_OLD_SLOT,
 };
 use delay::FadingDelay;
 pub use delay::{StereoLine, TapLines, FADE_FRAMES, MAX_COMPENSATION_FRAMES};
@@ -55,7 +55,7 @@ pub use rack::{
 use rlive_core::{
     db_to_gain,
     time::{BarMap, TempoRun, TimeMaps},
-    DeviceId, MidiMessage, Quantize, TimeSignature, TrackId, TransportInfo,
+    DeviceId, GrooveBank, MidiMessage, Quantize, TimeSignature, TrackId, TransportInfo,
 };
 use shared::EngineShared;
 use std::sync::atomic::Ordering;
@@ -73,6 +73,18 @@ const EVENT_CAPACITY: usize = 8192;
 const MIDI_CAPACITY: usize = 2048;
 const PLAYED_CAPACITY: usize = 2048;
 const REMOTE_CAPACITY: usize = 2048;
+const HW_MIDI_CAPACITY: usize = 4096;
+
+/// A message on its way to a hardware MIDI port.
+#[derive(Debug, Clone, Copy)]
+pub struct HwMidi {
+    pub port: u16,
+    /// When the block it belongs to began.
+    pub block: Instant,
+    /// How far into that block it falls, in seconds.
+    pub offset: f64,
+    pub message: MidiMessage,
+}
 
 /// Mapped controller input, on its way from the MIDI thread straight to the audio thread.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -123,6 +135,8 @@ pub enum EngineCommand {
     Clip(ClipCmd),
     Param(ParamCmd),
     Record(RecordCmd),
+    /// Tuning systems and MIDI output.
+    Tuning(TuningCmd),
     /// Structural edits, applied together between two blocks.
     Graph(Box<GraphTxn>),
     /// A file heard from the browser.
@@ -281,6 +295,8 @@ pub struct PlayedNote {
 pub struct EngineHandle {
     commands: rtrb::Producer<EngineCommand>,
     garbage: rtrb::Consumer<Garbage>,
+    /// What tracks send to hardware MIDI, until [`Self::take_hw_midi`].
+    hw_midi: Option<rtrb::Consumer<HwMidi>>,
     events: rtrb::Consumer<EngineEvent>,
     played: rtrb::Consumer<PlayedNote>,
     pub shared: Arc<EngineShared>,
@@ -316,6 +332,11 @@ impl EngineHandle {
 
     pub fn poll_event(&mut self) -> Option<EngineEvent> {
         self.events.pop().ok()
+    }
+
+    /// What tracks send to hardware MIDI, handed out once to whoever owns the ports.
+    pub fn take_hw_midi(&mut self) -> Option<rtrb::Consumer<HwMidi>> {
+        self.hw_midi.take()
     }
 
     /// The next note played since the last call.
@@ -629,6 +650,9 @@ pub struct Engine {
     garbage: rtrb::Producer<Garbage>,
     events: rtrb::Producer<EngineEvent>,
     played: rtrb::Producer<PlayedNote>,
+    hw_midi: rtrb::Producer<HwMidi>,
+    /// The Set's grooves, as tracks are to read them.
+    grooves: Option<Arc<GrooveBank>>,
     midi: rtrb::Consumer<(TrackId, MidiMessage, Instant)>,
     remote: rtrb::Consumer<RemoteCmd>,
     shared: Arc<EngineShared>,
@@ -640,6 +664,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
     let (gb_tx, gb_rx) = rtrb::RingBuffer::new(GARBAGE_CAPACITY);
     let (ev_tx, ev_rx) = rtrb::RingBuffer::new(EVENT_CAPACITY);
     let (played_tx, played_rx) = rtrb::RingBuffer::new(PLAYED_CAPACITY);
+    let (hw_tx, hw_rx) = rtrb::RingBuffer::new(HW_MIDI_CAPACITY);
     let (midi_tx, midi_rx) = rtrb::RingBuffer::new(MIDI_CAPACITY);
     let (remote_tx, remote_rx) = rtrb::RingBuffer::new(REMOTE_CAPACITY);
     let shared = Arc::new(EngineShared::default());
@@ -712,6 +737,8 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         garbage: gb_tx,
         events: ev_tx,
         played: played_tx,
+        hw_midi: hw_tx,
+        grooves: None,
         midi: midi_rx,
         remote: remote_rx,
         shared: shared.clone(),
@@ -719,6 +746,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
     let handle = EngineHandle {
         commands: cmd_tx,
         garbage: gb_rx,
+        hw_midi: Some(hw_rx),
         events: ev_rx,
         played: played_rx,
         shared,
@@ -740,6 +768,25 @@ fn retire(garbage: &mut rtrb::Producer<Garbage>, g: Garbage) {
 }
 
 impl Engine {
+    /// Hands this block's MIDI to the thread that owns the hardware ports.
+    fn send_hw_midi(&mut self) {
+        let mut now = None;
+        for t in self.tracks.iter() {
+            let Some(port) = t.hw_port else {
+                continue;
+            };
+            let block = *now.get_or_insert_with(Instant::now);
+            for e in t.midi_out.iter() {
+                let _ = self.hw_midi.push(HwMidi {
+                    port,
+                    block,
+                    offset: f64::from(e.offset) / self.sample_rate,
+                    message: e.message,
+                });
+            }
+        }
+    }
+
     pub fn sample_rate(&self) -> f64 {
         self.sample_rate
     }
@@ -771,6 +818,7 @@ impl Engine {
             bar_start: bar.start,
             loop_range: self.loop_range,
             scale: None,
+            groove_amount: self.grooves.as_ref().map_or(1.0, |b| b.amount),
         }
     }
 
@@ -907,6 +955,7 @@ impl Engine {
             EngineCommand::Clip(c) => self.handle_clip(c),
             EngineCommand::Param(c) => self.handle_param(c),
             EngineCommand::Record(c) => self.handle_record(c),
+            EngineCommand::Tuning(c) => self.handle_tuning(c),
             EngineCommand::Graph(c) => self.handle_graph(c),
             EngineCommand::Preview(c) => self.handle_preview(c),
         }
@@ -1226,6 +1275,10 @@ impl Engine {
             if let Some(lane) = t.lane.spent.take() {
                 retire(&mut self.garbage, Garbage::Shared(lane));
             }
+            let garbage = &mut self.garbage;
+            t.adopt_grooves(&self.grooves, &mut |old| {
+                retire(garbage, Garbage::Shared(old));
+            });
         }
         if self.recording {
             self.log_session_playback();
@@ -1253,6 +1306,7 @@ impl Engine {
         }
         self.run_captures(plan, inputs, start, time);
         self.write_outputs(plan, outputs, start, frames);
+        self.send_hw_midi();
         self.plans = plans;
         self.clock += frames as u64;
 

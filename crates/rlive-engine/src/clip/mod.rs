@@ -8,6 +8,8 @@ pub(crate) mod envelopes;
 #[cfg(test)]
 mod following_tests;
 mod frozen;
+#[cfg(test)]
+mod groove_tests;
 mod launcher;
 mod midi;
 

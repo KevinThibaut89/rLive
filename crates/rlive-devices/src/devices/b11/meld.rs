@@ -1305,6 +1305,7 @@ impl Meld {
         let channel_press = self.alloc.channel_pressure(index);
         let bend = self.alloc.channel_bend(index);
         let note_bend = self.alloc.note_bend(index);
+        let tuning = self.alloc.tuning(index);
         let scale = self.active_scale();
         let use_scale = self.on(USE_SCALE);
         let mw = self.mod_wheel;
@@ -1512,7 +1513,7 @@ impl Meld {
                 }
                 None => glided + semis as f32 + quant.round(),
             };
-            let pitch = note + octave + cents + ev.bus.offset(T_PITCH) * PITCH_RANGE_ST;
+            let pitch = note + tuning + octave + cents + ev.bus.offset(T_PITCH) * PITCH_RANGE_ST;
             let kind = iv(b + E_TYPE).min(OSC_TYPES.len() - 1);
             let aware = osc_aware && is_scale_aware(kind);
             let osc_macro =

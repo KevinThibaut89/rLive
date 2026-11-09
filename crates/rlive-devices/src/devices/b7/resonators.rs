@@ -16,9 +16,10 @@ use crate::dsp::{Biquad, BiquadKind};
 use crate::{BuiltinInfo, DeviceRole};
 use rlive_core::{
     AudioBuffer, BlockStep, DeviceDesc, Item, ParamId, ParamInfo, ProcessContext, Processor,
-    ScaleInfo, Section, Status, Tail, TransportInfo,
+    Resource, ScaleInfo, Section, Status, Tail, TransportInfo, TuningTable, TUNING_SLOT,
 };
 use std::f32::consts::TAU;
+use std::sync::Arc;
 
 pub const MODE: u32 = 0;
 pub const FILTER_TYPE: u32 = 1;
@@ -206,6 +207,7 @@ pub struct Resonators {
     voices: [Voice; 5],
     /// The MIDI pitch each voice sounds, as last worked out.
     pitches: [f32; 5],
+    tuning: Option<Arc<TuningTable>>,
     /// Whether the delay lengths are at their targets yet.
     placed: bool,
     frames: usize,
@@ -225,6 +227,7 @@ impl Default for Resonators {
             filter_dirty: true,
             voices: Default::default(),
             pitches: [60.0; 5],
+            tuning: None,
             placed: false,
             frames: 0,
         }
@@ -241,10 +244,13 @@ fn one_pole_response(a: f32, w: f32) -> (f32, f32) {
     )
 }
 
-/// A MIDI pitch to hertz. When tuning systems arrive (roadmap A14) this is where one takes over:
-/// the Note and Pitch controls will index the system's table instead.
-fn note_to_hz(note: f32) -> f32 {
-    midi_to_hz(note)
+/// A MIDI pitch to hertz: through the tuning system, if the track plays one, so the Note and
+/// Pitch controls name notes of the tuning.
+fn note_to_hz(note: f32, tuning: Option<&TuningTable>) -> f32 {
+    match tuning {
+        Some(t) => t.note_hz(note),
+        None => midi_to_hz(note),
+    }
 }
 
 /// The pitches of the five resonators as fractional MIDI notes, from Note, the four Pitch values
@@ -344,7 +350,7 @@ impl Resonators {
         self.pitches = voice_pitches(self.v[NOTE as usize], fine, pitch, scale);
         for k in 0..5 {
             let (on, _, _, gain) = self.voice_controls(k);
-            let hz = note_to_hz(self.pitches[k]).min(self.sr * 0.45);
+            let hz = note_to_hz(self.pitches[k], self.tuning.as_deref()).min(self.sr * 0.45);
             let w = TAU * hz / self.sr;
             // Mode B closes the loop on itself with its sign flipped, half a period long.
             let period = self.sr / hz;
@@ -429,6 +435,20 @@ impl Resonators {
 }
 
 impl Processor for Resonators {
+    fn set_resource(&mut self, slot: u32, resource: Resource) -> Option<Resource> {
+        if slot != TUNING_SLOT {
+            return Some(resource);
+        }
+        match resource.downcast::<TuningTable>() {
+            Ok(table) => {
+                let old = self.tuning.replace(table);
+                self.filter_dirty = true;
+                old.map(|t| t as Resource)
+            }
+            Err(other) => Some(other),
+        }
+    }
+
     fn activate(&mut self, sample_rate: f64, _: usize) {
         self.sr = sample_rate as f32;
         let longest = (sample_rate as f32 / midi_to_hz(0.0)) as usize + 16;

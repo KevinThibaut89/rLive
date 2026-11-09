@@ -58,7 +58,11 @@ fn note(start: u64, length: u64, key: u8) -> Note {
 fn points(points: &[(f64, f32)]) -> Vec<ExprPoint> {
     points
         .iter()
-        .map(|&(time, value)| ExprPoint { time, value })
+        .map(|&(time, value)| ExprPoint {
+            time,
+            value,
+            curve: 0.0,
+        })
         .collect()
 }
 

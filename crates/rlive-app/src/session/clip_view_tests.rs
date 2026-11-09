@@ -906,6 +906,7 @@ fn hot_swapping_a_groove_replaces_it_in_the_pool_and_for_every_clip() {
         timing: 0.0,
         random: 0.0,
         velocity: 0.0,
+        pattern: Default::default(),
     };
     let slot = r.slot();
     let first = groove("Swing");

@@ -2,8 +2,12 @@
 
 use super::data::{ClipData, ExprPoint, MidiClip, Note, NoteExpression};
 use super::BlockTime;
-use rlive_core::{ClipRegion, ExprKind, MidiEvent, MidiMessage, NoteId, NoteIds, NoteSpace};
+use rlive_core::envelope::{self, Interp};
+use rlive_core::{
+    ClipRegion, ExprKind, GrooveBank, GrooveMap, MidiEvent, MidiMessage, NoteId, NoteIds, NoteSpace,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// The softest a note with Velocity Deviation can come out: a velocity of 0 would be a note-off.
 const MIN_VELOCITY: f32 = 1.0 / 127.0;
@@ -42,6 +46,9 @@ pub(crate) struct Voices {
     luck: u64,
     /// Semitones the clip playing was launched at.
     pub transpose: i8,
+    /// The Set's grooves. Clips play through these as they're heard, so changing a groove moves
+    /// the notes of every clip using it without touching a note.
+    grooves: Option<Arc<GrooveBank>>,
 }
 
 /// Each player starts somewhere different, so two tracks playing the same clip don't agree.
@@ -51,11 +58,28 @@ impl Voices {
     pub fn new(space: NoteSpace) -> Self {
         Self {
             transpose: 0,
+            grooves: None,
             sounding: [SILENT; MAX_SOUNDING],
             len: 0,
             ids: NoteIds::new(space),
             luck: NEXT_LUCK.fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed),
         }
+    }
+
+    /// Starts reading `bank`, handing back what it was reading before for the caller to retire.
+    pub(crate) fn adopt_grooves(
+        &mut self,
+        bank: &Option<Arc<GrooveBank>>,
+    ) -> Option<Arc<GrooveBank>> {
+        let same = match (&self.grooves, bank) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            return None;
+        }
+        std::mem::replace(&mut self.grooves, bank.clone())
     }
 
     /// Sets what Chance and Velocity Deviation draw from, so a test can repeat them.
@@ -80,6 +104,11 @@ impl Voices {
             .wrapping_add(what.wrapping_mul(0xd6e8_feb8_6659_fd93))
             .wrapping_add(salt));
         (h >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    /// The groove's random number for note `index` on this pass, -1..1.
+    fn groove_roll(&self, pass: i64, index: u32) -> f32 {
+        self.draw(pass, u64::from(index), 4) * 2.0 - 1.0
     }
 
     /// Whether note `index` plays on this pass, and how hard.
@@ -192,6 +221,44 @@ fn pass_window(region: &ClipRegion, origin: f64, k: i64) -> (f64, f64, f64) {
     (base, from, region.content_end())
 }
 
+/// Where a note sounds on one pass, after its groove.
+fn placed(
+    note: &Note,
+    index: u32,
+    pass: i64,
+    base: f64,
+    (window_from, window_to): (f64, f64),
+    groove: Option<&GrooveMap>,
+    voices: &Voices,
+) -> NoteSpan {
+    let start = note.start as f64;
+    let end = ((note.start + note.length.max(1)) as f64).min(window_to);
+    let shift = groove.map_or(0.0, |g| {
+        let roll = voices.groove_roll(pass, index);
+        // Nothing plays before the window it belongs to has begun.
+        g.place(start, note.velocity, roll).0.max(window_from) - start
+    });
+    NoteSpan {
+        on: base + start + shift,
+        off: base + end + shift,
+    }
+}
+
+/// How hard a note plays after its groove.
+fn grooved_velocity(
+    velocity: f32,
+    note: &Note,
+    index: u32,
+    pass: i64,
+    groove: Option<&GrooveMap>,
+    voices: &Voices,
+) -> f32 {
+    groove.map_or(velocity, |g| {
+        g.place(note.start as f64, velocity, voices.groove_roll(pass, index))
+            .1
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_midi(
     clip: &MidiClip,
@@ -215,13 +282,19 @@ pub(super) fn render_midi(
     if region.lead() > 0.0 {
         k_last = k_last.max(0);
     }
-    let lookback = clip.max_len as f64;
+    // Held out of `voices` for the loop, which has to change what it starts and stops.
+    let grooves = voices.grooves.take();
+    let groove = clip
+        .groove
+        .and_then(|i| grooves.as_deref().and_then(|b| b.get(i)));
+    let reach = groove.map_or(0.0, GrooveMap::reach);
+    let lookback = clip.max_len as f64 + reach;
     for k in k_first..=k_last {
         let (base, window_from, window_to) = pass_window(&region, origin, k);
         // One tick of slack keeps float error in `base` from dropping a boundary note; the
         // exact comparisons below decide what actually fires.
         let scan_from = a - base - lookback - 1.0;
-        let scan_to = seg_end - base + 1.0;
+        let scan_to = seg_end - base + 1.0 + reach;
         let first = clip.notes.partition_point(|n| (n.start as f64) < scan_from);
         for (i, note) in clip.notes.iter().enumerate().skip(first) {
             let start = note.start as f64;
@@ -233,13 +306,23 @@ pub(super) fn render_midi(
             }
             let index = i as u32;
             let key = voices.keyed(note.key);
-            let on = base + start;
-            let off = base + ((note.start + note.length.max(1)) as f64).min(window_to);
+            let span = placed(
+                note,
+                index,
+                k,
+                base,
+                (window_from, window_to),
+                groove,
+                voices,
+            );
+            let (on, off) = (span.on, span.off);
             // Start before stop, or a note shorter than the block never gets its note-off.
             // Notes meeting at a boundary still come off first: the earlier one is earlier here
             // (and in event order, once the block is sorted).
             if on >= a && on < seg_end {
-                let velocity = voices.fate(note, index, k);
+                let velocity = voices
+                    .fate(note, index, k)
+                    .map(|v| grooved_velocity(v, note, index, k, groove, voices));
                 if let Some((velocity, id)) =
                     velocity.and_then(|v| Some((v, voices.on(index, key, note.release)?)))
                 {
@@ -251,7 +334,7 @@ pub(super) fn render_midi(
                 }
             }
             if let (Some(expr), Some(id)) = (&note.expr, voices.id(index)) {
-                push_ramps(expr, key, id, NoteSpan { on, off }, (a, seg_end), time, ev);
+                push_ramps(expr, key, id, span, (a, seg_end), time, ev);
             }
             if off >= a && off < seg_end {
                 if let Some(voice) = voices.off(index) {
@@ -260,6 +343,7 @@ pub(super) fn render_midi(
             }
         }
     }
+    voices.grooves = grooves;
 }
 
 /// Start the MIDI notes that are already sounding at song tick `at`, at frame `offset`.
@@ -287,33 +371,54 @@ pub(crate) fn chase(
         0
     };
     let (base, window_from, window_to) = pass_window(&region, origin, k);
-    let scan_from = at - base - midi.max_len as f64 - 1.0;
+    let grooves = voices.grooves.take();
+    let groove = midi
+        .groove
+        .and_then(|i| grooves.as_deref().and_then(|b| b.get(i)));
+    let reach = groove.map_or(0.0, GrooveMap::reach);
+    let scan_from = at - base - midi.max_len as f64 - 1.0 - reach;
     let first = midi.notes.partition_point(|n| (n.start as f64) < scan_from);
     for (i, note) in midi.notes.iter().enumerate().skip(first) {
         let start = note.start as f64;
-        if base + start >= at || start >= window_to {
+        if base + start - reach >= at || start >= window_to {
             break;
         }
         if start < window_from {
             continue;
         }
-        let off = base + ((note.start + note.length.max(1)) as f64).min(window_to);
-        if off > at {
+        let index = i as u32;
+        let span = placed(
+            note,
+            index,
+            k,
+            base,
+            (window_from, window_to),
+            groove,
+            voices,
+        );
+        if span.on >= at {
+            continue;
+        }
+        if span.off > at {
             let key = voices.keyed(note.key);
-            let velocity = voices.fate(note, i as u32, k);
+            let velocity = voices
+                .fate(note, index, k)
+                .map(|v| grooved_velocity(v, note, index, k, groove, voices));
             if let Some((velocity, id)) =
-                velocity.and_then(|v| Some((v, voices.on(i as u32, key, note.release)?)))
+                velocity.and_then(|v| Some((v, voices.on(index, key, note.release)?)))
             {
                 push_event(ev, MidiEvent::new(offset, note_on(velocity, key, id)));
                 if let Some(expr) = &note.expr {
-                    push_expression(expr, key, id, at - (base + start), offset, ev);
+                    push_expression(expr, key, id, at - span.on, offset, ev);
                 }
             }
         }
     }
+    voices.grooves = grooves;
 }
 
 /// Where a note sounds, in song ticks.
+#[derive(Clone, Copy)]
 struct NoteSpan {
     on: f64,
     off: f64,
@@ -378,22 +483,9 @@ fn push_ramps(
     }
 }
 
-/// An envelope's value `position` ticks into the note, straight between points and held
-/// beyond them.
+/// An envelope's value `position` ticks into the note, as every envelope is read.
 fn value_at(points: &[ExprPoint], position: f64) -> f32 {
-    let i = points.partition_point(|p| p.time <= position);
-    match (i.checked_sub(1).map(|j| points[j]), points.get(i).copied()) {
-        (Some(p), Some(next)) => {
-            let span = next.time - p.time;
-            if span <= 0.0 {
-                return next.value;
-            }
-            let t = ((position - p.time) / span) as f32;
-            p.value + (next.value - p.value) * t
-        }
-        (Some(p), None) | (None, Some(p)) => p.value,
-        (None, None) => 0.0,
-    }
+    envelope::value_at(points, position, Interp::Smooth).unwrap_or(0.0) as f32
 }
 
 /// Expression leaves room in the block's event list, so a burst of it can never crowd out
@@ -432,6 +524,26 @@ pub(crate) fn push_event(events: &mut Vec<MidiEvent>, e: MidiEvent) {
 #[cfg(test)]
 mod launch_transpose_tests {
     use super::*;
+
+    #[test]
+    fn expression_reads_the_shared_curve() {
+        use rlive_core::envelope::curve_shape;
+        let points = [
+            ExprPoint {
+                time: 0.0,
+                value: 0.0,
+                curve: 0.6,
+            },
+            ExprPoint {
+                time: 100.0,
+                value: 2.0,
+                curve: 0.0,
+            },
+        ];
+        let want = 2.0 * curve_shape(0.5, 0.6) as f32;
+        assert!((value_at(&points, 50.0) - want).abs() < 1e-5);
+        assert_eq!(value_at(&points, 200.0), 2.0, "held past the last point");
+    }
 
     #[test]
     fn a_transposed_launch_shifts_keys_and_stays_in_range() {

@@ -633,6 +633,24 @@ fn device_menu(
         cx.queue.push(chain, Action::Fold(dev.id, !dev.expanded));
         ui.close();
     }
+    if is_plugin {
+        let on = dev.mpe.is_some();
+        if ui.selectable_label(on, "Enable MPE Mode").clicked() {
+            let out = (!on).then(rlive_core::MpeOutput::default);
+            cx.queue.push(chain, Action::SetMpe(dev.id, out));
+            ui.close();
+        }
+        if ui.button("MPE Settings…").clicked() {
+            if !on {
+                cx.queue.push(
+                    chain,
+                    Action::SetMpe(dev.id, Some(rlive_core::MpeOutput::default())),
+                );
+            }
+            cx.ui.mpe_settings = Some(crate::ui::midi_settings::MpeTarget::Device(chain, dev.id));
+            ui.close();
+        }
+    }
     if is_plugin && ui.button("Reload Plug-In").clicked() {
         cx.queue.push(chain, Action::Reload(dev.id));
         ui.close();
@@ -873,6 +891,8 @@ fn param_control(
     };
     let text = rt.format_value(prm, shown);
     let re_enable = std::cell::Cell::new(false);
+    // A tuning system has no scale for a device to follow.
+    let disabled = disabled || (prm.name == "Use Current Scale" && cx.session.tuning().is_some());
     let state = ControlState {
         effective: effective.filter(|_| !owned),
         disabled,

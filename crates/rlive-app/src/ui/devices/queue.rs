@@ -22,6 +22,8 @@ pub(crate) enum Action {
     CloseEditor(DeviceId),
     LoadSample(DeviceId, usize),
     Reload(DeviceId),
+    /// A plug-in's MPE Mode and channels.
+    SetMpe(DeviceId, Option<rlive_core::MpeOutput>),
     ShowAll(DeviceId),
     /// Open the Info View's editor on this device.
     EditInfo(DeviceId),
@@ -120,6 +122,7 @@ fn apply(
             }
         }
         Action::Reload(id) => session.reload_device(chain, id),
+        Action::SetMpe(id, out) => session.set_device_mpe(chain, id, out),
         Action::SetSidechain(id, source) => {
             if !session.set_sidechain(chain, id, source) {
                 *status = "That source would make a feedback loop".to_string();
