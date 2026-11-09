@@ -8,10 +8,12 @@ mod auto_filter_display;
 mod b1_leds;
 mod channel_eq_display;
 mod clip_led;
+mod collision_display;
 mod compressor_display;
 mod corpus_display;
 mod drift_display;
 mod echo_tunnel;
+mod electric_display;
 mod eq_eight_display;
 mod eq_three_leds;
 mod gain_reduction;
@@ -21,6 +23,7 @@ mod hybrid_ir_view;
 mod looper_transport;
 mod midi_monitor;
 mod multiband_display;
+mod operator_display;
 mod plot;
 mod roar_matrix;
 mod sample_ui;
@@ -28,6 +31,7 @@ mod sampler_panels;
 mod scale_matrix;
 mod simpler_panels;
 mod synth_matrix;
+mod tension_display;
 mod velocity_curve;
 mod wavetable_view;
 
@@ -169,6 +173,11 @@ pub const PANELS: &[PanelDef] = &[
     synth_matrix::MELD,
     synth_matrix::WAVETABLE,
     wavetable_view::PANEL,
+    collision_display::RES_1,
+    collision_display::RES_2,
+    electric_display::PANEL,
+    tension_display::PANEL,
+    operator_display::PANEL,
 ];
 
 /// What a panel takes up when the table has no entry for it.

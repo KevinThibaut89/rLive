@@ -988,10 +988,10 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 - `[x]` A band-limited non-modelled version would be cheaper.
 
 **Collision (713-722)** [L] {PM}
-- `[ ]` Not stated. Modelled mallet percussion (AAS): exciters feeding two stereo resonators.
-- `[ ]` Mallet (stiffness, noise, colour); Noise exciter with filter and ADSR.
-- `[ ]` Resonators: Beam, Marimba, String, Membrane, Plate, Pipe, Tube; Quality Eco-High; decay, material/radius, ratio, brightness, inharmonicity, opening, hit position with random, Note Off damping, listen L/R; tuning with pitch env; bleed, gain, pan; copy 1↔2.
-- `[ ]` 2 LFOs that can modulate each other; MIDI/MPE tab; 1>2 or 1+2 structure.
+- `[~]` Not stated. Modelled mallet percussion (AAS): exciters feeding two stereo resonators.
+- `[x]` Mallet (stiffness, noise, colour); Noise exciter with filter and ADSR.
+- `[~]` Resonators: Beam, Marimba, String, Membrane, Plate, Pipe, Tube; Quality Eco-High; decay, material/radius, ratio, brightness, inharmonicity, opening, hit position with random, Note Off damping, listen L/R; tuning with pitch env; bleed, gain, pan; copy 1↔2.
+- `[x]` 2 LFOs that can modulate each other; MIDI/MPE tab; 1>2 or 1+2 structure.
 
 **Drift (722-730)** [M] {PM: DFM-1, MS2 filters}
 - `[~]` Not stated. Low-CPU subtractive, fully MPE.
@@ -1009,9 +1009,9 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 - `[ ]` Depends on Drum Rack, browser.
 
 **Electric (736-741)** [L] {PM}
-- `[ ]` Not stated. Modelled tine electric piano (AAS).
-- `[ ]` Hammer (stiffness, noise, force); Fork tine and tone (colour, decay, release); Pickup (symmetry, distance, R/W type, in/out); damper noise.
-- `[ ]` Global: voices, tuning, stretch, bend and per-note bend.
+- `[~]` Not stated. Modelled tine electric piano (AAS).
+- `[~]` Hammer (stiffness, noise, force); Fork tine and tone (colour, decay, release); Pickup (symmetry, distance, R/W type, in/out); damper noise.
+- `[x]` Global: voices, tuning, stretch, bend and per-note bend.
 
 **External Instrument (741-742)** [M] {HW optional}
 - `[ ]` Not stated. Routing utility: MIDI to port or multitimbral plug-in, audio returned.
@@ -1035,11 +1035,11 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 - `[x]` Per-engine tone filter, per-voice drive and limiter; mono/poly 2-12, stacked voices, Spread.
 
 **Operator (755-772)** [L] {PM: filter circuits}
-- `[ ]` Not stated. 4-oscillator FM combined with subtractive and additive; 11 algorithms.
-- `[ ]` Waves: sine, 4/8-bit, digital saw/square, resynthesised saw/square/triangle, 2 noises; harmonics editor 16/32/64 with Repeat, odd/even, Normalize, .ams export/import.
-- `[ ]` Coarse/fine or fixed frequency, velocity-to-pitch with quantise, phase, retrigger, feedback.
-- `[ ]` 7 envelopes (Loop, Beat, Sync, Trigger; slopes on filter and pitch); LFO reaching audio rate.
-- `[ ]` Filter with waveshaper; Time, Tone, Antialias, Interpolation; 5 MIDI sources to 2 destinations; polyphonic glide, Spread; 32 voices.
+- `[~]` Not stated. 4-oscillator FM combined with subtractive and additive; 11 algorithms.
+- `[~]` Waves: sine, 4/8-bit, digital saw/square, resynthesised saw/square/triangle, 2 noises; harmonics editor 16/32/64 with Repeat, odd/even, Normalize, .ams export/import.
+- `[x]` Coarse/fine or fixed frequency, velocity-to-pitch with quantise, phase, retrigger, feedback.
+- `[x]` 7 envelopes (Loop, Beat, Sync, Trigger; slopes on filter and pitch); LFO reaching audio rate.
+- `[~]` Filter with waveshaper; Time, Tone, Antialias, Interpolation; 5 MIDI sources to 2 destinations; polyphonic glide, Spread; 32 voices.
 
 **Sampler (773-791)** [XL] {SAMPLES; CONTENT: presets}
 - `[ ]` Editions: REX import is Standard and Suite only; p. 774 implies not every edition includes Sampler.
@@ -1062,10 +1062,10 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 - `[ ]` Depends on warp engine, transient detection, Drum Rack.
 
 **Tension (802-813)** [XL] {PM}
-- `[ ]` Not stated. Modelled strings (AAS).
-- `[ ]` Exciters: Bow, Hammer, bouncing Hammer, Plectrum; Damper; String (decay, ratio, inharmonicity, damping).
-- `[ ]` Vibrato; Termination (finger, fret); Pickup; Body (type, size, decay, mix, cuts).
-- `[ ]` Filter with envelope and LFO; MPE; stretch and tuning error, voice priority; portamento; unison.
+- `[~]` Not stated. Modelled strings (AAS).
+- `[~]` Exciters: Bow, Hammer, bouncing Hammer, Plectrum; Damper; String (decay, ratio, inharmonicity, damping).
+- `[~]` Vibrato; Termination (finger, fret); Pickup; Body (type, size, decay, mix, cuts).
+- `[x]` Filter with envelope and LFO; MPE; stretch and tuning error, voice priority; portamento; unison.
 
 **Wavetable (814-823)** [L] {CONTENT: factory tables; PM: filter circuits}
 - `[~]` Not stated. 2 wavetable oscillators plus sub.

@@ -3230,3 +3230,520 @@ rlive.meld	664	B MPE Press > LFO 1 Macro 2
 rlive.meld	665	B MPE Press > LFO 1 FX 1
 rlive.meld	666	B MPE Press > LFO 1 FX 2
 rlive.meld	667	B MPE Press > LFO 2 Rate
+rlive.operator	0	A On
+rlive.operator	1	A Coarse
+rlive.operator	2	A Fine
+rlive.operator	3	A Fixed
+rlive.operator	4	A Freq
+rlive.operator	5	A Multi
+rlive.operator	6	A Level
+rlive.operator	7	A Wave
+rlive.operator	8	A Feedback
+rlive.operator	9	A Phase
+rlive.operator	10	A Retrigger
+rlive.operator	11	A Osc < Vel
+rlive.operator	12	A Q
+rlive.operator	13	A Vel
+rlive.operator	14	A Key
+rlive.operator	15	A Attack
+rlive.operator	16	A Decay
+rlive.operator	17	A Release
+rlive.operator	18	A Initial
+rlive.operator	19	A Peak
+rlive.operator	20	A Sustain
+rlive.operator	21	A End
+rlive.operator	22	A Loop
+rlive.operator	23	A Repeat
+rlive.operator	24	A Time
+rlive.operator	25	A Time < Vel
+rlive.operator	26	A A.Slope
+rlive.operator	27	A D.Slope
+rlive.operator	28	A R.Slope
+rlive.operator	40	B On
+rlive.operator	41	B Coarse
+rlive.operator	42	B Fine
+rlive.operator	43	B Fixed
+rlive.operator	44	B Freq
+rlive.operator	45	B Multi
+rlive.operator	46	B Level
+rlive.operator	47	B Wave
+rlive.operator	48	B Feedback
+rlive.operator	49	B Phase
+rlive.operator	50	B Retrigger
+rlive.operator	51	B Osc < Vel
+rlive.operator	52	B Q
+rlive.operator	53	B Vel
+rlive.operator	54	B Key
+rlive.operator	55	B Attack
+rlive.operator	56	B Decay
+rlive.operator	57	B Release
+rlive.operator	58	B Initial
+rlive.operator	59	B Peak
+rlive.operator	60	B Sustain
+rlive.operator	61	B End
+rlive.operator	62	B Loop
+rlive.operator	63	B Repeat
+rlive.operator	64	B Time
+rlive.operator	65	B Time < Vel
+rlive.operator	66	B A.Slope
+rlive.operator	67	B D.Slope
+rlive.operator	68	B R.Slope
+rlive.operator	80	C On
+rlive.operator	81	C Coarse
+rlive.operator	82	C Fine
+rlive.operator	83	C Fixed
+rlive.operator	84	C Freq
+rlive.operator	85	C Multi
+rlive.operator	86	C Level
+rlive.operator	87	C Wave
+rlive.operator	88	C Feedback
+rlive.operator	89	C Phase
+rlive.operator	90	C Retrigger
+rlive.operator	91	C Osc < Vel
+rlive.operator	92	C Q
+rlive.operator	93	C Vel
+rlive.operator	94	C Key
+rlive.operator	95	C Attack
+rlive.operator	96	C Decay
+rlive.operator	97	C Release
+rlive.operator	98	C Initial
+rlive.operator	99	C Peak
+rlive.operator	100	C Sustain
+rlive.operator	101	C End
+rlive.operator	102	C Loop
+rlive.operator	103	C Repeat
+rlive.operator	104	C Time
+rlive.operator	105	C Time < Vel
+rlive.operator	106	C A.Slope
+rlive.operator	107	C D.Slope
+rlive.operator	108	C R.Slope
+rlive.operator	120	D On
+rlive.operator	121	D Coarse
+rlive.operator	122	D Fine
+rlive.operator	123	D Fixed
+rlive.operator	124	D Freq
+rlive.operator	125	D Multi
+rlive.operator	126	D Level
+rlive.operator	127	D Wave
+rlive.operator	128	D Feedback
+rlive.operator	129	D Phase
+rlive.operator	130	D Retrigger
+rlive.operator	131	D Osc < Vel
+rlive.operator	132	D Q
+rlive.operator	133	D Vel
+rlive.operator	134	D Key
+rlive.operator	135	D Attack
+rlive.operator	136	D Decay
+rlive.operator	137	D Release
+rlive.operator	138	D Initial
+rlive.operator	139	D Peak
+rlive.operator	140	D Sustain
+rlive.operator	141	D End
+rlive.operator	142	D Loop
+rlive.operator	143	D Repeat
+rlive.operator	144	D Time
+rlive.operator	145	D Time < Vel
+rlive.operator	146	D A.Slope
+rlive.operator	147	D D.Slope
+rlive.operator	148	D R.Slope
+rlive.operator	160	Filter On
+rlive.operator	161	Filter Type
+rlive.operator	162	Circuit Type
+rlive.operator	163	Filter Slope
+rlive.operator	164	Filter Freq
+rlive.operator	165	Filter Res
+rlive.operator	166	Flt. Drive
+rlive.operator	167	Morph
+rlive.operator	168	Freq < Vel
+rlive.operator	169	Freq < Key
+rlive.operator	170	Envelope
+rlive.operator	171	Shaper
+rlive.operator	172	Shp. Drive
+rlive.operator	173	Dry/Wet
+rlive.operator	174	Fe Attack
+rlive.operator	175	Fe Decay
+rlive.operator	176	Fe Release
+rlive.operator	177	Fe Initial
+rlive.operator	178	Fe Peak
+rlive.operator	179	Fe Sustain
+rlive.operator	180	Fe End
+rlive.operator	181	Fe Loop
+rlive.operator	182	Fe Repeat
+rlive.operator	183	Fe Time
+rlive.operator	184	Fe Time < Vel
+rlive.operator	185	Fe A.Slope
+rlive.operator	186	Fe D.Slope
+rlive.operator	187	Fe R.Slope
+rlive.operator	200	LFO On
+rlive.operator	201	LFO Waveform
+rlive.operator	202	LFO Range
+rlive.operator	203	LFO Rate
+rlive.operator	204	LFO Beat Rate
+rlive.operator	205	LFO Retrigger
+rlive.operator	206	LFO Amount
+rlive.operator	207	LFO to A
+rlive.operator	208	LFO to B
+rlive.operator	209	LFO to C
+rlive.operator	210	LFO to D
+rlive.operator	211	LFO to FIL
+rlive.operator	212	LFO Amount A
+rlive.operator	213	LFO Destination B
+rlive.operator	214	LFO Amount B
+rlive.operator	215	LFO Amt < Vel
+rlive.operator	216	LFO Rate < Key
+rlive.operator	217	Le Attack
+rlive.operator	218	Le Decay
+rlive.operator	219	Le Release
+rlive.operator	220	Le Initial
+rlive.operator	221	Le Peak
+rlive.operator	222	Le Sustain
+rlive.operator	223	Le End
+rlive.operator	224	Le Loop
+rlive.operator	225	Le Repeat
+rlive.operator	226	Le Time
+rlive.operator	227	Le Time < Vel
+rlive.operator	228	Le A.Slope
+rlive.operator	229	Le D.Slope
+rlive.operator	230	Le R.Slope
+rlive.operator	240	Pitch Envelope On
+rlive.operator	241	Pitch Env
+rlive.operator	242	Spread
+rlive.operator	243	Transpose
+rlive.operator	244	Glide
+rlive.operator	245	Glide Time
+rlive.operator	246	Pitch to A
+rlive.operator	247	Pitch to B
+rlive.operator	248	Pitch to C
+rlive.operator	249	Pitch to D
+rlive.operator	250	Pitch to LFO
+rlive.operator	251	Pitch Amount A
+rlive.operator	252	Pitch Destination B
+rlive.operator	253	Pitch Amount B
+rlive.operator	254	Pe Attack
+rlive.operator	255	Pe Decay
+rlive.operator	256	Pe Release
+rlive.operator	257	Pe Initial
+rlive.operator	258	Pe Peak
+rlive.operator	259	Pe Sustain
+rlive.operator	260	Pe End
+rlive.operator	261	Pe Loop
+rlive.operator	262	Pe Repeat
+rlive.operator	263	Pe Time
+rlive.operator	264	Pe Time < Vel
+rlive.operator	265	Pe A.Slope
+rlive.operator	266	Pe D.Slope
+rlive.operator	267	Pe R.Slope
+rlive.operator	280	Time
+rlive.operator	281	Tone
+rlive.operator	282	Volume
+rlive.operator	283	Algorithm
+rlive.operator	284	Voices
+rlive.operator	285	Retrigger
+rlive.operator	286	Interpolation
+rlive.operator	287	Antialias
+rlive.operator	288	Time < Key
+rlive.operator	289	PB Range
+rlive.operator	290	Pan
+rlive.operator	291	Pan < Key
+rlive.operator	292	Pan < Rnd
+rlive.operator	293	Enable Per-Note Pitch Bend
+rlive.operator	294	Velocity Destination A
+rlive.operator	295	Velocity Amount A
+rlive.operator	296	Velocity Destination B
+rlive.operator	297	Velocity Amount B
+rlive.operator	298	Key Destination A
+rlive.operator	299	Key Amount A
+rlive.operator	300	Key Destination B
+rlive.operator	301	Key Amount B
+rlive.operator	302	Aftertouch Destination A
+rlive.operator	303	Aftertouch Amount A
+rlive.operator	304	Aftertouch Destination B
+rlive.operator	305	Aftertouch Amount B
+rlive.operator	306	Pitch Bend Destination A
+rlive.operator	307	Pitch Bend Amount A
+rlive.operator	308	Pitch Bend Destination B
+rlive.operator	309	Pitch Bend Amount B
+rlive.operator	310	Mod Wheel Destination A
+rlive.operator	311	Mod Wheel Amount A
+rlive.operator	312	Mod Wheel Destination B
+rlive.operator	313	Mod Wheel Amount B
+rlive.electric	0	Stiffness
+rlive.electric	1	Stiffness Vel
+rlive.electric	2	Stiffness Key
+rlive.electric	3	Noise
+rlive.electric	4	Noise Pitch
+rlive.electric	5	Noise Decay
+rlive.electric	6	Noise Key
+rlive.electric	7	Force
+rlive.electric	8	Force Vel
+rlive.electric	9	Force Key
+rlive.electric	10	Tine Color
+rlive.electric	11	Tine Decay
+rlive.electric	12	Tine Level
+rlive.electric	13	Tine Key
+rlive.electric	14	Tone Decay
+rlive.electric	15	Tone Level
+rlive.electric	16	Release
+rlive.electric	17	Symmetry
+rlive.electric	18	Distance
+rlive.electric	19	Type
+rlive.electric	20	Input
+rlive.electric	21	Output
+rlive.electric	22	Output Key
+rlive.electric	23	Damper Tone
+rlive.electric	24	Damper Level
+rlive.electric	25	Att/Rel
+rlive.electric	26	Volume
+rlive.electric	27	Voices
+rlive.electric	28	Semi
+rlive.electric	29	Detune
+rlive.electric	30	Stretch
+rlive.electric	31	Pitch Bend
+rlive.electric	32	Note PB
+rlive.tension	0	Exciter
+rlive.tension	1	Exciter Type
+rlive.tension	2	Force
+rlive.tension	3	Friction
+rlive.tension	4	Mass
+rlive.tension	5	Hammer Stiffness
+rlive.tension	6	Protrusion
+rlive.tension	7	Plectrum Stiffness
+rlive.tension	8	Velocity
+rlive.tension	9	Position
+rlive.tension	10	Damping
+rlive.tension	11	Fix. Pos
+rlive.tension	12	P1 Vel
+rlive.tension	13	P1 Key
+rlive.tension	14	P2 Vel
+rlive.tension	15	P2 Key
+rlive.tension	16	Velocity Vel
+rlive.tension	17	Velocity Key
+rlive.tension	18	Position Vel
+rlive.tension	19	Position Key
+rlive.tension	20	Damping Vel
+rlive.tension	21	Damping Key
+rlive.tension	22	Damper
+rlive.tension	23	Damper Mass
+rlive.tension	24	Damper Stiffness
+rlive.tension	25	Damper Velocity
+rlive.tension	26	Damper Position
+rlive.tension	27	Damper Damping
+rlive.tension	28	Gated
+rlive.tension	29	Damper Fix. Pos
+rlive.tension	30	Damper Mass Key
+rlive.tension	31	Damper Stiffness Key
+rlive.tension	32	Damper Velocity Key
+rlive.tension	33	Damper Position Key
+rlive.tension	34	Decay
+rlive.tension	35	Decay Key
+rlive.tension	36	Ratio
+rlive.tension	37	Inharm
+rlive.tension	38	String Damping
+rlive.tension	39	String Damping Key
+rlive.tension	40	Vibrato
+rlive.tension	41	Vibrato Delay
+rlive.tension	42	Vibrato Attack
+rlive.tension	43	Vibrato Rate
+rlive.tension	44	Vibrato Amount
+rlive.tension	45	< Mod
+rlive.tension	46	Vibrato Error
+rlive.tension	47	Termination
+rlive.tension	48	Finger Mass
+rlive.tension	49	Finger Stiff
+rlive.tension	50	Fret Stiff
+rlive.tension	51	Finger Mass Vel
+rlive.tension	52	Finger Mass Key
+rlive.tension	53	Pickup
+rlive.tension	54	Pickup Position
+rlive.tension	55	Body
+rlive.tension	56	Body Type
+rlive.tension	57	Body Size
+rlive.tension	58	Body Decay
+rlive.tension	59	Str/Body
+rlive.tension	60	Low Cut
+rlive.tension	61	High Cut
+rlive.tension	62	Volume
+rlive.tension	63	Filter
+rlive.tension	64	Filter Type
+rlive.tension	65	Freq
+rlive.tension	66	Res
+rlive.tension	67	Freq LFO
+rlive.tension	68	Freq Env
+rlive.tension	69	Freq Key
+rlive.tension	70	Res LFO
+rlive.tension	71	Res Env
+rlive.tension	72	Res Key
+rlive.tension	73	Filter Envelope
+rlive.tension	74	Attack
+rlive.tension	75	Attack Vel
+rlive.tension	76	Filter Decay
+rlive.tension	77	Sustain
+rlive.tension	78	Sustain Vel
+rlive.tension	79	Release
+rlive.tension	80	Filter LFO
+rlive.tension	81	LFO Wave
+rlive.tension	82	LFO Sync
+rlive.tension	83	LFO Rate
+rlive.tension	84	LFO Beat Rate
+rlive.tension	85	LFO Attack
+rlive.tension	86	LFO Delay
+rlive.tension	87	Pressure Destination A
+rlive.tension	88	Pressure Amount A
+rlive.tension	89	Pressure Destination B
+rlive.tension	90	Pressure Amount B
+rlive.tension	91	Slide Destination A
+rlive.tension	92	Slide Amount A
+rlive.tension	93	Slide Destination B
+rlive.tension	94	Slide Amount B
+rlive.tension	95	Pitch Bend
+rlive.tension	96	Note PB
+rlive.tension	97	Octave
+rlive.tension	98	Semi
+rlive.tension	99	Detune
+rlive.tension	100	Voices
+rlive.tension	101	Stretch
+rlive.tension	102	Error
+rlive.tension	103	Priority
+rlive.tension	104	Portamento
+rlive.tension	105	Time
+rlive.tension	106	Legato
+rlive.tension	107	Prop.
+rlive.tension	108	Unison
+rlive.tension	109	Unison Voices
+rlive.tension	110	Unison Detune
+rlive.tension	111	Unison Delay
+rlive.collision	0	Mallet
+rlive.collision	1	Mallet Volume
+rlive.collision	2	Stiffness
+rlive.collision	3	Mallet Noise
+rlive.collision	4	Color
+rlive.collision	5	Mallet Volume Key
+rlive.collision	6	Mallet Volume Vel
+rlive.collision	7	Stiffness Key
+rlive.collision	8	Stiffness Vel
+rlive.collision	9	Mallet Noise Key
+rlive.collision	10	Mallet Noise Vel
+rlive.collision	11	Noise
+rlive.collision	12	Noise Type
+rlive.collision	13	Noise Freq
+rlive.collision	14	Noise Res
+rlive.collision	15	Noise Volume
+rlive.collision	16	Env Amt
+rlive.collision	17	Noise A
+rlive.collision	18	Noise D
+rlive.collision	19	Noise S
+rlive.collision	20	Noise R
+rlive.collision	21	Noise Freq Key
+rlive.collision	22	Noise Freq Vel
+rlive.collision	23	Noise Volume Key
+rlive.collision	24	Noise Volume Vel
+rlive.collision	30	Res 1 On
+rlive.collision	31	Res 1 Type
+rlive.collision	32	Res 1 Quality
+rlive.collision	33	Res 1 Decay
+rlive.collision	34	Res 1 Material
+rlive.collision	35	Res 1 Radius
+rlive.collision	36	Res 1 Ratio
+rlive.collision	37	Res 1 Brightness
+rlive.collision	38	Res 1 Inharm
+rlive.collision	39	Res 1 Opening
+rlive.collision	40	Res 1 Hit
+rlive.collision	41	Res 1 Rnd
+rlive.collision	42	Res 1 Note Off
+rlive.collision	43	Res 1 Pos. L
+rlive.collision	44	Res 1 Pos. R
+rlive.collision	45	Res 1 Tune
+rlive.collision	46	Res 1 Fine
+rlive.collision	47	Res 1 Tune Key
+rlive.collision	48	Res 1 Pitch Env
+rlive.collision	49	Res 1 Time
+rlive.collision	50	Res 1 Bleed
+rlive.collision	51	Res 1 Gain
+rlive.collision	52	Res 1 Pan
+rlive.collision	53	Res 1 Decay Key
+rlive.collision	54	Res 1 Decay Vel
+rlive.collision	55	Res 1 Material Key
+rlive.collision	56	Res 1 Material Vel
+rlive.collision	57	Res 1 Inharm Vel
+rlive.collision	58	Res 1 Opening Vel
+rlive.collision	59	Res 1 Pitch Env Vel
+rlive.collision	60	Res 1 Pan Key
+rlive.collision	70	Res 2 On
+rlive.collision	71	Res 2 Type
+rlive.collision	72	Res 2 Quality
+rlive.collision	73	Res 2 Decay
+rlive.collision	74	Res 2 Material
+rlive.collision	75	Res 2 Radius
+rlive.collision	76	Res 2 Ratio
+rlive.collision	77	Res 2 Brightness
+rlive.collision	78	Res 2 Inharm
+rlive.collision	79	Res 2 Opening
+rlive.collision	80	Res 2 Hit
+rlive.collision	81	Res 2 Rnd
+rlive.collision	82	Res 2 Note Off
+rlive.collision	83	Res 2 Pos. L
+rlive.collision	84	Res 2 Pos. R
+rlive.collision	85	Res 2 Tune
+rlive.collision	86	Res 2 Fine
+rlive.collision	87	Res 2 Tune Key
+rlive.collision	88	Res 2 Pitch Env
+rlive.collision	89	Res 2 Time
+rlive.collision	90	Res 2 Bleed
+rlive.collision	91	Res 2 Gain
+rlive.collision	92	Res 2 Pan
+rlive.collision	93	Res 2 Decay Key
+rlive.collision	94	Res 2 Decay Vel
+rlive.collision	95	Res 2 Material Key
+rlive.collision	96	Res 2 Material Vel
+rlive.collision	97	Res 2 Inharm Vel
+rlive.collision	98	Res 2 Opening Vel
+rlive.collision	99	Res 2 Pitch Env Vel
+rlive.collision	100	Res 2 Pan Key
+rlive.collision	110	LFO 1 On
+rlive.collision	111	LFO 1 Wave
+rlive.collision	112	LFO 1 Offs.
+rlive.collision	113	LFO 1 Retrigger
+rlive.collision	114	LFO 1 Sync
+rlive.collision	115	LFO 1 Rate
+rlive.collision	116	LFO 1 Beat Rate
+rlive.collision	117	LFO 1 Amount
+rlive.collision	118	LFO 1 Destination A
+rlive.collision	119	LFO 1 Amount A
+rlive.collision	120	LFO 1 Destination B
+rlive.collision	121	LFO 1 Amount B
+rlive.collision	122	LFO 1 Rate Key
+rlive.collision	123	LFO 1 Amount Vel
+rlive.collision	125	LFO 2 On
+rlive.collision	126	LFO 2 Wave
+rlive.collision	127	LFO 2 Offs.
+rlive.collision	128	LFO 2 Retrigger
+rlive.collision	129	LFO 2 Sync
+rlive.collision	130	LFO 2 Rate
+rlive.collision	131	LFO 2 Beat Rate
+rlive.collision	132	LFO 2 Amount
+rlive.collision	133	LFO 2 Destination A
+rlive.collision	134	LFO 2 Amount A
+rlive.collision	135	LFO 2 Destination B
+rlive.collision	136	LFO 2 Amount B
+rlive.collision	137	LFO 2 Rate Key
+rlive.collision	138	LFO 2 Amount Vel
+rlive.collision	140	PB Destination A
+rlive.collision	141	PB Amount A
+rlive.collision	142	PB Destination B
+rlive.collision	143	PB Amount B
+rlive.collision	144	Mod Destination A
+rlive.collision	145	Mod Amount A
+rlive.collision	146	Mod Destination B
+rlive.collision	147	Mod Amount B
+rlive.collision	148	Press Destination A
+rlive.collision	149	Press Amount A
+rlive.collision	150	Press Destination B
+rlive.collision	151	Press Amount B
+rlive.collision	152	Slide Destination A
+rlive.collision	153	Slide Amount A
+rlive.collision	154	Slide Destination B
+rlive.collision	155	Slide Amount B
+rlive.collision	160	Voices
+rlive.collision	161	Retrig.
+rlive.collision	162	Structure
+rlive.collision	163	Volume

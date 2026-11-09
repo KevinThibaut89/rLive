@@ -8,6 +8,7 @@ use rlive_devices::devices::b10::common::{Analysis, ANALYSIS_SLOTS, STATE_SLOT};
 use rlive_devices::devices::b10::multi::{Layer, ParsedZones, ZoneMap};
 use rlive_devices::devices::b10::multi_params as sampler_params;
 use rlive_devices::devices::b10::{drum_sampler as drum, simpler as si};
+use rlive_devices::devices::b12::operator_waves::ParsedWaves;
 use rlive_devices::sampler::p as sampler_old;
 use rlive_engine::GraphOp;
 use rlive_project::{
@@ -46,6 +47,7 @@ fn state_resource(type_id: &str, text: &str) -> Option<Resource> {
         "rlive.sampler" => Some(Arc::new(ParsedZones {
             map: ZoneMap::parse(Some(text)),
         })),
+        "rlive.operator" => Some(Arc::new(ParsedWaves::parse(Some(text)))),
         _ => None,
     }
 }
