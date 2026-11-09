@@ -1547,6 +1547,12 @@ impl TrackNode {
         for e in segment.iter_mut() {
             e.offset -= from as u32;
         }
+        if segment
+            .iter()
+            .any(|e| matches!(e.message, MidiMessage::NoteExpr { .. }))
+        {
+            self.shared.expr_pulse.fetch_add(1, Ordering::Relaxed);
+        }
         let mut transport = ctx.at(from);
         // The scale of whatever this track is playing: a launched clip wins over the timeline.
         transport.scale = self

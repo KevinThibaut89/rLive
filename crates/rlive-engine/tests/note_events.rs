@@ -354,3 +354,33 @@ fn clip_expression_never_allocates_on_the_audio_thread() {
         "expression reached the device"
     );
 }
+
+/// A track whose per-note expression lights the meter's blue dot (manual p. 332), and which
+/// leaves it off otherwise.
+#[test]
+fn per_note_expression_is_counted_for_the_track_meter() {
+    let run_clip = |n: Note| {
+        let (mut engine, mut h) = create_engine(SR, BLOCK);
+        let (tid, mut track, _log) = recording_track();
+        let shared = Arc::clone(&track.shared);
+        track.set_slot(0, Some(midi(10_000, vec![n], true)));
+        send(
+            &mut h,
+            EngineCommand::graph(GraphOp::AddTrack { index: 0, track }),
+        );
+        send(
+            &mut h,
+            EngineCommand::Launch(LaunchCmd::LaunchClip {
+                track: tid,
+                slot: 0,
+            }),
+        );
+        send(&mut h, EngineCommand::Transport(TransportCmd::Play));
+        run(&mut engine, BLOCK * 400);
+        shared.expr_pulse.load(Ordering::Relaxed)
+    };
+    assert_eq!(run_clip(note(0, 1920, 60)), 0, "no expression, no dot");
+    let plain = note(0, 1920, 60);
+    let with = with_expr(plain, &[(0.0, 0.0), (960.0, 2.0)], &[]);
+    assert!(run_clip(with) > 0, "expression passing the track lights it");
+}

@@ -15,6 +15,7 @@ use std::path::PathBuf;
 
 pub mod markers;
 mod properties;
+pub mod tools;
 
 const TITLE_H: f32 = 22.0;
 const TAB_H: f32 = 21.0;
@@ -99,6 +100,7 @@ pub struct ClipViewState {
     rename: Option<String>,
     details: HashMap<PathBuf, Option<AudioInfo>>,
     pub(super) tools: properties::ToolState,
+    pub midi_tools: tools::ToolsState,
 }
 
 impl ClipViewState {
@@ -265,15 +267,6 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     state.env.open = state.clip_view.mode == EditorMode::Envelope;
     match state.clip_view.mode {
         EditorMode::Envelope => clip_envelopes::show(ui, session, state, cref, body),
-        EditorMode::Mpe if clip.is_midi() => {
-            ui.painter().text(
-                body.center(),
-                egui::Align2::CENTER_CENTER,
-                "The MPE Editor arrives with C10",
-                font(12.0),
-                pal().text_faint,
-            );
-        }
         _ => match &clip.content {
             ClipContent::Audio { file, .. } => {
                 let mut eu = ui.new_child(UiBuilder::new().max_rect(body.shrink(8.0)));
@@ -358,6 +351,9 @@ fn tab_row(
         }
         if midi && mode == EditorMode::Content {
             properties::notes_row(ui, session, state, cref);
+        }
+        if midi && mode == EditorMode::Mpe {
+            properties::mpe_row(ui, session, state, cref);
         }
     });
 }

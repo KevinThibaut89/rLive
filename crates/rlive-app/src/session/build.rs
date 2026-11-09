@@ -1027,8 +1027,10 @@ fn engine_program(p: rlive_project::MidiProgram) -> ProgramChange {
 }
 
 fn engine_expression(expr: &rlive_project::NoteExpression) -> NoteExpression {
+    // The engine runs straight between points, so a curve goes to it as short straight pieces.
     let points = |list: &[rlive_project::Breakpoint]| {
-        list.iter()
+        rlive_project::mpe_edit::flatten(list)
+            .iter()
             .map(|p| ExprPoint {
                 time: p.time,
                 value: p.value as f32,
@@ -1040,6 +1042,40 @@ fn engine_expression(expr: &rlive_project::NoteExpression) -> NoteExpression {
         pitch: points(&expr.pitch),
         slide: points(&expr.slide),
         pressure: points(&expr.pressure),
+    }
+}
+
+#[cfg(test)]
+mod expression_tests {
+    use super::engine_expression;
+    use rlive_core::envelope::{value_at, Interp};
+    use rlive_project::{Breakpoint, NoteExpression};
+
+    #[test]
+    fn an_edited_curve_reaches_the_engine_as_it_was_drawn() {
+        let mut slide = vec![Breakpoint::new(0.0, 0.0), Breakpoint::new(960.0, 1.0)];
+        slide[0].curve = 0.8;
+        let pitch = vec![Breakpoint::new(0.0, 0.0), Breakpoint::new(480.0, 7.0)];
+        let edited = NoteExpression {
+            pitch,
+            slide: slide.clone(),
+            ..Default::default()
+        };
+        let sent = engine_expression(&edited);
+        assert_eq!(sent.pitch.len(), 2, "a straight line stays two points");
+        let at = |t: f64| {
+            let i = sent.slide.partition_point(|p| p.time <= t);
+            let (a, b) = (sent.slide[i - 1], sent.slide[i]);
+            a.value + (b.value - a.value) * ((t - a.time) / (b.time - a.time)) as f32
+        };
+        for t in [100.0, 480.0, 800.0] {
+            let want = value_at(&slide, t, Interp::Smooth).unwrap() as f32;
+            assert!(
+                (at(t) - want).abs() < 0.01,
+                "at {t}: {} wanted {want}",
+                at(t)
+            );
+        }
     }
 }
 

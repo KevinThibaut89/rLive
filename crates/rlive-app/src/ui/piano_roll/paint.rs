@@ -52,6 +52,15 @@ fn draw_note(
     }
 }
 
+/// A note in the MPE tab: the selected ones are see-through and the rest are grey (manual p. 332).
+fn mpe_fill(color: Color32, selected: bool) -> Color32 {
+    if selected {
+        color.gamma_multiply(0.35)
+    } else {
+        shade(0x4c4c4c)
+    }
+}
+
 /// The notes a colour says: velocity as saturation, grey if deactivated or inactive.
 fn note_fill(n: &NoteData, color: Color32, active: bool, selected: bool) -> Color32 {
     if selected {
@@ -159,6 +168,7 @@ pub(super) fn grid(
         );
     }
     let focused = ps.focused();
+    let mpe_tab = state.clip_view.mode == crate::ui::clip_view::EditorMode::Mpe;
     let hovered_note = ps.bar_hover;
     let hover_group = ps
         .lanes
@@ -176,7 +186,11 @@ pub(super) fn grid(
         for (ni, n) in s.clip.notes().iter().enumerate() {
             s.span.occurrences(n.start, &mut at);
             let selected = chosen.is_some_and(|c| c.contains(&ni));
-            let fill = note_fill(n, s.color, active, selected);
+            let fill = if mpe_tab {
+                mpe_fill(s.color, selected)
+            } else {
+                note_fill(n, s.color, active, selected)
+            };
             for t in &at {
                 draw_note(&p, geo, n, *t, fill, None);
             }
@@ -186,7 +200,11 @@ pub(super) fn grid(
     for (ni, n) in s.clip.notes().iter().enumerate() {
         s.span.occurrences(n.start, &mut at);
         let selected = ps.selected.contains(&ni);
-        let fill = note_fill(n, s.color, true, selected);
+        let fill = if mpe_tab {
+            mpe_fill(s.color, selected)
+        } else {
+            note_fill(n, s.color, true, selected)
+        };
         let outline = n
             .group
             .filter(|g| hover_group == Some(g.id))

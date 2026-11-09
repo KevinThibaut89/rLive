@@ -7,7 +7,7 @@ use crate::session::Session;
 use crate::ui::keymap::{self, Platform};
 use crate::ui::theme::*;
 use crate::ui::widgets::{info, state_button};
-use egui::{Color32, Pos2, Rect, RichText, Sense, Shape, Stroke, UiBuilder, Vec2};
+use egui::{Pos2, Rect, RichText, Sense, Shape, Stroke, UiBuilder, Vec2};
 use rlive_project::note_edit::{
     self as edit, deviation_bounds, drawn_notes, group_status, line_values, LaneValue,
 };
@@ -178,6 +178,66 @@ fn paint_lane(
             }
         }
     }
+}
+
+/// The markers of one lane, for the MPE tab's Velocity and Release Velocity lanes.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn paint_markers(
+    p: &egui::Painter,
+    plot: Rect,
+    inner: Rect,
+    geo: &Geo,
+    s: &Shown,
+    notes: &[NoteData],
+    what: LaneValue,
+    selected: &[usize],
+) {
+    let live = Shown {
+        r: s.r,
+        clip: {
+            let mut c = s.clip.clone();
+            if let Some(n) = c.notes_mut() {
+                n.clear();
+                n.extend_from_slice(notes);
+            }
+            c
+        },
+        span: s.span,
+        color: s.color,
+    };
+    paint_lane(p, plot, inner, geo, &live, what, selected, None);
+}
+
+/// Dragging markers in the MPE tab: as in the notes view, with its own widget id.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn marker_input(
+    ui: &mut egui::Ui,
+    plot: Rect,
+    inner: Rect,
+    geo: &Geo,
+    session: &mut Session,
+    state: &mut UiState,
+    s: &Shown,
+    what: LaneValue,
+    index: usize,
+) {
+    let live = session
+        .clip_at(s.r)
+        .map(|c| c.notes().to_vec())
+        .unwrap_or_default();
+    let shown = Shown {
+        r: s.r,
+        clip: {
+            let mut c = s.clip.clone();
+            if let Some(n) = c.notes_mut() {
+                n.clone_from(&live);
+            }
+            c
+        },
+        span: s.span,
+        color: s.color,
+    };
+    lane_interaction(ui, plot, inner, geo, session, state, &shown, what, index);
 }
 
 /// The markers near `x`, and the group members of any that's in a group.
@@ -687,41 +747,4 @@ fn chance_controls(
     if ui.small_button("Ungroup").clicked() {
         session.edit_notes(r, "Ungroup Notes", |n| edit::ungroup(n, selected));
     }
-}
-
-/// The Quantize settings, as Cmd+Shift+U opens them.
-pub(super) fn quantize_window(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
-    let mut open = state.piano.show_quantize;
-    egui::Window::new("Quantize")
-        .open(&mut open)
-        .resizable(false)
-        .collapsible(false)
-        .show(ui.ctx(), |ui| {
-            let q = &mut state.piano.quantize;
-            egui::ComboBox::from_label("Grid")
-                .selected_text(super::grid_label(q.grid))
-                .show_ui(ui, |ui| {
-                    for g in [
-                        rlive_core::PPQ,
-                        rlive_core::PPQ / 2,
-                        rlive_core::PPQ / 4,
-                        rlive_core::PPQ / 8,
-                        rlive_core::PPQ / 3,
-                        rlive_core::PPQ / 6,
-                    ] {
-                        ui.selectable_value(&mut q.grid, g, super::grid_label(g));
-                    }
-                });
-            ui.checkbox(&mut q.starts, "Quantize starts");
-            ui.checkbox(&mut q.ends, "Quantize ends");
-            ui.add(egui::Slider::new(&mut q.amount, 0.0..=1.0).text("Amount"));
-            if ui.button("Quantize").clicked() {
-                let q = state.piano.quantize;
-                super::edit_selected(session, state, "Quantize", |notes, sel| {
-                    edit::quantize(notes, sel, q);
-                });
-            }
-        });
-    state.piano.show_quantize = open;
-    let _ = Color32::TRANSPARENT;
 }

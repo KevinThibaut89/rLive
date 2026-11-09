@@ -2,6 +2,7 @@
 
 use super::{Entry::Item, MenuCommand as M, MenuState};
 use crate::session::ClipRef;
+use crate::ui::clip_view::tools;
 use crate::ui::piano_roll::{self as roll, edit_foreground, edit_selected};
 use crate::ui::{Detail, RliveApp, UiState};
 use rlive_core::PPQ;
@@ -20,7 +21,7 @@ super::domain! {
         SelectPrevious, SelectNext, AddPrevious, AddNext,
         InsertHome, InsertEnd, EnterKey, Escape, InvertSelection,
         ChopOrSplit, Join, FitToRange, FitWidth, FitHeight, Deactivate,
-        Quantize, QuantizeSettings,
+        Quantize, QuantizeSettings, ApplyMidiTool,
         ScrollUp, ScrollDown, ScrollUpFine, ScrollDownFine, ScrollLeft, ScrollRight,
         ZoomIn, ZoomOut, ZoomBack,
         VelocityUp, VelocityDown, DeviationUp, DeviationDown, ChanceUp, ChanceDown,
@@ -63,6 +64,20 @@ fn range_or(state: &UiState, notes: &[NoteData]) -> Option<(u64, u64)> {
 }
 
 impl RliveApp {
+    /// Quantize Settings opens the Quantize tool in the Transform panel (manual p. 310).
+    fn open_quantize_tool(&mut self) {
+        self.ui.clip_view.folded = false;
+        let tools = &mut self.ui.clip_view.midi_tools;
+        tools.side = tools::Side::Transform;
+        let at = tools
+            .transforms
+            .iter()
+            .position(|t| matches!(t, rlive_project::midi_tools::Transform::Quantize(_)));
+        if let Some(i) = at {
+            tools.choose(tools::Side::Transform, i);
+        }
+    }
+
     fn notes_available(&self) -> bool {
         self.ui.show_detail
             && self.ui.detail == Detail::Clip
@@ -94,8 +109,10 @@ impl RliveApp {
                 return self.ui.piano.filters.open = !self.ui.piano.filters.open
             }
             Notes::FocusMode => return self.ui.piano.focus_mode = !self.ui.piano.focus_mode,
-            Notes::QuantizeSettings => {
-                return self.ui.piano.show_quantize = !self.ui.piano.show_quantize
+            Notes::QuantizeSettings => return self.open_quantize_tool(),
+            Notes::ApplyMidiTool => {
+                let side = self.ui.clip_view.midi_tools.side;
+                return tools::apply(&mut self.session, &mut self.ui, side);
             }
             _ => {}
         }

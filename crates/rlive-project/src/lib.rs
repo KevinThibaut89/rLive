@@ -14,7 +14,9 @@ mod groove;
 pub mod history;
 mod id_walk;
 mod mapping;
+pub mod midi_tools;
 mod migrate;
+pub mod mpe_edit;
 pub mod note_edit;
 pub mod note_select;
 pub mod note_view;
@@ -32,8 +34,8 @@ pub use arrangement::{
 };
 pub use clip::{
     BeatsLoop, BeatsPreserve, Clip, ClipContent, ClipScale, Fades, FollowAction, FollowActions,
-    FrozenAudio, LaunchMode, LaunchSettings, MidiProgram, NoteData, NoteExpression, NoteGroup,
-    TransientEdits, Warp, WarpMarker, WarpMode, WarpParams,
+    FrozenAudio, LaunchMode, LaunchSettings, MidiProgram, MpeGrid, NoteData, NoteExpression,
+    NoteGroup, TransientEdits, Warp, WarpMarker, WarpMode, WarpParams,
 };
 pub use device::{
     grow_macros, Chain, ChainMix, ChainSend, Device, DeviceKind, DrumPad, Macro, MacroMapping,

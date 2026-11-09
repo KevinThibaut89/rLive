@@ -99,6 +99,8 @@ pub struct TrackShared {
     pub record_queued_slot: AtomicI32,
     /// Notes played on this track are going into its playing clip.
     pub overdubbing: AtomicBool,
+    /// Counts the blocks with per-note expression in them, for the track meter's blue dot.
+    pub expr_pulse: AtomicU32,
 }
 
 impl Default for TrackShared {
@@ -113,6 +115,7 @@ impl Default for TrackShared {
             recording_slot: AtomicI32::new(NO_SLOT),
             record_queued_slot: AtomicI32::new(NO_SLOT),
             overdubbing: AtomicBool::new(false),
+            expr_pulse: AtomicU32::new(0),
         }
     }
 }

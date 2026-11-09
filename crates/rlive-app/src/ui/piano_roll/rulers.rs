@@ -251,8 +251,23 @@ pub(super) fn keys(
         ui.scope_id().with("piano_keys"),
         Sense::click_and_drag(),
     );
-    let shift = ui.input(|i| i.modifiers.shift);
-    if resp.dragged() {
+    let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+    // Alt-clicking or dragging the ruler sets the pitch of a generator (manual pp. 322, 324).
+    let mode = state.clip_view.mode;
+    let tools = &mut state.clip_view.midi_tools;
+    let picking = alt && tools.picks_keys(mode) && resp.is_pointer_button_down_on();
+    if picking {
+        if let Some(key) = resp
+            .interact_pointer_pos()
+            .and_then(|pos| geo.key_at(pos.y))
+        {
+            let from = *tools.pick_from.get_or_insert(key);
+            tools.pick_keys(from, key);
+        }
+    } else {
+        tools.pick_from = None;
+    }
+    if resp.dragged() && !picking {
         // Horizontal: how tall the key tracks are.
         let dx = resp.drag_delta().x;
         if dx != 0.0 {
@@ -270,7 +285,7 @@ pub(super) fn keys(
             let selected = &mut state.piano.selected;
             rlive_project::note_select::toggle_key_track(clip.notes(), selected, key);
         }
-    } else if resp.is_pointer_button_down_on() && !shift {
+    } else if resp.is_pointer_button_down_on() && !shift && !picking {
         if let Some(key) = resp
             .interact_pointer_pos()
             .and_then(|pos| geo.key_at(pos.y))

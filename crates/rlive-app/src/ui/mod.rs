@@ -1062,8 +1062,10 @@ impl RliveApp {
         let mut active = false;
         for (id, shared) in &self.session.track_shared {
             let peaks = shared.meter.take();
+            let pulses = shared.expr_pulse.load(std::sync::atomic::Ordering::Relaxed);
             let m = self.ui.meters.entry(*id).or_default();
             m.update(peaks, dt);
+            m.update_expression(pulses, dt);
             active |= m.active();
         }
         let m = self.session.engine.shared.master_meter.take();

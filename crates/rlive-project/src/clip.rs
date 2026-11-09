@@ -268,6 +268,24 @@ impl Default for ClipScale {
     }
 }
 
+/// The grid of a clip's MPE tab, which has its own settings and is off until asked for (manual
+/// p. 334).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MpeGrid {
+    pub on: bool,
+    pub step: u64,
+}
+
+impl Default for MpeGrid {
+    fn default() -> Self {
+        Self {
+            on: false,
+            step: rlive_core::PPQ / 4,
+        }
+    }
+}
+
 /// Fades at the edges of an audio clip, in ticks. Curves shape them as [`Breakpoint`] curves do.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -345,6 +363,8 @@ pub struct Clip {
     /// The user's info text.
     #[serde(default, skip_serializing_if = "is_default")]
     pub info: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mpe_grid: MpeGrid,
 }
 
 impl Default for Clip {
@@ -369,6 +389,7 @@ impl Default for Clip {
             frozen: None,
             frozen_tail: false,
             info: String::new(),
+            mpe_grid: MpeGrid::default(),
         }
     }
 }

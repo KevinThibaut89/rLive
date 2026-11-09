@@ -3,7 +3,7 @@
 use super::{Entry, Entry::Item, Entry::Separator, FocusArea, MenuCommand as M, MenuState};
 use crate::session::{ChainRef, ClipRef};
 use crate::ui::automation::{self, EnvelopeClipboard};
-use crate::ui::clip_view::MarkerSel;
+use crate::ui::clip_view::{EditorMode, MarkerSel};
 use crate::ui::session_select::selected_slots;
 use crate::ui::{piano_roll, scene_view, session_view, Detail, MainView, RliveApp};
 use rlive_core::TrackId;
@@ -418,7 +418,12 @@ impl RliveApp {
             }
             Edit::Duplicate => piano_roll::duplicate_selection(session, ui),
             Edit::Delete => piano_roll::delete_selected(session, ui),
-            Edit::SelectAll => piano_roll::select_all(session, ui),
+            Edit::SelectAll => {
+                let mpe = ui.clip_view.mode == EditorMode::Mpe;
+                if !mpe || !piano_roll::mpe::select_all_breakpoints(session, ui) {
+                    piano_roll::select_all(session, ui);
+                }
+            }
             _ => {}
         }
     }

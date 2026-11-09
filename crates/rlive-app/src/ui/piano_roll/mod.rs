@@ -8,6 +8,8 @@
 mod filters;
 mod gestures;
 mod lanes;
+pub(crate) mod mpe;
+mod mpe_input;
 mod paint;
 mod rulers;
 mod shown;
@@ -15,8 +17,10 @@ mod shown;
 pub use filters::FilterState;
 pub use gestures::apply_chop;
 pub use lanes::{commit_typed, LaneState};
+pub use mpe::MpeState;
+pub use mpe_input::set_grid as set_mpe_grid;
 pub use rulers::{fit_keys, zoom_time};
-pub use shown::Shown;
+pub use shown::{gather, Shown};
 
 use super::clip_view::markers::{self, Axis, MARKER_H, SCRUB_H};
 use super::theme::*;
@@ -94,8 +98,8 @@ pub struct PianoState {
     /// The type Cmd+G makes: the one last chosen.
     pub last_group_one: bool,
     pub quantize: Quantize,
-    pub show_quantize: bool,
     pub chop: Option<Chop>,
+    pub mpe: MpeState,
     /// The last new note's length.
     pub last_length: u64,
     pub loop_bar_h: f32,
@@ -154,8 +158,8 @@ impl Default for PianoState {
                 starts: true,
                 ends: false,
             },
-            show_quantize: false,
             chop: None,
+            mpe: MpeState::default(),
             last_length: PPQ / 4,
             loop_bar_h: 14.0,
             bars: Vec::new(),
@@ -183,7 +187,7 @@ impl PianoState {
 
     /// Whether a drag or stroke is in progress.
     pub fn busy(&self) -> bool {
-        self.gesture.is_some()
+        self.gesture.is_some() || self.mpe.busy()
     }
 
     /// Clears the selection of notes and time, and the insert marker with it if `all`.
@@ -656,8 +660,11 @@ pub(super) fn note_editor(
         Pos2::new(ruler.right(), below_ruler + STRETCH_H),
     );
     let compact = area.height() < 210.0;
+    let mpe_tab = state.clip_view.mode == crate::ui::clip_view::EditorMode::Mpe;
     let lanes_h = if compact {
         0.0
+    } else if mpe_tab {
+        state.piano.mpe.total_height()
     } else {
         state.piano.lanes.total_height()
     };
@@ -803,36 +810,48 @@ pub(super) fn note_editor(
         state,
     );
 
-    gestures::grid(
-        ui,
-        &geo,
-        session,
-        state,
-        &shown,
-        fg,
-        limit,
-        now,
-        &mut preview,
-    );
+    if mpe_tab {
+        mpe::paint_pitch(ui, &geo, state, session, &shown, fg);
+        mpe_input::grid(ui, &geo, session, state, &shown, fg);
+    } else {
+        gestures::grid(
+            ui,
+            &geo,
+            session,
+            state,
+            &shown,
+            fg,
+            limit,
+            now,
+            &mut preview,
+        );
+    }
     if let Some(rect) = filter_rect {
         filters::strip(ui, rect, session, state, &shown, fg);
     }
-    if lanes_h > 0.0 {
-        let bar = Rect::from_min_max(
-            Pos2::new(area.left(), lane_area.top() - LANE_BAR_H),
-            Pos2::new(area.right(), lane_area.top()),
-        );
+    let bar = Rect::from_min_max(
+        Pos2::new(area.left(), lane_area.top() - LANE_BAR_H),
+        Pos2::new(area.right(), lane_area.top()),
+    );
+    if mpe_tab {
+        // The toggles stay when the lanes are hidden: they are how to get them back.
+        if !compact {
+            mpe::bar(ui, bar, state);
+        }
+        if lanes_h > 0.0 {
+            mpe::lanes(ui, lane_area, &geo, session, state, &shown[fg]);
+        }
+        mpe_input::typing_field(ui, session, state, cref);
+    } else if lanes_h > 0.0 {
         lanes::bar(ui, bar, session, state, fg, &shown);
         lanes::lanes(ui, lane_area, &geo, session, state, &shown[fg], now);
     }
 
     let track = cref.track();
     play_previews(session, state, track, preview);
-
-    if state.piano.show_quantize {
-        lanes::quantize_window(ui, session, state);
-    }
 }
 
+#[cfg(test)]
+mod mpe_tests;
 #[cfg(test)]
 mod tests;

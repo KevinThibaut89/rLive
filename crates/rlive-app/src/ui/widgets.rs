@@ -816,14 +816,40 @@ pub fn paint_fader_dot(p: &egui::Painter, rect: Rect, db: f32) {
     p.circle_filled(Pos2::new(x + 8.0, y), 2.0, pal().solo_blue);
 }
 
+/// The lowest dot of a MIDI track's meter, blue while per-note expression passes (manual p. 332).
+pub fn paint_expression_dot(p: &egui::Painter, rect: Rect, lit: f32) {
+    if lit > 0.01 {
+        let at = Pos2::new(rect.right() - 5.0, rect.bottom() - 3.0);
+        p.circle_filled(at, 2.0, pal().solo_blue.gamma_multiply(lit.min(1.0)));
+    }
+}
+
 /// Decaying peak display values (UI side).
 #[derive(Default, Clone, Copy)]
 pub struct MeterState {
     pub l: f32,
     pub r: f32,
+    /// The engine's count of blocks with per-note expression, last time it was read.
+    expr_seen: u32,
+    /// How lit the meter's blue dot is, 0 to 1.
+    expr_lit: f32,
 }
 
 impl MeterState {
+    /// Lights the blue dot whenever per-note expression has gone by since the last look.
+    pub fn update_expression(&mut self, pulses: u32, dt: f32) {
+        if pulses != self.expr_seen {
+            self.expr_seen = pulses;
+            self.expr_lit = 1.0;
+        } else {
+            self.expr_lit *= (-dt * 7.0).exp();
+        }
+    }
+
+    pub fn expression_lit(&self) -> f32 {
+        self.expr_lit
+    }
+
     pub fn update(&mut self, peaks: (f32, f32), dt: f32) {
         let decay = (-dt * 7.0).exp();
         self.l = peaks.0.max(self.l * decay);
@@ -835,7 +861,7 @@ impl MeterState {
     }
 
     pub fn active(&self) -> bool {
-        self.l > 0.0005 || self.r > 0.0005
+        self.l > 0.0005 || self.r > 0.0005 || self.expr_lit > 0.01
     }
 }
 

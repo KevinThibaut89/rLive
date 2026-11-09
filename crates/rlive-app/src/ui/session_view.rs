@@ -1430,6 +1430,7 @@ fn mixer_strip(
     ) {
         new_mix.0 = db;
     }
+    widgets::paint_expression_dot(&p, fader_r, meter.expression_lit());
     remote_map::overlay_track(&fu, fader_r, id, mixer::VOLUME);
     if let Some(norm) = session.modulated_cell_norm(chain, mix_cell::VOLUME) {
         let db = mixer::VOLUME_MIN_DB as f32

@@ -4,7 +4,7 @@ use super::{Entry, Entry::Item, MenuCommand as M, MenuState};
 use crate::session::SetMarker;
 use crate::ui::clip_view::{self, EditorMode, MarkerSel};
 use crate::ui::keymap::FocusArea;
-use crate::ui::{Detail, RliveApp};
+use crate::ui::{piano_roll, Detail, RliveApp};
 use rlive_project::clip_edit as edit;
 use rlive_project::ClipContent;
 
@@ -14,6 +14,7 @@ super::domain! {
         CycleEditorMode,
         ContentTab,
         EnvelopeTab,
+        MpeTab,
         SetStart,
         SetLoopStart,
         SetLoopEnd,
@@ -168,6 +169,23 @@ impl RliveApp {
                 .clip_view
                 .zoom_to(&mut self.ui.piano, &mut self.ui.sample, from, to);
         }
+        if self.ui.clip_view.mode != EditorMode::Mpe {
+            return;
+        }
+        // In the MPE tab the view fits the bends as well as the notes (manual p. 335).
+        let Some(clip) = self.session.clip_at(r) else {
+            return;
+        };
+        let extent =
+            rlive_project::mpe_edit::pitch_extent(clip.notes(), &self.ui.piano.selected, from, to);
+        if let Some((lo, hi)) = extent {
+            let keys = [
+                lo.floor().clamp(0.0, 127.0) as u8,
+                hi.ceil().clamp(0.0, 127.0) as u8,
+            ];
+            let height = self.ui.piano.view_height;
+            piano_roll::fit_keys(&mut self.ui, &keys, height);
+        }
     }
 
     pub(super) fn clip_command(&mut self, c: Clip) {
@@ -220,6 +238,13 @@ impl RliveApp {
                 return;
             }
             Clip::SnapGrid => {
+                if self.ui.clip_view.mode == EditorMode::Mpe {
+                    if let Some(r) = self.ui.selected_clip {
+                        let on = self.session.clip_at(r).is_some_and(|c| c.mpe_grid.on);
+                        piano_roll::set_mpe_grid(&mut self.session, r, !on);
+                    }
+                    return;
+                }
                 self.ui.piano.snap_off = !self.ui.piano.snap_off;
                 return;
             }
@@ -276,6 +301,8 @@ impl RliveApp {
             Clip::CycleEditorMode => view.mode = view.mode.next(clip.is_midi()),
             Clip::ContentTab => view.mode = EditorMode::Content,
             Clip::EnvelopeTab => view.mode = EditorMode::Envelope,
+            Clip::MpeTab if clip.is_midi() => view.mode = EditorMode::Mpe,
+            Clip::MpeTab => {}
             Clip::SetStart => self.set_marker_shortcut(SetMarker::Start),
             Clip::SetEnd => self.set_marker_shortcut(SetMarker::End),
             Clip::SetLoopStart => self.set_marker_shortcut(SetMarker::LoopPosition),

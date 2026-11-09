@@ -350,8 +350,43 @@ impl TimeMap {
     }
 }
 
+/// Scales a note's expression in time, as Note Stretch and the x2 and /2 buttons do to the note
+/// (manual p. 335).
+pub fn stretch_expression(n: &mut NoteData, factor: f64) {
+    let Some(e) = n.expr.as_deref_mut() else {
+        return;
+    };
+    for points in [&mut e.pitch, &mut e.slide, &mut e.pressure] {
+        for p in points.iter_mut() {
+            p.time *= factor;
+        }
+    }
+}
+
+/// Turns a note's expression back to front, for a note whose end has become its start. Each
+/// segment keeps its shape, mirrored.
+fn mirror_expression(n: &mut NoteData) {
+    let length = n.length as f64;
+    let Some(e) = n.expr.as_deref_mut() else {
+        return;
+    };
+    for points in [&mut e.pitch, &mut e.slide, &mut e.pressure] {
+        let curves: Vec<f32> = points.iter().map(|p| -p.curve).collect();
+        points.reverse();
+        let count = points.len();
+        for (i, p) in points.iter_mut().enumerate() {
+            p.time = length - p.time;
+            p.curve = if i + 1 < count {
+                curves[count - 2 - i]
+            } else {
+                0.0
+            };
+        }
+    }
+}
+
 /// Moves the `originals` as `map` says, by their starts and ends, so each keeps its proportion. A
-/// mirrored note's end becomes its start.
+/// mirrored note's end becomes its start. Expression goes with the note.
 pub fn apply_stretch(notes: &mut [NoteData], originals: &[(usize, NoteData)], map: TimeMap) {
     for (i, orig) in originals {
         let Some(n) = notes.get_mut(*i) else {
@@ -359,9 +394,18 @@ pub fn apply_stretch(notes: &mut [NoteData], originals: &[(usize, NoteData)], ma
         };
         let a = map.at(orig.start as f64);
         let b = map.at((orig.start + orig.length) as f64);
-        let (a, b) = if b >= a { (a, b) } else { (b, a) };
+        let mirrored = b < a;
+        let (a, b) = if mirrored { (b, a) } else { (a, b) };
         n.start = a.round().max(0.0) as u64;
         n.length = ((b - a).round() as u64).max(1);
+        n.expr.clone_from(&orig.expr);
+        if mirrored {
+            let keep = n.length;
+            n.length = orig.length;
+            mirror_expression(n);
+            n.length = keep;
+        }
+        stretch_expression(n, n.length as f64 / orig.length as f64);
     }
 }
 
@@ -829,6 +873,65 @@ mod tests {
         // Backwards likewise.
         let d = magnetic_delta(origin, -(GRID as f64) - 2.0, GRID);
         assert_eq!(origin as i64 + d, 10, "the same offset from the first line");
+    }
+
+    fn with_slide(length: u64) -> NoteData {
+        NoteData {
+            expr: Some(Box::new(NoteExpression {
+                slide: vec![
+                    Breakpoint::new(0.0, 0.1),
+                    Breakpoint::new(length as f64, 0.9),
+                ],
+                ..Default::default()
+            })),
+            ..NoteData::new(0, length, 60, 0.8)
+        }
+    }
+
+    #[test]
+    fn stretching_a_note_stretches_its_expression() {
+        let mut notes = vec![with_slide(480)];
+        let originals = vec![(0, notes[0].clone())];
+        apply_stretch(
+            &mut notes,
+            &originals,
+            TimeMap {
+                from: 0.0,
+                to: 480.0,
+                new_from: 0.0,
+                new_to: 960.0,
+                mid: None,
+            },
+        );
+        assert_eq!(notes[0].length, 960);
+        let slide = &notes[0].expr.as_ref().unwrap().slide;
+        assert_eq!(slide[1].time, 960.0);
+        assert_eq!(slide[1].value, 0.9);
+    }
+
+    #[test]
+    fn a_mirrored_stretch_turns_the_expression_round() {
+        let mut notes = vec![with_slide(480)];
+        notes[0].expr.as_mut().unwrap().slide[0].curve = 0.5;
+        let originals = vec![(0, notes[0].clone())];
+        apply_stretch(
+            &mut notes,
+            &originals,
+            TimeMap {
+                from: 0.0,
+                to: 480.0,
+                new_from: 480.0,
+                new_to: 0.0,
+                mid: None,
+            },
+        );
+        assert_eq!(notes[0].start, 0);
+        let slide = &notes[0].expr.as_ref().unwrap().slide;
+        assert_eq!(slide[0].value, 0.9, "what was last comes first");
+        assert_eq!(slide[1].value, 0.1);
+        assert_eq!(slide[0].time, 0.0);
+        assert_eq!(slide[1].time, 480.0);
+        assert_eq!(slide[0].curve, -0.5, "and the curve is mirrored");
     }
 
     #[test]

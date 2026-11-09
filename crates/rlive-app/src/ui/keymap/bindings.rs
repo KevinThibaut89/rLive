@@ -277,7 +277,7 @@ pub static BINDINGS: &[Binding] = &[
     a("42.10", Notes, "Switch Notes/Envelopes/MPE tabs", pl(ch(ALT, Key::Tab), ch(CMD, Key::Tab)), L(M::Clip(Cv::CycleEditorMode))),
     a("42.10", Clip, "Sample or Notes tab", k(ALT_SHIFT, Key::Num1), L(M::Clip(Cv::ContentTab))),
     a("42.10", Clip, "Envelopes tab", k(ALT_SHIFT, Key::Num2), L(M::Clip(Cv::EnvelopeTab))),
-    a("42.10", Clip, "MPE tab", k(ALT_SHIFT, Key::Num3), p!("C10")),
+    a("42.10", Clip, "MPE tab", k(ALT_SHIFT, Key::Num3), L(M::Clip(Cv::MpeTab))),
 
     // 42.11 Sample Editor
     a("42.11", Sample, "Quantize", k(CMD, Key::U), W),
@@ -344,7 +344,7 @@ pub static BINDINGS: &[Binding] = &[
     a("42.12", Clip, "Toggle full-size Clip View", k(CMD_ALT, Key::E), L(M::Clip(Cv::ToggleFullSize))),
     a("42.12", Notes, "Group notes (play all)", k(CMD, Key::G), L(M::Notes(Nt::Group))),
     a("42.12", Notes, "Ungroup notes", k(CMD_SHIFT, Key::G), L(M::Notes(Nt::Ungroup))),
-    a("42.12", Notes, "Apply MIDI Tool settings", k(CMD, Key::Enter), p!("C11")),
+    a("42.12", Notes, "Apply MIDI Tool settings", k(CMD, Key::Enter), L(M::Notes(Nt::ApplyMidiTool))),
     a("42.12", Notes, "Invert note selection", k(CMD_SHIFT, Key::A), L(M::Notes(Nt::InvertSelection))),
     a("42.12", Notes, "Highlight scale", k(NO, Key::K), L(M::Notes(Nt::Highlight))),
     a("42.12", Arr, "Split Arrangement clip at time selection", k(CMD_SHIFT, Key::E), L(M::Arrange(Ar::Split))),

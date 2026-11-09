@@ -1,6 +1,7 @@
 //! The Clip View's panels: clip and loop settings, launch and program, the audio utilities, the
 //! note tools, and Quantize.
 
+use super::tools;
 use crate::session::{ClipRef, MultiClip, Session, SetMarker};
 use crate::ui::piano_roll::grid_label;
 use crate::ui::sample_editor;
@@ -235,6 +236,9 @@ enum Panel {
     Audio,
     PitchTime,
     Transform,
+    MidiTransform,
+    MidiGenerate,
+    MidiTools,
 }
 
 impl Panel {
@@ -244,17 +248,19 @@ impl Panel {
             Self::Extended => "PROGRAM",
             Self::Audio => "AUDIO",
             Self::PitchTime => "PITCH AND TIME",
-            Self::Transform => "TRANSFORM",
+            Self::Transform | Self::MidiTransform => "TRANSFORM",
+            Self::MidiGenerate => "GENERATE",
+            Self::MidiTools => "MIDI TOOLS",
         }
     }
 }
 
 /// How many panels a clip has, to make room for them across.
 pub(super) fn panel_count(clip: &Clip) -> usize {
-    panels_for(clip).len()
+    panels_for(clip, false).len()
 }
 
-fn panels_for(clip: &Clip) -> Vec<Panel> {
+fn panels_for(clip: &Clip, vertical: bool) -> Vec<Panel> {
     let mut list = vec![Panel::Main];
     // The launch controls are in the strip beside the Clip View: this is the MIDI program.
     if clip.is_midi() {
@@ -262,6 +268,13 @@ fn panels_for(clip: &Clip) -> Vec<Panel> {
     }
     if clip.is_midi() {
         list.push(Panel::PitchTime);
+        // Side by side there's only room for one, with tabs to switch.
+        if vertical {
+            list.push(Panel::MidiTransform);
+            list.push(Panel::MidiGenerate);
+        } else {
+            list.push(Panel::MidiTools);
+        }
     } else {
         list.push(Panel::Audio);
         list.push(Panel::Transform);
@@ -280,7 +293,7 @@ pub(super) fn show(
     let Some(clip) = session.clip_at(cref).cloned() else {
         return;
     };
-    let list = panels_for(&clip);
+    let list = panels_for(&clip, vertical);
     let draw = |ui: &mut egui::Ui, panel: Panel, session: &mut Session, state: &mut UiState| {
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(6, 4))
@@ -293,6 +306,13 @@ pub(super) fn show(
                     Panel::Audio => audio_panel(ui, session, state, cref, group),
                     Panel::PitchTime => pitch_time_panel(ui, session, state, cref),
                     Panel::Transform => sample_editor::quantize_panel(ui, session, state, cref),
+                    Panel::MidiTransform => {
+                        tools::panel(ui, session, state, cref, tools::Side::Transform);
+                    }
+                    Panel::MidiGenerate => {
+                        tools::panel(ui, session, state, cref, tools::Side::Generate);
+                    }
+                    Panel::MidiTools => tools::shared_panel(ui, session, state, cref),
                 }
             });
     };
@@ -1029,6 +1049,54 @@ pub(super) fn notes_row(
         });
     }
     let _ = cref;
+}
+
+/// What sits on the tab row over the MPE editor: its own grid and Fold.
+pub(super) fn mpe_row(
+    ui: &mut egui::Ui,
+    session: &mut Session,
+    state: &mut UiState,
+    cref: ClipRef,
+) {
+    ui.add_space(10.0);
+    let grid = session
+        .clip_at(cref)
+        .map(|c| c.mpe_grid)
+        .unwrap_or_default();
+    if toggle(
+        ui,
+        grid.on,
+        "Grid",
+        "Snap to Grid — the MPE tab's own, saved with the clip (Cmd+4)",
+    )
+    .clicked
+    {
+        crate::ui::piano_roll::set_mpe_grid(session, cref, !grid.on);
+    }
+    let mut step = grid.step;
+    let r = egui::ComboBox::from_id_salt("mpe_grid")
+        .width(52.0)
+        .selected_text(grid_label(step))
+        .show_ui(ui, |ui| {
+            for g in [PPQ, PPQ / 2, PPQ / 4, PPQ / 8, PPQ / 3, PPQ / 6] {
+                ui.selectable_value(&mut step, g, grid_label(g));
+            }
+        });
+    info(r.response, "Grid — the step the MPE tab snaps to");
+    if step != grid.step {
+        session.edit_clips(&[cref], "MPE Grid", |c| c.mpe_grid.step = step);
+    }
+    let on = state.piano.fold_notes;
+    if toggle(
+        ui,
+        on,
+        "Fold",
+        "Fold to Notes — also hides Pitch envelopes (F)",
+    )
+    .clicked
+    {
+        state.piano.fold_notes = !on;
+    }
 }
 
 /// The note editor's own toggles: fold, scale highlight, Find and Focus.

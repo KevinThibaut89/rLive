@@ -3,6 +3,7 @@
 //! Nothing here knows about the engine or the undo history: the session runs these on a copy of a
 //! clip, keeps the result and tells the engine.
 
+use crate::note_edit;
 use crate::{ArrangementClip, Clip, ClipContent, MidiProgram, NoteData, Warp, WarpMarker};
 use rlive_core::{ClipRegion, PPQ};
 
@@ -298,7 +299,7 @@ fn step_in_scale(key: u8, steps: i32, scale: PitchScale) -> u8 {
     k.clamp(0, 127) as u8
 }
 
-fn moved(key: u8, by: i32, scale: Option<PitchScale>) -> u8 {
+pub(crate) fn moved(key: u8, by: i32, scale: Option<PitchScale>) -> u8 {
     match scale {
         Some(s) => step_in_scale(key, by, s),
         None => (key as i32 + by).clamp(0, 127) as u8,
@@ -379,7 +380,9 @@ pub fn stretch(notes: &mut [NoteData], selected: &[usize], factor: f64) {
     for i in set {
         let n = &mut notes[i];
         n.start = from + ((n.start - from) as f64 * factor).round() as u64;
-        n.length = ((n.length as f64 * factor).round() as u64).max(1);
+        let length = ((n.length as f64 * factor).round() as u64).max(1);
+        note_edit::stretch_expression(n, length as f64 / n.length as f64);
+        n.length = length;
     }
 }
 
@@ -570,6 +573,19 @@ mod tests {
         assert_eq!(a.offset, PPQ / 2);
         assert_eq!(a.clip.start, PPQ / 2);
         assert_eq!(a.run_offset(), 0);
+    }
+
+    #[test]
+    fn the_time_buttons_stretch_a_notes_expression_too() {
+        let mut n = NoteData::new(0, 480, 60, 0.8);
+        n.expr = Some(Box::new(crate::NoteExpression {
+            pitch: vec![crate::Breakpoint::new(480.0, 2.0)],
+            ..Default::default()
+        }));
+        let mut notes = vec![n];
+        stretch(&mut notes, &[], 2.0);
+        assert_eq!(notes[0].length, 960);
+        assert_eq!(notes[0].expr.as_ref().unwrap().pitch[0].time, 960.0);
     }
 
     #[test]

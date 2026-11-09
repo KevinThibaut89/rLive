@@ -406,34 +406,34 @@ Overview chapter; only behaviours stated here or foundational are listed.
 **Milestones:** C11
 
 **Framework**
-- `[ ]` Transform and Generate panels with tool selector [M]
-- `[ ]` Auto Apply default, Apply button, disable restores originals [M]
-- `[ ]` Apply shortcut; Reset affects parameters only; undo affects notes only [S]
-- `[ ]` Scope: note/time selection or loop; generators replace only where overlapping [S]
-- `[ ]` Pitch parameters in scale degrees when scale active [S] → Scale Mode
-- `[ ]` Third-party tools from fixed User Library folders or Places; filter tags [M MAX]; a native plug-in API is the non-Max equivalent [L]
+- `[~]` Transform and Generate panels with tool selector [M]
+- `[x]` Auto Apply default, Apply button, disable restores originals [M]
+- `[x]` Apply shortcut; Reset affects parameters only; undo affects notes only [S]
+- `[x]` Scope: note/time selection or loop; generators replace only where overlapping [S]
+- `[x]` Pitch parameters in scale degrees when scale active [S] → Scale Mode
+- `[out]` Third-party tools from fixed User Library folders or Places; filter tags [M MAX]; a native plug-in API is the non-Max equivalent [L]
 
 **Transformations**
-- `[ ]` Arpeggiate: 18 styles, Distance, Steps, Rate, Gate [M] → Arpeggiator logic
-- `[ ]` Chop: 2-64 parts, Gaps, 16-part pattern toggles, Emphasis with 2-8x stretch, Variation [M]
-- `[ ]` Connect: Spread, Density, Rate, Tie [S]
-- `[ ]` Glissando: Start, Curve; pitch-bend ties between notes [M] → MPE
-- `[ ]` LFO: Pitch/Slide/Pressure target, Attack/Decay, four shapes, Reseed, Rate 1 to 1/128, Time Shift, Amount, Base [M] → MPE
-- `[ ]` Ornament: Flam (Position, Velocity); Grace (High/Low/Same, Position, Velocity, Chance, Amount) [S]
-- `[ ]` Quantize: grid or value, triplets, starts/ends, Amount [S]
-- `[ ]` Recombine: Position/Pitch/Duration/Velocity; Shuffle then Mirror then Rotate, Rotate on Grid [M]
-- `[ ]` Span: Legato, Tenuto, Staccato, Offset, Variation [S]
-- `[ ]` Strum: Low, High, Tension, display [S]
-- `[ ]` Time Warp: 1-3 breakpoints, Quantize, Preserve Time Range, Include Note End [M]
-- `[ ]` Velocity Shaper: envelope, min/max, Loop, Rotate, Division [S MAX]; native reimplementation removes MAX
+- `[x]` Arpeggiate: 18 styles, Distance, Steps, Rate, Gate [M] → Arpeggiator logic
+- `[x]` Chop: 2-64 parts, Gaps, 16-part pattern toggles, Emphasis with 2-8x stretch, Variation [M]
+- `[x]` Connect: Spread, Density, Rate, Tie [S]
+- `[x]` Glissando: Start, Curve; pitch-bend ties between notes [M] → MPE
+- `[x]` LFO: Pitch/Slide/Pressure target, Attack/Decay, four shapes, Reseed, Rate 1 to 1/128, Time Shift, Amount, Base [M] → MPE
+- `[x]` Ornament: Flam (Position, Velocity); Grace (High/Low/Same, Position, Velocity, Chance, Amount) [S]
+- `[x]` Quantize: grid or value, triplets, starts/ends, Amount [S]
+- `[x]` Recombine: Position/Pitch/Duration/Velocity; Shuffle then Mirror then Rotate, Rotate on Grid [M]
+- `[x]` Span: Legato, Tenuto, Staccato, Offset, Variation [S]
+- `[x]` Strum: Low, High, Tension, display [S]
+- `[x]` Time Warp: 1-3 breakpoints, Quantize, Preserve Time Range, Include Note End [M]
+- `[x]` Velocity Shaper: envelope, min/max, Loop, Rotate, Division [S MAX]; native reimplementation removes MAX
 
 **Generators**
-- `[ ]` Rhythm: Pitch, Steps to 16, Pattern, Density, Step Duration, Split, Shift, Velocity, Accent, Frequency, Offset [M]
-- `[ ]` Seed: pitch/duration/velocity ranges, Voices, Density; piano-ruler range pick [S]
-- `[ ]` Shape: presets or drawn, range, Rate, Tie, Density, Jitter [M]
-- `[ ]` Stacks: Tonnetz chord pads, progression add/remove, Root, Inversion, Duration, Offset [L]
+- `[x]` Rhythm: Pitch, Steps to 16, Pattern, Density, Step Duration, Split, Shift, Velocity, Accent, Frequency, Offset [M]
+- `[x]` Seed: pitch/duration/velocity ranges, Voices, Density; piano-ruler range pick [S]
+- `[x]` Shape: presets or drawn, range, Rate, Tie, Density, Jitter [M]
+- `[x]` Stacks: Tonnetz chord pads, progression add/remove, Root, Inversion, Duration, Offset [L]
 - `[ ]` Stacks custom chord banks: JSON .stacks, double-click loads, tag filter [S; format PROP if interop wanted]
-- `[ ]` Euclidean: four voices, Rotation, randomize, pitch/pad, velocity, Steps, Density, Division [M MAX]; native reimplementation removes MAX
+- `[x]` Euclidean: four voices, Rotation, randomize, pitch/pad, velocity, Steps, Density, Division [M MAX]; native reimplementation removes MAX
 
 
 ## 12. Editing MPE (pp. 330-339)
@@ -442,19 +442,19 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 - `[~]` MPE Mode per controller; input channel locked to All [M]
 - `[x]` Five dimensions: Pitch, Slide, Pressure, Velocity, Release Velocity [L] → per-note data model
-- `[ ]` Editable on all MIDI clips regardless of source [S]
-- `[ ]` Lanes show/hide, resize; Pitch overlaid on notes [M]
-- `[ ]` Track meter blue dot for per-note activity [S]
-- `[ ]` Selected-note overlay, others dimmed [M]
-- `[ ]` Breakpoints: create, delete, drag, hover values, Edit/Add Value, group drag [L]
-- `[ ]` Segment drag, inserts edge breakpoints; curved segments [M]
-- `[ ]` Grid off by default, separate from other tabs, saved with clip [S]
-- `[ ]` Axis lock, fine-drag, drag-over deletes neighbour [S]
-- `[ ]` Scale non-Pitch envelopes proportionally; Select All offset [S]
-- `[ ]` Envelopes move and stretch with notes [M] → Note Stretch
-- `[ ]` Pitch semitone snap modifier [S]
-- `[ ]` Pitch hidden under Fold; zoom fits bend range; Clear All Envelopes [S]
-- `[ ]` Draw Mode freehand, grid steps, momentary [M]
+- `[x]` Editable on all MIDI clips regardless of source [S]
+- `[~]` Lanes show/hide, resize; Pitch overlaid on notes [M]
+- `[x]` Track meter blue dot for per-note activity [S]
+- `[~]` Selected-note overlay, others dimmed [M]
+- `[x]` Breakpoints: create, delete, drag, hover values, Edit/Add Value, group drag [L]
+- `[x]` Segment drag, inserts edge breakpoints; curved segments [M]
+- `[x]` Grid off by default, separate from other tabs, saved with clip [S]
+- `[x]` Axis lock, fine-drag, drag-over deletes neighbour [S]
+- `[x]` Scale non-Pitch envelopes proportionally; Select All offset [S]
+- `[x]` Envelopes move and stretch with notes [M] → Note Stretch
+- `[x]` Pitch semitone snap modifier [S]
+- `[x]` Pitch hidden under Fold; zoom fits bend range; Clear All Envelopes [S]
+- `[x]` Draw Mode freehand, grid steps, momentary [M]
 - `[ ]` Live devices with MPE and Push 2 poly aftertouch [L HW] → instruments
 - `[ ]` Plug-in MPE: state in default config, MPE out from plug-ins [M] → VST3/CLAP/AU hosting
 - `[ ]` MPE/Multi-channel dialog from External Instrument, mixer I/O, plug-in menu [M]
@@ -1332,8 +1332,6 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **A19:** Next similar sample; Previous similar sample; Return to reference; Save as similarity reference; Show similar-sample swap controls; Similarity search
 - `[ ]` **A5:** Audio engine on/off
 - `[ ]` **A9:** Reverse audio selection; Stretch warped clip
-- `[ ]` **C10:** MPE tab
-- `[ ]` **C11:** Apply MIDI Tool settings
 - `[ ]` **C12:** Add device from browser; Assign colour 1; Assign colour 2; Assign colour 3; Assign colour 4; Assign colour 5; Assign colour 6; Assign colour 7; Browser history back; Browser history forward; Close folder; Compare A/B; Drop browser clips as a scene; Hide/show Filter View; Hide/show Tag Editor; Hot-swap selected device; Jump to search results; Load selected device; Load selected item; Open folder; Preview selected file; Reset assigned colour; Scroll down; Scroll up; Search in Browser; Toggle Drum Rack/last selected pad; Toggle Hot-Swap Mode
 - `[ ]` **C14:** Export MIDI File
 - `[ ]` **C17:** Hide/show Sends; Hide/show return tracks; Toggle second window
