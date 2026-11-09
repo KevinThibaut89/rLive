@@ -11,6 +11,7 @@ super::domain! {
         ToggleAutomationMode,
         SwitchDetail,
         ToggleBrowser,
+        ToggleFullHeightBrowser,
         ToggleDetail,
         ToggleMixer,
         ToggleInOut,
@@ -53,6 +54,14 @@ pub const MENU: &[Entry] = &[
     Item("In/Out", M::View(View::ToggleInOut)),
     Item("Crossfader", M::View(View::ToggleCrossfader)),
     Item("Info View", M::View(View::ToggleInfoView)),
+    Item(
+        "Full-Height Browser",
+        M::View(View::ToggleFullHeightBrowser),
+    ),
+    Item(
+        "Undo History",
+        M::Browser(crate::ui::commands::browser::Browser::ToggleUndoHistory),
+    ),
     Separator,
     Item("Zoom In", M::View(View::ZoomIn)),
     Item("Zoom Out", M::View(View::ZoomOut)),
@@ -65,6 +74,10 @@ impl RliveApp {
         s.check(M::View(View::ToggleBrowser), self.ui.show_browser);
         s.check(M::View(View::ToggleGroovePool), self.ui.show_groove_pool);
         s.check(M::View(View::ToggleTuning), self.ui.show_tuning);
+        s.check(
+            M::View(View::ToggleFullHeightBrowser),
+            self.settings.full_height_browser,
+        );
         s.check(M::View(View::ToggleDetail), self.ui.show_detail);
         s.check(M::View(View::ToggleMixer), self.ui.layout.show_mixer);
         s.check(M::View(View::ToggleInOut), self.ui.layout.show_in_out);
@@ -165,6 +178,10 @@ impl RliveApp {
                 self.ui.show_groove_pool = true;
                 self.ui.show_browser = true;
                 self.move_focus(FocusArea::Browser);
+            }
+            View::ToggleFullHeightBrowser => {
+                self.settings.full_height_browser = !self.settings.full_height_browser;
+                self.settings.save();
             }
             View::ToggleDetail => self.toggle_detail(),
             View::ToggleMixer => self.ui.layout.show_mixer = !self.ui.layout.show_mixer,

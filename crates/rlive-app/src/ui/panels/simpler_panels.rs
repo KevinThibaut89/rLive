@@ -63,6 +63,13 @@ fn draw_simpler(ui: &mut egui::Ui, panel: &mut PanelCtx) {
     frame(ui, rect);
     let wave = read_wave(panel, si::VIEW_WAVE);
     draw_wave(ui, wave_rect, &wave);
+    if ui.rect_contains_pointer(wave_rect) {
+        let at = Rect::from_min_size(
+            wave_rect.right_bottom() - Vec2::new(18.0, 16.0),
+            Vec2::new(18.0, 16.0),
+        );
+        panel.hot_swap_sample(ui, at, 0);
+    }
 
     let start = panel.value(ParamId(si::START_FLAG)).unwrap_or(0.0) as f32;
     let end = panel.value(ParamId(si::END_FLAG)).unwrap_or(1.0) as f32;
@@ -264,6 +271,13 @@ fn draw_drum_wave(ui: &mut egui::Ui, panel: &mut PanelCtx) {
     frame(ui, rect);
     let wave = read_wave(panel, drum::VIEW_WAVE);
     draw_wave(ui, wave_rect, &wave);
+    if ui.rect_contains_pointer(wave_rect) {
+        let at = Rect::from_min_size(
+            wave_rect.right_bottom() - Vec2::new(18.0, 16.0),
+            Vec2::new(18.0, 16.0),
+        );
+        panel.hot_swap_sample(ui, at, 0);
+    }
     let start = panel.value(ParamId(drum::START)).unwrap_or(0.0) as f32 * 0.01;
     let length = panel.value(ParamId(drum::LENGTH)).unwrap_or(100.0) as f32 * 0.01;
     let x_of = |t: f32| wave_rect.left() + t * wave_rect.width();
@@ -379,6 +393,14 @@ fn draw_impulse(ui: &mut egui::Ui, panel: &mut PanelCtx) {
     });
     remember(ui, id.with("selected"), selected);
     let s = selected;
+    if ui.rect_contains_pointer(ui.max_rect()) {
+        let rect = ui.max_rect();
+        let at = Rect::from_min_size(
+            rect.right_top() + Vec2::new(-18.0, 28.0),
+            Vec2::new(18.0, 16.0),
+        );
+        panel.hot_swap_sample(ui, at, s);
+    }
     let param = |offset| imp::slot_param(s, offset);
     egui::Grid::new(id.with("grid"))
         .num_columns(3)

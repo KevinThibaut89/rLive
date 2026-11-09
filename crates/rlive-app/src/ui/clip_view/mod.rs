@@ -555,7 +555,7 @@ fn title_bar(
 fn drop_sample_on_clip(ui: &mut egui::Ui, session: &mut Session, cref: ClipRef, area: Rect) {
     let id = ui.scope_id().with("clip_view_drop");
     let resp = ui.interact(area, id, Sense::hover());
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+    if let Some(item) = crate::ui::widgets::released::<BrowserItem>(&resp) {
         if let BrowserItem::Sample(path) = &*item {
             session.replace_clip_sample(cref, path);
         }
@@ -696,10 +696,13 @@ pub(super) fn time_selection(
 /// Reveals a sample in the browser.
 pub(super) fn show_in_browser(state: &mut UiState, path: &std::path::Path) {
     state.show_browser = true;
-    state.browser_category = super::browser::Category::Samples;
-    state.browser_filter = path
+    state.browser.model.navigate(rlive_browser::Scope::Label(
+        rlive_browser::item::Label::Samples,
+    ));
+    let name = path
         .file_stem()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    state.browser.model.set_text(name);
     state.focus = FocusArea::Browser;
 }
 

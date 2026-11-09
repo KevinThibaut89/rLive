@@ -50,6 +50,8 @@ pub(crate) enum RackAction {
     SelectPad(u8, Option<ChainId>),
     PadStart(u8),
     PadDrop(u8, BrowserItem),
+    /// A multi-selection from the browser on a pad; `true` layers them on it.
+    PadDropMany(u8, Vec<BrowserItem>, bool),
     PadSwap(u8, u8),
     PadLayer(u8, u8),
     MacroValue(usize, f64),
@@ -224,9 +226,29 @@ pub(crate) fn apply(
         }
         RackAction::PadStart(start) => view_of(view, session, chain, rack).pad_start = start,
         RackAction::PadDrop(note, item) => {
-            session.drop_on_pad(chain, rack, note, pad_drop(item));
+            match item {
+                BrowserItem::Preset(source) => {
+                    if let Ok(preset) = source.load() {
+                        let target = crate::session::SwapTarget::Pad { chain, rack, note };
+                        if let Err(e) =
+                            session.hot_swap(&target, crate::session::SwapItem::Preset(&preset))
+                        {
+                            *status = e;
+                        }
+                    }
+                }
+                other => {
+                    if let Some(drop) = pad_drop(other) {
+                        session.drop_on_pad(chain, rack, note, drop);
+                    }
+                }
+            }
             let v = view_of(view, session, chain, rack);
             v.last_pad = Some(note);
+        }
+        RackAction::PadDropMany(note, items, layer) => {
+            drop_many_on_pad(session, chain, rack, note, items, layer);
+            view_of(view, session, chain, rack).last_pad = Some(note);
         }
         RackAction::PadSwap(a, b) => session.swap_pads(chain, rack, a, b),
         RackAction::PadLayer(from, to) => session.layer_pads(chain, rack, from, to),
@@ -322,6 +344,16 @@ fn add_chain_with(
         BrowserItem::Sample(path) => path
             .file_stem()
             .map_or_else(|| "Chain".to_string(), |s| s.to_string_lossy().into_owned()),
+        BrowserItem::Preset(source) => source
+            .load()
+            .map_or_else(|_| "Chain".to_string(), |p| p.name),
+        BrowserItem::Many(items) => {
+            for item in items.clone() {
+                add_chain_with(session, view, chain, rack, item);
+            }
+            return;
+        }
+        _ => "Chain".to_string(),
     };
     let Some(id) = session.add_chain(chain, rack, &name) else {
         return;
@@ -337,11 +369,37 @@ fn add_chain_with(
     select_chains(view, session, chain, rack, vec![id]);
 }
 
-fn pad_drop(item: BrowserItem) -> PadDrop {
+fn pad_drop(item: BrowserItem) -> Option<PadDrop> {
     match item {
-        BrowserItem::Builtin(t) => PadDrop::Builtin(t.to_string()),
-        BrowserItem::Plugin(p) => PadDrop::Plugin(p),
-        BrowserItem::Sample(path) => PadDrop::Sample(path),
+        BrowserItem::Builtin(t) => Some(PadDrop::Builtin(t.to_string())),
+        BrowserItem::Plugin(p) => Some(PadDrop::Plugin(p)),
+        BrowserItem::Sample(path) => Some(PadDrop::Sample(path)),
+        _ => None,
+    }
+}
+
+/// A multi-selection on a pad: samples spread chromatically from it, or with Layer all on it.
+fn drop_many_on_pad(
+    session: &mut Session,
+    chain: ChainRef,
+    rack: DeviceId,
+    note: u8,
+    items: Vec<BrowserItem>,
+    layer: bool,
+) {
+    let paths: Vec<std::path::PathBuf> = items
+        .iter()
+        .filter_map(|i| match i {
+            BrowserItem::Sample(p) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    if paths.len() == items.len() {
+        session.drop_samples_on_pad(chain, rack, note, &paths, layer);
+        return;
+    }
+    if let Some(drop) = items.into_iter().find_map(pad_drop) {
+        session.drop_on_pad(chain, rack, note, drop);
     }
 }
 

@@ -150,6 +150,7 @@ pub fn scan(path: &Path) -> Result<Vec<PluginDescriptor>> {
                     d.features,
                     clap_sys::plugin_features::CLAP_PLUGIN_FEATURE_INSTRUMENT,
                 ),
+                subcategories: String::new(),
             });
         }
     }

@@ -456,6 +456,7 @@ impl FakePlugin {
                 version: String::new(),
                 path: PathBuf::new(),
                 is_instrument: false,
+                subcategories: String::new(),
             },
             params,
             pending,

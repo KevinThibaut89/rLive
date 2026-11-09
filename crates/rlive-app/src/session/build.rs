@@ -236,7 +236,7 @@ fn beats_slices(
         .collect()
 }
 
-fn warp_mode(warp: &Warp) -> warp::WarpMode {
+pub(super) fn warp_mode(warp: &Warp) -> warp::WarpMode {
     let p = &warp.params;
     match warp.mode {
         ProjectWarpMode::Beats => warp::WarpMode::Beats {
@@ -330,6 +330,7 @@ pub fn descriptor_for(
                 version: String::new(),
                 path: path.clone(),
                 is_instrument: false,
+                subcategories: String::new(),
             }),
     )
 }

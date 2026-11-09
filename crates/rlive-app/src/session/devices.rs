@@ -208,7 +208,7 @@ impl Session {
             if !self.accepts_role(chain, info.role, info.name) {
                 return;
             }
-            let d = Device::builtin(info.id, info.name);
+            let d = self.default_device(info);
             let index = self.instrument_insert_index(chain, info.role);
             self.add_device(chain, index, d);
         }
@@ -225,7 +225,9 @@ impl Session {
             return;
         }
         let index = self.instrument_insert_index(chain, role);
+        let id = d.id;
         self.add_device(chain, index, d);
+        self.apply_plugin_config(chain, desc, id);
     }
 
     /// MIDI effects go to the front of the chain, instruments after them (and after any other

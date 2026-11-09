@@ -10,7 +10,7 @@ pub(crate) mod rack;
 mod tree;
 mod views;
 
-pub(crate) use queue::{group_selected, ungroup_selected, Action, ActionQueue};
+pub(crate) use queue::{add_item, group_selected, ungroup_selected, Action, ActionQueue};
 use rack::{RackUi, RackView};
 
 use super::automation;
@@ -28,6 +28,13 @@ use rlive_project::{Device, DeviceKind};
 use std::collections::{HashMap, HashSet};
 use tree::{ControlPlan, DeviceNode, NodeBody, PlanInput, DEVICE_GAP};
 use views::ViewStore;
+
+/// A device being dragged by its title bar, to save it into a browser folder.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DeviceDrag {
+    pub chain: ChainRef,
+    pub device: DeviceId,
+}
 
 const FOLDED_NAME_Y: f32 = 46.0;
 const DROP_ZONE_W: f32 = 170.0;
@@ -55,6 +62,12 @@ pub struct DeviceViewState {
     /// The chains selected in the Session View's mixer.
     pub(crate) mixer_selection: Vec<crate::ui::rack_mixer::MixChain>,
     pub(crate) chain_meters: HashMap<ChainId, super::widgets::MeterState>,
+    /// Hot-Swap requests from what was drawn this frame, for the browser to act on.
+    pub(crate) swap_requests: Vec<crate::ui::browser::SwapRequest>,
+    /// A preset just saved, for the browser to show.
+    pub(crate) reveal_saved: Option<std::path::PathBuf>,
+    /// A device whose default exists: the overwrite question is showing.
+    pub(crate) confirm_default: Option<(ChainRef, DeviceId)>,
 }
 
 impl DeviceViewState {
@@ -86,6 +99,8 @@ pub(crate) struct DrawCx<'a> {
     scroll_to: Option<DeviceId>,
     /// Device controls drawn this frame, for their automation commands afterwards.
     zones: Vec<(Rect, ChainRef, rlive_core::param::EnvTarget)>,
+    /// What Hot-Swap is pointed at, to light its button.
+    swap_target: Option<crate::session::SwapTarget>,
 }
 
 pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
@@ -177,6 +192,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
             keyboard_free,
             scroll_to: state.devices.scroll_to,
             zones: Vec::new(),
+            swap_target: state.browser.hot_swap.map(|s| s.target),
         };
         egui::ScrollArea::horizontal()
             .id_salt("device_chain")
@@ -282,7 +298,7 @@ fn drop_zone(ui: &mut egui::Ui, cx: &mut DrawCx, chain: ChainRef, height: f32, w
             pal().text_faint
         },
     );
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+    if let Some(item) = crate::ui::widgets::released::<BrowserItem>(&resp) {
         cx.queue.push(chain, Action::Add((*item).clone()));
     }
     info(
@@ -385,6 +401,19 @@ fn device(
 
     let resp = info(bg, format!("{} — right-click for options", dev.name));
     widgets::info_note(&resp, &dev.info);
+    // The title bar drags a device to a browser folder, to save it there.
+    let drag = ui.interact(
+        title,
+        ui.scope_id().with(("device_drag", dev.id)),
+        Sense::drag(),
+    );
+    drag.dnd_set_drag_payload(DeviceDrag {
+        chain,
+        device: dev.id,
+    });
+    if drag.dragged() {
+        crate::ui::browser::drag_device_label(ui, &dev.name);
+    }
     let on_title = |resp: &egui::Response| {
         resp.interact_pointer_pos()
             .is_some_and(|pos| title.contains(pos) || !dev.expanded)
@@ -436,6 +465,7 @@ fn expanded_title(
         (_, true) => 44.0,
         _ => 6.0,
     };
+    let reserved = reserved + 40.0;
     let name_w = (title.right() - tu.cursor().left() - reserved).max(10.0);
     // A rack is wider than the window, so what's in its title stays where it can be seen.
     let name_w = if is_rack { name_w.min(150.0) } else { name_w };
@@ -461,8 +491,12 @@ fn expanded_title(
             cx.queue.push(chain, Action::Rename(dev.id, name));
         }
     }
+    let shown_name = match cx.session.compare_slot(chain, dev.id) {
+        Some(rlive_project::CompareSlot::B) => format!("{} (B)", dev.name),
+        _ => dev.name.clone(),
+    };
     let galley = tu.painter().layout_no_wrap(
-        dev.name.clone(),
+        shown_name,
         theme::font_bold(11.0),
         if on { pal().text } else { pal().text_dim },
     );
@@ -471,6 +505,21 @@ fn expanded_title(
         galley,
         pal().text,
     );
+    let swap_target = crate::session::SwapTarget::Device { chain, id: dev.id };
+    let swapping = cx.swap_target == Some(swap_target);
+    let r = widgets::state_button(tu, Vec2::new(16.0, 15.0), swapping, pal().accent, "Q");
+    if info(
+        r,
+        "Hot-Swap Presets — replace this device from the browser (Q)",
+    )
+    .clicked()
+    {
+        cx.queue.push(chain, Action::HotSwap(swap_target));
+    }
+    let r = widgets::state_button(tu, Vec2::new(16.0, 15.0), false, pal().accent, "S");
+    if info(r, "Save Preset — save this device to the User Library").clicked() {
+        cx.queue.push(chain, Action::SavePreset(dev.id));
+    }
     if is_rack {
         let r = widgets::state_button(tu, Vec2::new(36.0, 15.0), false, pal().accent, "Rand");
         if info(
@@ -656,6 +705,45 @@ fn device_menu(
         ui.close();
     }
     ui.separator();
+    if ui.button("Save Preset").clicked() {
+        cx.queue.push(chain, Action::SavePreset(dev.id));
+        ui.close();
+    }
+    if ui.button("Hot-Swap Preset (Q)").clicked() {
+        cx.queue.push(
+            chain,
+            Action::HotSwap(crate::session::SwapTarget::Device { chain, id: dev.id }),
+        );
+        ui.close();
+    }
+    if is_plugin {
+        if ui.button("Save as Default Configuration").clicked() {
+            cx.queue
+                .push(chain, Action::SaveDefaultPluginConfig(dev.id));
+            ui.close();
+        }
+    } else if ui.button("Save as Default Preset").clicked() {
+        cx.queue.push(chain, Action::SaveDefaultPreset(dev.id));
+        ui.close();
+    }
+    if let (Some(slot), DeviceKind::Builtin { .. }) =
+        (cx.session.compare_slot(chain, dev.id), &dev.kind)
+    {
+        ui.separator();
+        let (copy, switch) = match slot {
+            rlive_project::CompareSlot::A => ("Compare: Copy A to B", "Compare: Switch to B"),
+            rlive_project::CompareSlot::B => ("Compare: Copy B to A", "Compare: Switch to A"),
+        };
+        if ui.button(copy).clicked() {
+            cx.queue.push(chain, Action::CompareCopy(dev.id));
+            ui.close();
+        }
+        if ui.button(switch).clicked() {
+            cx.queue.push(chain, Action::CompareSwitch(dev.id));
+            ui.close();
+        }
+    }
+    ui.separator();
     if ui
         .button(RichText::new("Delete").color(pal().arm_red))
         .clicked()
@@ -812,8 +900,18 @@ fn sample_row(
             pal().accent,
         );
         info(resp, "Sample — the audio this Sampler plays");
-        if widgets::state_button(ui, Vec2::new(44.0, 18.0), false, pal().accent, "Load").clicked() {
+        if widgets::state_button(ui, Vec2::new(22.0, 18.0), false, pal().accent, "Load").clicked() {
             cx.queue.push(chain, Action::LoadSample(dev.id, slot));
+        }
+        let target = crate::session::SwapTarget::Sample {
+            chain,
+            id: dev.id,
+            slot,
+        };
+        let swapping = cx.swap_target == Some(target);
+        let r = widgets::state_button(ui, Vec2::new(16.0, 18.0), swapping, pal().accent, "Q");
+        if info(r, "Hot-Swap Sample — replace this sample from the browser").clicked() {
+            cx.queue.push(chain, Action::HotSwap(target));
         }
     });
 }

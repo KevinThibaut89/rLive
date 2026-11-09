@@ -70,7 +70,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Mixer sections shown or hidden individually [S]
 - `[ ]` Sends and returns; returns hold effects only [M]
 - `[ ]` Crossfader across any number of tracks including returns [M]
-- `[ ]` Presets stored outside Sets; Racks save multi-device combinations [L]
+- `[x]` Presets stored outside Sets; Racks save multi-device combinations [L]
 - `[ ]` In/Out patchbay: external, track-to-track, device routing, resampling, group submix [L]
 - `[ ]` Monitoring modes for inputs [M]
 - `[ ]` External Audio Effect and External Instrument [M HW-optional]
@@ -90,50 +90,50 @@ Overview chapter; only behaviours stated here or foundational are listed.
 **Milestones:** C12, A19
 
 **Layout and search**
-- `[ ]` Sidebar, content pane, filters, results bar, preview tab, resizable, full-height option [M]
-- `[ ]` Content columns: show, reorder, sort, file-extension toggle [S]
-- `[ ]` AND-matched search across labels; shortcut jumps to All [M] → indexed database
-- `[ ]` Hashtag tag search with autocomplete [S]
-- `[ ]` Keyboard-only search flow; Esc clears terms and tags [S]
-- `[ ]` Clear button resets terms and tags; x clears terms only [S]
-- `[ ]` Save results as custom label; rename labels, change icons, delete [S]
-- `[ ]` Browser back/forward history of searches and navigation [S]
+- `[~]` Sidebar, content pane, filters, results bar, preview tab, resizable, full-height option [M]
+- `[~]` Content columns: show, reorder, sort, file-extension toggle [S]
+- `[x]` AND-matched search across labels; shortcut jumps to All [M] → indexed database
+- `[x]` Hashtag tag search with autocomplete [S]
+- `[~]` Keyboard-only search flow; Esc clears terms and tags [S]
+- `[x]` Clear button resets terms and tags; x clears terms only [S]
+- `[x]` Save results as custom label; rename labels, change icons, delete [S]
+- `[x]` Browser back/forward history of searches and navigation [S]
 
 **Tags**
-- `[ ]` Filter groups per label, state remembered per label, multi-select, hide, reset [M]
-- `[ ]` Factory tags immutable; user tags additive [S CONTENT]
+- `[x]` Filter groups per label, state remembered per label, multi-select, hide, reset [M]
+- `[x]` Factory tags immutable; user tags additive [S CONTENT]
 - `[ ]` Auto tags from sound analysis for samples up to 60 s, toggleable, editable [M ML]
-- `[ ]` VST3 subcategory mapped to tags [S]
-- `[ ]` Tag Editor: check/uncheck, batch tagging, custom tags and groups, nested subtags, rename, delete [M]
-- `[ ]` Quick Tags: inline assign, autocomplete, create new, parent prompt, asterisk for partial [M]
+- `[x]` VST3 subcategory mapped to tags [S]
+- `[~]` Tag Editor: check/uncheck, batch tagging, custom tags and groups, nested subtags, rename, delete [M]
+- `[~]` Quick Tags: inline assign, autocomplete, create new, parent prompt, asterisk for partial [M]
 
 **Collections and Library**
-- `[ ]` Seven colour labels, number-key assignment, 0 clears, multiple colours per item (three shown), rename, show/hide [S]
-- `[ ]` Library labels: All, Sounds, Drums, Instruments, Audio Effects, MIDI Effects, Modulators, Max for Live, Plug-Ins, Clips, Samples, Grooves, Templates, Tunings; show/hide [M; Max label MAX]
+- `[x]` Seven colour labels, number-key assignment, 0 clears, multiple colours per item (three shown), rename, show/hide [S]
+- `[x]` Library labels: All, Sounds, Drums, Instruments, Audio Effects, MIDI Effects, Modulators, Max for Live, Plug-Ins, Clips, Samples, Grooves, Templates, Tunings; show/hide [M; Max label MAX]
 
 **Places**
 - `[out]` Packs: installed, updates, available; pause/resume/cancel, batch download, install, size, delete [L CLOUD CONTENT]
-- `[ ]` Pack Info pages and Help overview [S CONTENT]
+- `[out]` Pack Info pages and Help overview [S CONTENT]
 - `[out]` Splice: embedded catalogue, device-code login, search suggestions [XL CLOUD]
 - `[out]` Splice filters (instrument, genre, key, tempo, type), sort, shuffle, category browse [in above, CLOUD]
 - `[out]` Splice Search with Sound from clip or time selection, 50 results [L CLOUD ML]
 - `[out]` Splice preview: loop, tempo sync, transpose, scale sync, loudness; Likes, Collections, share [in above, CLOUD]
 - `[out]` Splice drag to track or device, auto-licensed, Complex warp forced, download location options [M CLOUD] → Complex warp
 - `[out]` Ableton Cloud: browser sign-in, up to eight synced Sets from Note and Move, one-way into Live [L CLOUD HW]
-- `[ ]` Push 3 Standalone: Wi-Fi discovery, six-digit pairing, browse and transfer Projects, unpair [L HW]
-- `[out]` User Library: portable, relocatable, default folders (Clips, Defaults, Grooves, Presets, Samples, Templates, Chord Banks, ABL Assets) [M; ABL Assets CLOUD]
-- `[ ]` Current Project label: expand Set into tracks, clips, devices, returns, Main, grooves [M] → Set parser
-- `[ ]` Backup folder: last ten saves, timestamps, oldest trashed [S]
-- `[ ]` User Folders: add, drag-add, scan, spinner, greyed when missing, Locate, Remove [M]
+- `[out]` Push 3 Standalone: Wi-Fi discovery, six-digit pairing, browse and transfer Projects, unpair [L HW]
+- `[x]` User Library: portable, relocatable, default folders (Clips, Defaults, Grooves, Presets, Samples, Templates, Chord Banks, ABL Assets) [M; ABL Assets CLOUD]
+- `[~]` Current Project label: expand Set into tracks, clips, devices, returns, Main, grooves [M] → Set parser
+- `[x]` Backup folder: last ten saves, timestamps, oldest trashed [S]
+- `[x]` User Folders: add, drag-add, scan, spinner, greyed when missing, Locate, Remove [M]
 
 **Navigation, preview, insertion**
-- `[ ]` Arrow navigation, modifier keeps folders open, drag-scroll [S]
-- `[ ]` Preview on selection or by shortcut [M]
-- `[ ]` Non-Raw preview starts on next bar, tempo-matched, looped; Raw plays original tempo, unlooped [M] → warping
-- `[ ]` Preview scrub (not Raw, not unwarped saved clips), preview/cue volume, separate cue outs [M]
-- `[ ]` Drag to track, or to empty area to create track [M]
-- `[ ]` Double-click/Enter loads to selected track; samples go to Simpler on MIDI tracks, slot on audio tracks [S] → Simpler
-- `[ ]` Drag from OS file manager [S]
+- `[~]` Arrow navigation, modifier keeps folders open, drag-scroll [S]
+- `[~]` Preview on selection or by shortcut [M]
+- `[x]` Non-Raw preview starts on next bar, tempo-matched, looped; Raw plays original tempo, unlooped [M] → warping
+- `[x]` Preview scrub (not Raw, not unwarped saved clips), preview/cue volume, separate cue outs [M]
+- `[~]` Drag to track, or to empty area to create track [M]
+- `[x]` Double-click/Enter loads to selected track; samples go to Simpler on MIDI tracks, slot on audio tracks [S] → Simpler
+- `[~]` Drag from OS file manager [S]
 
 
 ## 5. Managing Files and Sets (pp. 122-164)
@@ -170,7 +170,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Sets**
 - `[ ]` New, Open, Open Recent, Save, Save As, Save a Copy [M]
-- `[ ]` Undo History window: jump to any step, greyed redo region, not persisted [M] → command-based undo [L]
+- `[x]` Undo History window: jump to any step, greyed redo region, not persisted [M] → command-based undo [L]
 - `[ ]` Merge Sets: drag whole Set, excludes returns, rebuilds clips, devices, automation [L]
 - `[ ]` Unfold Sets in browser: tracks, groups, devices, Session clips, grooves individually importable [M]
 - `[ ]` Export selected Session clips as new Set by drag [M]
@@ -432,7 +432,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[x]` Seed: pitch/duration/velocity ranges, Voices, Density; piano-ruler range pick [S]
 - `[x]` Shape: presets or drawn, range, Rate, Tie, Density, Jitter [M]
 - `[x]` Stacks: Tonnetz chord pads, progression add/remove, Root, Inversion, Duration, Offset [L]
-- `[ ]` Stacks custom chord banks: JSON .stacks, double-click loads, tag filter [S; format PROP if interop wanted]
+- `[x]` Stacks custom chord banks: JSON .stacks, double-click loads, tag filter [S; format PROP if interop wanted]
 - `[x]` Euclidean: four voices, Rotation, randomize, pitch/pad, velocity, Steps, Density, Division [M MAX]; native reimplementation removes MAX
 
 
@@ -500,7 +500,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 - `[x]` Scala .scl load [M]; ASCL extension [S PROP, spec is published]; bundled tunings CONTENT
 - `[x]` Per-octave and pseudo-octave scales; description in Info View [S]
-- `[ ]` Tunings label, User tag, drag or Enter loads, saved with Set [S]
+- `[x]` Tunings label, User tag, drag or Enter loads, saved with Set [S]
 - `[~]` All native instruments support tuning [L] → every instrument
 - `[~]` MPE plug-ins and Max instruments need 48-semitone bend [M; Max path MAX]
 - `[~]` Note ruler shows tuning pitches; hover shows pitch and frequency [M]
@@ -719,19 +719,19 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Reorder, cross-track drag, cut/copy/paste/duplicate; paste position rules; live edits without audio dropouts. L. Needs lock-free graph swap.
 - `[ ]` Level meters between devices. S
 - `[ ]` Title bar: Activator (off means no CPU), hot-swap, save, options, scale toggle, expand toggles (above-device view and in-device view). M
-- `[ ]` A/B device states: built-ins only; Copy A to B; switch with P; automation disabled on switch and re-enabled per parameter; copy or save flattens the selected state to both. M. API [X].
-- `[ ]` Presets per device in browser. M. [O] for factory set.
+- `[x]` A/B device states: built-ins only; Copy A to B; switch with P; automation disabled on switch and re-enabled per parameter; copy or save flattens the selected state to both. M. API [X].
+- `[x]` Presets per device in browser. M. [O] for factory set.
 - `[ ]` Live file types .adg, .adv, .amxd can be dropped. Read support would be L. [P] format, [X] for .amxd.
-- `[ ]` Hot-Swap presets (Q), same device type only; Options.txt auto-load flag; several exit paths. M
-- `[ ]` Hot-Swap samples in Drum Rack pads, Drum Sampler, Impulse, Sampler, Simpler. S per target. Depends on instruments.
-- `[ ]` Save Preset to User Library, including Info text; Collect Files prompt. M
-- `[ ]` Default presets per device; name must match. S
-- `[ ]` Default plug-in configurations save parameter list only, not values. S
-- `[ ]` Track defaults for audio and MIDI. S
-- `[ ]` Sample dropping defaults: On Device View, On Drum Rack; Save as Default Pad; last added wins. S
+- `[~]` Hot-Swap presets (Q), same device type only; Options.txt auto-load flag; several exit paths. M
+- `[~]` Hot-Swap samples in Drum Rack pads, Drum Sampler, Impulse, Sampler, Simpler. S per target. Depends on instruments.
+- `[~]` Save Preset to User Library, including Info text; Collect Files prompt. M
+- `[x]` Default presets per device; name must match. S
+- `[~]` Default plug-in configurations save parameter list only, not values. S
+- `[x]` Track defaults for audio and MIDI. S
+- `[x]` Sample dropping defaults: On Device View, On Drum Rack; Save as Default Pad; last added wins. S
 - `[ ]` Slicing defaults, shown in Slice dialog. S. Depends on slicing.
 - `[ ]` Audio-to-MIDI defaults: Drums, Harmony, Melody folders; last added wins. S. Depends on conversion.
-- `[ ]` Project-specific Defaults folder overrides User Library. S
+- `[x]` Project-specific Defaults folder overrides User Library. S
 - `[~]` Automatic device and plug-in delay compensation, including returns; Options toggle. XL (with monitoring and tap-point cases)
 - `[ ]` Reduced Latency When Monitoring option. M
 - `[~]` Tempo-synced devices after latent devices may drift; PDC raises CPU. Document.
@@ -764,7 +764,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[x]` Four types: Instrument, Drum, Audio Effect, MIDI Effect, with type rules. XL as a system.
 - `[~]` Parallel chains, summed; unlimited nesting; Group, Group to Drum Rack, Ungroup; bracket UI. L
 - `[~]` View column; fold; hierarchical device navigator on selector context menu. M
-- `[~]` Chain List: Activator, Solo, Hot-Swap, volume, pan; multi-select; drop area; arrow-key flip; rename, colour, info text; chain presets; drag across tracks. L (Hot-Swap button and chain presets are placeholders until the browser's Hot-Swap and preset system; drag-to-track-focus is Session View only until C3's Arrangement work settles)
+- `[~]` Chain List: Activator, Solo, Hot-Swap, volume, pan; multi-select; drop area; arrow-key flip; rename, colour, info text; chain presets; drag across tracks. L (drag-to-track-focus is Session View only until C3's Arrangement work settles)
 - `[~]` Auto Select. S
 - `[~]` Zones: main range plus fade range, drag-edited. L
 - `[x]` Key zones. M. Velocity zones (1-127). M. Fades attenuate note velocity.
@@ -773,7 +773,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[~]` Drum Rack chain controls: Receive note, Play note, Choke (16 groups), Preview; All Notes disables Play and Choke. L
 - `[x]` Up to 6 return chains; post-fader sends; return output to Rack or Set returns. M
 - `[~]` Pad View: 128 notes, scroll by 16 or row; drag anything to a pad. L
-- `[~]` Sample drop creates Simpler, replaces only source; multi-drop maps chromatically; modifier layers to nested Rack. M. Depends on Simpler. (Multi-drop needs a browser multi-selection, so it isn't reachable from the UI yet)
+- `[~]` Sample drop creates Simpler, replaces only source; multi-drop maps chromatically; modifier layers to nested Rack. M. Depends on Simpler.
 - `[~]` Pad swap and layer; shared Receive notes create Multi pad with reduced controls. M
 - `[ ]` D toggles Hot-Swap target to last pad. S
 - `[ ]` Control surface pads follow scroll. M. [H]
@@ -1332,7 +1332,6 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **A19:** Next similar sample; Previous similar sample; Return to reference; Save as similarity reference; Show similar-sample swap controls; Similarity search
 - `[ ]` **A5:** Audio engine on/off
 - `[ ]` **A9:** Reverse audio selection; Stretch warped clip
-- `[ ]` **C12:** Add device from browser; Assign colour 1; Assign colour 2; Assign colour 3; Assign colour 4; Assign colour 5; Assign colour 6; Assign colour 7; Browser history back; Browser history forward; Close folder; Compare A/B; Drop browser clips as a scene; Hide/show Filter View; Hide/show Tag Editor; Hot-swap selected device; Jump to search results; Load selected device; Load selected item; Open folder; Preview selected file; Reset assigned colour; Scroll down; Scroll up; Search in Browser; Toggle Drum Rack/last selected pad; Toggle Hot-Swap Mode
 - `[ ]` **C14:** Export MIDI File
 - `[ ]` **C17:** Hide/show Sends; Hide/show return tracks; Toggle second window
 - `[ ]` **C18:** Hide/show video window

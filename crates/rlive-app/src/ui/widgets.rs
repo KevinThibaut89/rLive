@@ -47,6 +47,13 @@ fn info_shown() -> Id {
 
 /// Describe a control in the Info View while it is hovered or dragged. Write the text as
 /// "Name — what it does".
+/// What was dropped here, if it was a `T`. egui's own call clears the payload whatever its type,
+/// which would lose the drag for whoever else is checking for another type on the same widget.
+pub fn released<T: std::any::Any + Send + Sync>(resp: &Response) -> Option<std::sync::Arc<T>> {
+    resp.dnd_hover_payload::<T>()?;
+    resp.dnd_release_payload::<T>()
+}
+
 pub fn info(resp: Response, text: impl Into<String>) -> Response {
     if resp.hovered() || resp.dragged() {
         let entry = InfoEntry::parse(&text.into());

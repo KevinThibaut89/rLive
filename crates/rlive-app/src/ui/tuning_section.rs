@@ -48,6 +48,16 @@ pub fn show(
     state: &mut UiState,
     retune: bool,
 ) {
+    let drop = ui.interact(
+        area,
+        ui.scope_id().with("tuning_drop"),
+        egui::Sense::hover(),
+    );
+    if let Some(item) = widgets::released::<super::BrowserItem>(&drop) {
+        if let super::BrowserItem::Tuning(source) = &*item {
+            super::browser::load_tuning(session, state, source);
+        }
+    }
     let mut tu = ui.new_child(UiBuilder::new().max_rect(area.shrink(6.0)));
     let tuning = session.tuning().cloned();
     tu.horizontal(|ui| {

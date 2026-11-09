@@ -28,6 +28,7 @@ mod info;
 mod io;
 mod launch;
 mod launch_log;
+mod presets;
 mod rack_edit;
 mod racks;
 mod recording;
@@ -65,6 +66,8 @@ mod io_tests;
 #[cfg(test)]
 mod launch_tests;
 #[cfg(test)]
+mod preset_tests;
+#[cfg(test)]
 mod rack_tests;
 #[cfg(test)]
 mod remote_tests;
@@ -91,6 +94,7 @@ pub use graph::compile_plan;
 pub use info::InfoTarget;
 pub use io::{can_arm, AudioHardware, CrossfaderField, CrossfaderKeys, RouteChoice};
 pub use launch::{set_follow_on, signature_is_valid, LaunchDefaults};
+pub use presets::{SwapItem, SwapTarget};
 pub use rack_edit::PadDrop;
 pub use racks::{ExtractNotes, MacroDisplay, ZoneKind};
 pub use remote::{MapMode, MappingRow, RemotePorts, RemoteState};
@@ -201,7 +205,11 @@ pub struct Session {
     /// Keys held on the crossfader's left, centre and right positions.
     crossfader_keys: io::CrossfaderKeys,
     /// A file waiting to be previewed once it has loaded.
-    pending_preview: Option<PathBuf>,
+    pending_preview: Option<io::PendingPreview>,
+    /// The User Library, where presets and defaults are kept. None in a bare session.
+    pub library: Option<rlive_browser::defaults::UserLibrary>,
+    /// Keep the last saves of a Set in its Backup folder.
+    pub backups: bool,
     /// Device sample changes waiting for their file to load.
     pending_samples: Vec<samples::PendingSample>,
     /// Where the Rand button's numbers come from.
@@ -267,6 +275,8 @@ impl Session {
             wiring: build::PluginWiring::default(),
             crossfader_keys: io::CrossfaderKeys::default(),
             pending_preview: None,
+            library: None,
+            backups: false,
             pending_samples: Vec::new(),
             random: racks::random_seed(),
             launch_defaults: LaunchDefaults::default(),
@@ -479,6 +489,15 @@ impl Session {
         self.adopt_temp_recordings(&path);
         self.adopt_temp_processed(&path);
         self.note_relative_paths(&path);
+        if self.backups && path.exists() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let trash = rlive_browser::backup::trash_dir();
+            if let Err(e) = rlive_browser::backup::back_up(&path, now, trash.as_deref()) {
+                log::warn!("could not back the Set up: {e}");
+            }
+        }
         self.project.save(&path).map_err(|e| e.to_string())?;
         self.path = Some(path);
         self.commit_now();

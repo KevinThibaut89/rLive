@@ -116,6 +116,29 @@ impl<'a> PanelCtx<'a> {
             .push(self.chain, Action::LoadSample(self.device.id, slot));
     }
 
+    /// The Hot-Swap Sample button, whose host panels draw it next to their waveform.
+    pub fn hot_swap_sample(&mut self, ui: &mut egui::Ui, at: egui::Rect, slot: usize) {
+        let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(at));
+        let ui = &mut ui;
+        let target = crate::session::SwapTarget::Sample {
+            chain: self.chain,
+            id: self.device.id,
+            slot,
+        };
+        let r = super::widgets::state_button(
+            ui,
+            egui::Vec2::new(16.0, 14.0),
+            false,
+            super::theme::pal().accent,
+            "Q",
+        );
+        if super::widgets::info(r, "Hot-Swap Sample — replace this sample from the browser")
+            .clicked()
+        {
+            self.queue.push(self.chain, Action::HotSwap(target));
+        }
+    }
+
     /// Run a sample-player command.
     pub fn sampling(&mut self, command: crate::session::SamplingCommand) {
         self.queue

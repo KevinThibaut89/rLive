@@ -296,7 +296,7 @@ fn header(
             is_return: col.is_return,
         });
     }
-    if let Some(drag) = resp.dnd_release_payload::<ChainDrag>() {
+    if let Some(drag) = crate::ui::widgets::released::<ChainDrag>(&resp) {
         if drag.rack == col.rack && !col.is_return && !drag.is_return {
             if let Some(row) = col.siblings.iter().position(|c| *c == col.chain) {
                 push_chain_move(queue, col.at, col.rack, &col.siblings, &drag, row);
@@ -784,7 +784,7 @@ pub fn extract_zone(
             pal().accent,
         );
     }
-    if let Some(drag) = resp.dnd_release_payload::<ChainDrag>() {
+    if let Some(drag) = crate::ui::widgets::released::<ChainDrag>(resp) {
         let mut queue = ActionQueue::default();
         let (at, rack) = (drag.at, drag.rack);
         queue.push(at, Action::Rack(rack, RackAction::Extract((*drag).clone())));

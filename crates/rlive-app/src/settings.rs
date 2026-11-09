@@ -504,6 +504,10 @@ pub struct Settings {
     pub retune_on_load: bool,
     /// MIDI ports' switches, control surfaces and takeover.
     pub remote: RemoteSettings,
+    /// Where the User Library is; `None` is the default location.
+    pub user_library: Option<PathBuf>,
+    /// The browser runs the full height of the window (manual p. 63).
+    pub full_height_browser: bool,
 }
 
 impl Default for Settings {
@@ -539,6 +543,8 @@ impl Default for Settings {
             chase_notes: true,
             retune_on_load: false,
             remote: RemoteSettings::default(),
+            user_library: None,
+            full_height_browser: true,
         }
     }
 }
@@ -651,6 +657,8 @@ mod tests {
                 select_next_scene: false,
             },
             midi_input: Some("Keys".into()),
+            user_library: Some(PathBuf::from("/library")),
+            full_height_browser: false,
             sample_dir: Some(PathBuf::from("/samples")),
             plugin_dirs: vec![PathBuf::from("/plugins")],
             zoom: Some(1.3),

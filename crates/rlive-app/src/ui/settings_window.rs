@@ -646,13 +646,26 @@ impl RliveApp {
                 ui.label(RichText::new(shown).color(pal().text_dim));
                 if ui.small_button("Choose…").clicked() {
                     if let Some(d) = rfd::FileDialog::new().pick_folder() {
-                        self.ui.sample_files = super::browser::list_samples(&d);
+                        self.ui.browser.op(rlive_browser::Op::AddFolder(d.clone()));
                         self.settings.sample_dir = Some(d);
                     }
                 }
             });
             ui.end_row();
-            soon(ui, "User Library", "Default", "C12");
+            label(ui, "User Library");
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(self.ui.browser.library_path.display().to_string())
+                        .color(pal().text_dim),
+                );
+                if ui.small_button("Choose…").clicked() {
+                    if let Some(d) = rfd::FileDialog::new().pick_folder() {
+                        self.settings.user_library = Some(d.clone());
+                        self.ui.browser.set_user_library(&mut self.session, d);
+                    }
+                }
+            });
+            ui.end_row();
             soon(ui, "Installation Folder for Packs", "Default", "out");
         });
         ui.add_space(10.0);

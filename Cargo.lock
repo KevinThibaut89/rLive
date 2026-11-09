@@ -2605,6 +2605,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "env_logger",
+ "hound",
  "log",
  "midir",
  "objc2 0.6.5",
@@ -2613,6 +2614,7 @@ dependencies = [
  "raw-window-handle",
  "rfd",
  "rlive-audio-io",
+ "rlive-browser",
  "rlive-core",
  "rlive-devices",
  "rlive-engine",
@@ -2639,6 +2641,20 @@ dependencies = [
  "serde",
  "serde_json",
  "symphonia",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "rlive-browser"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "rlive-core",
+ "rlive-devices",
+ "rlive-project",
+ "ron",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

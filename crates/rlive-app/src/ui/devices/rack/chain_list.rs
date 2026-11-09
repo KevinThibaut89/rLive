@@ -7,6 +7,7 @@ use super::{
     tiny_button, ActivePreview, ChainActivityView, ChainDrag, KeyFocus, RackAction, RackRef,
     Rename, RenameTarget,
 };
+use crate::session::SwapTarget;
 use crate::session::{ChainRef, InfoTarget, ZoneKind};
 use crate::ui::devices::{Action, ActionQueue};
 use crate::ui::session_view::color_picker;
@@ -256,8 +257,35 @@ fn chain_row(
     map_or_press(ui, cx, chain, rack, c.id, resp_solo, controls::SOLO, solo);
     x += 18.0;
     let swap_r = Rect::from_min_size(Pos2::new(x, y), btn);
-    let swap = tiny_button(ui, swap_r, ("chain_swap", c.id), "H", false, pal().accent);
-    info(swap, "Hot-Swap — arrives with the browser's Hot-Swap Mode");
+    let swapping = cx.swap_target
+        == Some(SwapTarget::RackChain {
+            chain,
+            rack,
+            id: c.id,
+        });
+    let swap = tiny_button(
+        ui,
+        swap_r,
+        ("chain_swap", c.id),
+        "H",
+        swapping,
+        pal().accent,
+    );
+    if info(
+        swap,
+        "Hot-Swap — replace this chain's devices from the browser",
+    )
+    .clicked()
+    {
+        cx.queue.push(
+            chain,
+            Action::HotSwap(SwapTarget::RackChain {
+                chain,
+                rack,
+                id: c.id,
+            }),
+        );
+    }
     x += 20.0;
 
     // Name.
@@ -355,13 +383,13 @@ fn chain_row(
             );
         }
     }
-    if let Some(drag) = resp.dnd_release_payload::<ChainDrag>() {
+    if let Some(drag) = crate::ui::widgets::released::<ChainDrag>(&resp) {
         if !is_return && !drag.is_return {
             let row = drop_row.unwrap_or(index);
             push_chain_move(cx.queue, chain, rack, &r.order(), &drag, row);
         }
     }
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+    if let Some(item) = crate::ui::widgets::released::<BrowserItem>(&resp) {
         cx.queue.push(
             chain,
             Action::Rack(rack, RackAction::AddToChain(c.id, (*item).clone())),
@@ -783,13 +811,13 @@ fn drop_area(ui: &mut egui::Ui, cx: &mut DrawCx, r: &RackRef, rect: Rect) {
             pal().text_faint
         },
     );
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+    if let Some(item) = crate::ui::widgets::released::<BrowserItem>(&resp) {
         cx.queue.push(
             r.chain,
             Action::Rack(r.dev.id, RackAction::AddChainWith((*item).clone())),
         );
     }
-    if let Some(drag) = resp.dnd_release_payload::<ChainDrag>() {
+    if let Some(drag) = crate::ui::widgets::released::<ChainDrag>(&resp) {
         if !drag.is_return {
             push_chain_move(
                 cx.queue,
@@ -903,9 +931,13 @@ pub(crate) fn chain_menu(
             ui.close();
         }
     }
-    // Chain presets arrive with the browser's preset system.
-    ui.add_enabled(false, egui::Button::new("Save Preset"))
-        .on_disabled_hover_text("Chain presets arrive with the browser's preset system");
+    if ui
+        .add_enabled(ids.len() == 1, egui::Button::new("Save Preset"))
+        .clicked()
+    {
+        queue.push(at, Action::SaveChainPreset(rack, ids[0]));
+        ui.close();
+    }
     ui.separator();
     if ui
         .button(egui::RichText::new("Delete").color(pal().arm_red))

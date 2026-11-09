@@ -139,6 +139,8 @@ pub struct EngineShared {
     pub output_latency: AtomicU32,
     /// Peak of each hardware input since the UI last looked. Index by channel, up to 64.
     pub input_meters: [AtomicF32; 64],
+    /// How far through its file the browser preview is, 0..1, or negative when it isn't sounding.
+    pub preview_position: AtomicF32,
 }
 
 impl Default for EngineShared {
@@ -155,6 +157,7 @@ impl Default for EngineShared {
             input_latency: AtomicU32::new(0),
             output_latency: AtomicU32::new(0),
             input_meters: std::array::from_fn(|_| AtomicF32::new(0.0)),
+            preview_position: AtomicF32::new(-1.0),
         }
     }
 }

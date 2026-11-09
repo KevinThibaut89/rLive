@@ -341,15 +341,19 @@ fn load_bank(t: &mut Stacks) {
     else {
         return;
     };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    if let Ok(bank) = parse_bank(&text) {
-        for c in &mut t.chords {
-            c.chord = c.chord.min(bank.chords.len().saturating_sub(1));
-        }
-        t.bank = bank;
+    // The panel has no message line, so a bank that can't be read just changes nothing.
+    let _ = read_bank(t, &path);
+}
+
+/// Replaces a Stacks generator's bank with a `.stacks` file.
+pub(super) fn read_bank(t: &mut Stacks, path: &std::path::Path) -> Result<(), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let bank = parse_bank(&text)?;
+    for c in &mut t.chords {
+        c.chord = c.chord.min(bank.chords.len().saturating_sub(1));
     }
+    t.bank = bank;
+    Ok(())
 }
 
 fn euclidean(ui: &mut egui::Ui, t: &mut Euclidean, voices_tab: &mut bool) {

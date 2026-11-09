@@ -683,6 +683,10 @@ fn draw_zones(ui: &mut egui::Ui, panel: &mut PanelCtx) {
         let slot = map.layers.get(selected).map_or(0, |l| l.slot as usize);
         panel.load_sample(slot);
     }
+    // Always showing here, at the top left of the Zone Editor (manual p. 461).
+    let slot = map.layers.get(selected).map_or(0, |l| l.slot as usize);
+    let at = Rect::from_min_size(rect.min + Vec2::new(2.0, 2.0), Vec2::new(18.0, 16.0));
+    panel.hot_swap_sample(ui, at, slot);
 
     if changed && map != original {
         panel.set_state(map.serialize());

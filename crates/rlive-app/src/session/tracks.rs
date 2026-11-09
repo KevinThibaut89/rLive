@@ -43,6 +43,7 @@ impl Session {
             self.project.scenes.len(),
         );
         t.devices.extend(device);
+        self.apply_track_default(&mut t);
         // A track placed among a group's members joins them.
         let prev = index
             .and_then(|i| i.checked_sub(1))

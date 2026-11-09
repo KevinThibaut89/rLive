@@ -38,8 +38,8 @@ pub use clip::{
     NoteGroup, TransientEdits, Warp, WarpMarker, WarpMode, WarpParams,
 };
 pub use device::{
-    grow_macros, Chain, ChainMix, ChainSend, Device, DeviceKind, DrumPad, Macro, MacroMapping,
-    RackKind, SidechainSource, Variation, Zone, Zones,
+    grow_macros, Chain, ChainMix, ChainSend, CompareSlot, Device, DeviceCompare, DeviceKind,
+    DeviceState, DrumPad, Macro, MacroMapping, RackKind, SidechainSource, Variation, Zone, Zones,
 };
 pub use envelope::{Breakpoint, ClipEnvelope, EnvLoop, EnvMode, Envelope};
 pub use file_ref::FileRef;

@@ -35,7 +35,7 @@ pub use clip::{
     SlotLaunch, WarpedClip,
 };
 pub use commands::{
-    ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, PreviewCmd, RecordCmd, SceneInfo,
+    ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, PreviewCmd, PreviewSync, RecordCmd, SceneInfo,
     TransportCmd, TuningCmd, NO_OLD_SLOT,
 };
 use delay::FadingDelay;
@@ -732,7 +732,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         crossfade_steps: vec![(1.0, 1.0); max_block / CONTROL_STEP + 2],
         cue: [vec![0.0; max_block], vec![0.0; max_block]],
         scratch: [vec![0.0; max_block], vec![0.0; max_block]],
-        preview: Default::default(),
+        preview: commands::Preview::new(max_block, sample_rate),
         commands: cmd_rx,
         garbage: gb_tx,
         events: ev_tx,
@@ -1305,7 +1305,7 @@ impl Engine {
             self.finish_steps(plan, steps, time, &ctx);
         }
         self.run_captures(plan, inputs, start, time);
-        self.write_outputs(plan, outputs, start, frames);
+        self.write_outputs(plan, outputs, start, frames, &time);
         self.send_hw_midi();
         self.plans = plans;
         self.clock += frames as u64;
@@ -1344,6 +1344,7 @@ impl Engine {
         outputs: &mut [&mut [f32]],
         start: usize,
         frames: usize,
+        time: &BlockTime,
     ) {
         for out in outputs.iter_mut() {
             out[start..start + frames].fill(0.0);
@@ -1363,12 +1364,13 @@ impl Engine {
         // A preview is heard ahead of the mixer: through the Cue output if there is one, or
         // straight on the Main output.
         let mut done = None;
+        let playing = self.playing;
+        let gain = db_to_gain(self.master.mix.cue_db);
         if let Some(cue_out) = plan.cue {
             let [cl, cr] = &mut self.cue;
             done = self
                 .preview
-                .render(&mut cl[..frames], &mut cr[..frames], self.sample_rate);
-            let gain = db_to_gain(self.master.mix.cue_db);
+                .render(&mut cl[..frames], &mut cr[..frames], time, playing);
             for i in 0..frames {
                 cl[i] *= gain;
                 cr[i] *= gain;
@@ -1379,12 +1381,17 @@ impl Engine {
             sr[..frames].fill(0.0);
             done = self
                 .preview
-                .render(&mut sl[..frames], &mut sr[..frames], self.sample_rate);
+                .render(&mut sl[..frames], &mut sr[..frames], time, playing);
+            for i in 0..frames {
+                sl[i] *= gain;
+                sr[i] *= gain;
+            }
             put_output(outputs, start, frames, plan.main_out, sl, sr, false);
         }
         if let Some(sample) = done {
             retire(&mut self.garbage, Garbage::Shared(sample));
         }
+        self.publish_preview();
     }
 
     /// Start and end the slot recordings that reach their launch point in this block, and work

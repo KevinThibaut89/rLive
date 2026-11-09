@@ -188,6 +188,7 @@ fn device_shell(d: &Device) -> Device {
         info: d.info.clone(),
         sidechain: d.sidechain,
         mpe: d.mpe,
+        compare: d.compare.clone(),
     }
 }
 
@@ -580,6 +581,25 @@ impl History {
         }
         self.parked_devices.retain(|id, _| devices.contains(id));
         self.parked_tracks.retain(|id, _| tracks.contains(id));
+    }
+
+    /// Every step's label, oldest first: the Undo History window's list.
+    pub fn labels(&self) -> Vec<&'static str> {
+        self.steps.iter().map(|s| s.label).collect()
+    }
+
+    /// Which step is current: its index in [`labels`](Self::labels).
+    pub fn position(&self) -> usize {
+        self.cursor
+    }
+
+    /// Goes to a step, for the Undo History window, and returns the state to restore.
+    pub fn jump_target(&mut self, step: usize) -> Option<Arc<Snapshot>> {
+        if step >= self.steps.len() || step == self.cursor {
+            return None;
+        }
+        self.cursor = step;
+        Some(self.current().clone())
     }
 
     pub fn undo_label(&self) -> Option<&'static str> {

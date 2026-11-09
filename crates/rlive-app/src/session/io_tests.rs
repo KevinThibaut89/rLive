@@ -1293,6 +1293,192 @@ fn a_browser_preview_goes_to_the_main_output_otherwise() {
     assert_eq!(out[0][BLOCK - 1], 0.0, "stopped");
 }
 
+/// Blocks until `frames` have been rendered, returning the Main output's left channel.
+fn render_frames(r: &mut Rig, frames: usize) -> Vec<f32> {
+    let mut out = Vec::with_capacity(frames);
+    for _ in 0..frames.div_ceil(BLOCK) {
+        let mut bufs = vec![vec![0.0; BLOCK]; 2];
+        let mut slices: Vec<&mut [f32]> = bufs.iter_mut().map(|b| &mut b[..]).collect();
+        r.engine.process(AudioIo {
+            inputs: &[],
+            outputs: &mut slices,
+        });
+        r.handle.collect_garbage();
+        out.extend_from_slice(&bufs[0]);
+    }
+    out
+}
+
+fn synced_preview(sample: Arc<SampleBuffer>, loop_ticks: f64) -> PreviewCmd {
+    PreviewCmd::Start(rlive_engine::PreviewSync {
+        sample,
+        loop_ticks,
+        warped: true,
+        mode: rlive_core::warp::WarpMode::RePitch,
+        slices: Arc::new(Vec::new()),
+    })
+}
+
+#[test]
+fn a_preview_waits_for_the_next_bar_when_the_transport_runs() {
+    let p = Project::empty();
+    let mut rigged = Rigged::default();
+    let mut r = rig(&p, &mut rigged);
+    r.play();
+    render_frames(&mut r, 24_000);
+    let tick = r.handle.shared.tick.load();
+    assert!(tick > 0.0, "the transport is running");
+    let bar_ticks = p.time_signature.ticks_per_bar() as f64;
+    let ticks_per_frame = bar_ticks / (2.0 * SR);
+    let frames_to_bar = ((bar_ticks - tick) / ticks_per_frame).round() as usize;
+    assert!(r
+        .handle
+        .send(EngineCommand::Preview(synced_preview(
+            preview_sample(),
+            bar_ticks
+        )))
+        .is_ok());
+    let out = render_frames(&mut r, frames_to_bar + 4 * BLOCK);
+    assert!(
+        out[..frames_to_bar - BLOCK].iter().all(|s| *s == 0.0),
+        "silent until the bar"
+    );
+    assert!(
+        out[frames_to_bar + BLOCK..].iter().any(|s| s.abs() > 0.1),
+        "sounding after it"
+    );
+    let first = out.iter().position(|s| s.abs() > 1e-3).unwrap();
+    assert!(
+        (first as i64 - frames_to_bar as i64).abs() <= 2,
+        "starts on the bar: {first} vs {frames_to_bar}"
+    );
+}
+
+#[test]
+fn a_preview_starts_at_once_with_the_transport_stopped() {
+    let p = Project::empty();
+    let mut rigged = Rigged::default();
+    let mut r = rig(&p, &mut rigged);
+    let bar_ticks = p.time_signature.ticks_per_bar() as f64;
+    assert!(r
+        .handle
+        .send(EngineCommand::Preview(synced_preview(
+            preview_sample(),
+            bar_ticks
+        )))
+        .is_ok());
+    let out = render_frames(&mut r, 2 * BLOCK);
+    assert!(out[BLOCK..].iter().any(|s| s.abs() > 0.1));
+}
+
+/// One second of a rising ramp, so where the preview has got is written in its level.
+fn ramp_sample() -> Arc<SampleBuffer> {
+    let ramp: Vec<f32> = (0..48_000).map(|i| i as f32 / 48_000.0).collect();
+    Arc::new(SampleBuffer {
+        name: "ramp".into(),
+        left: ramp.clone(),
+        right: ramp,
+        sample_rate: SR,
+    })
+}
+
+#[test]
+fn a_tempo_matched_preview_fills_its_loop_and_comes_round_again() {
+    let p = Project::empty();
+    let mut rigged = Rigged::default();
+    let mut r = rig(&p, &mut rigged);
+    // A one-second file set to last one bar at 120 BPM, two seconds: it plays at half speed.
+    let bar_ticks = p.time_signature.ticks_per_bar() as f64;
+    assert!(r
+        .handle
+        .send(EngineCommand::Preview(synced_preview(
+            ramp_sample(),
+            bar_ticks
+        )))
+        .is_ok());
+    let bar_frames = (2.0 * SR) as usize;
+    let out = render_frames(&mut r, bar_frames + 8 * BLOCK);
+    let halfway = out[bar_frames / 2];
+    assert!(
+        (halfway - 0.5).abs() < 0.02,
+        "half way through the loop: {halfway}"
+    );
+    let before_end = out[bar_frames - 2000];
+    assert!(before_end > 0.9, "near the end of the file: {before_end}");
+    let after_wrap = out[bar_frames + 2000];
+    assert!(after_wrap < 0.1, "back at the top: {after_wrap}");
+}
+
+#[test]
+fn scrubbing_jumps_a_tempo_matched_preview_and_not_a_raw_one() {
+    let p = Project::empty();
+    let mut rigged = Rigged::default();
+    let mut r = rig(&p, &mut rigged);
+    let bar_ticks = p.time_signature.ticks_per_bar() as f64;
+    assert!(r
+        .handle
+        .send(EngineCommand::Preview(synced_preview(
+            ramp_sample(),
+            bar_ticks
+        )))
+        .is_ok());
+    render_frames(&mut r, 4 * BLOCK);
+    assert!(r
+        .handle
+        .send(EngineCommand::Preview(PreviewCmd::Scrub(0.75)))
+        .is_ok());
+    let out = render_frames(&mut r, 2 * BLOCK);
+    assert!((out[BLOCK] - 0.75).abs() < 0.02, "jumped: {}", out[BLOCK]);
+
+    assert!(r
+        .handle
+        .send(EngineCommand::Preview(PreviewCmd::Play(ramp_sample())))
+        .is_ok());
+    render_frames(&mut r, BLOCK);
+    assert!(r
+        .handle
+        .send(EngineCommand::Preview(PreviewCmd::Scrub(0.75)))
+        .is_ok());
+    let out = render_frames(&mut r, BLOCK);
+    assert!(out[0] < 0.1, "raw isn't scrubbed: {}", out[0]);
+}
+
+#[test]
+fn a_raw_preview_plays_once_and_stops() {
+    let p = Project::empty();
+    let mut rigged = Rigged::default();
+    let mut r = rig(&p, &mut rigged);
+    assert!(r
+        .handle
+        .send(EngineCommand::Preview(PreviewCmd::Play(preview_sample())))
+        .is_ok());
+    render_frames(&mut r, 49_000);
+    let out = render_frames(&mut r, 2 * BLOCK);
+    assert!(out.iter().all(|s| *s == 0.0), "played out, unlooped");
+}
+
+#[test]
+fn the_preview_volume_applies_on_the_main_output_too() {
+    let p = Project::empty();
+    let mut rigged = Rigged::default();
+    let mut r = rig(&p, &mut rigged);
+    assert!(r
+        .handle
+        .send(EngineCommand::Param(ParamCmd::Set {
+            track: rlive_engine::TrackRef::Master,
+            cell: mix_cell::CUE_VOLUME,
+            value: -6.0206,
+            gesture: false,
+        }))
+        .is_ok());
+    assert!(r
+        .handle
+        .send(EngineCommand::Preview(PreviewCmd::Play(preview_sample())))
+        .is_ok());
+    let out = r.render_outputs(2);
+    assert!(close(out[0][BLOCK - 1], 0.25), "{}", out[0][BLOCK - 1]);
+}
+
 #[test]
 fn a_track_can_go_to_its_own_hardware_output() {
     let mut rigged = Rigged::default();

@@ -125,6 +125,38 @@ impl Session {
         true
     }
 
+    /// The Undo History's steps, oldest first. The first, which can't be undone, says how the
+    /// history began (manual p. 136).
+    pub fn undo_steps(&self) -> Vec<&'static str> {
+        let mut steps = self.history.labels();
+        if let Some(first) = steps.first_mut() {
+            *first = if self.path.is_some() {
+                "Open Set"
+            } else {
+                "New Set"
+            };
+        }
+        steps
+    }
+
+    pub fn undo_position(&self) -> usize {
+        self.history.position()
+    }
+
+    /// Undoes or redoes to a step of the history. Returns whether anything changed.
+    pub fn jump_to_step(&mut self, step: usize) -> bool {
+        if self.is_recording() {
+            return false;
+        }
+        self.commit_now();
+        let Some(target) = self.history.jump_target(step) else {
+            return false;
+        };
+        self.restore(&target);
+        self.after_restore();
+        true
+    }
+
     /// Brings the project to `target` by applying only what differs.
     fn restore(&mut self, target: &Snapshot) {
         self.restoring = true;
@@ -704,6 +736,7 @@ impl Session {
             info,
             sidechain,
             mpe,
+            compare,
         } = d;
         *name = s.shell.name.clone();
         *bypass = s.shell.bypass;
@@ -711,6 +744,7 @@ impl Session {
         *info = s.shell.info.clone();
         *sidechain = s.shell.sidechain;
         *mpe = s.shell.mpe;
+        compare.clone_from(&s.shell.compare);
         match (kind, &s.shell.kind) {
             (
                 DeviceKind::Builtin {

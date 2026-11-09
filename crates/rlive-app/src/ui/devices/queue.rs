@@ -51,6 +51,16 @@ pub(crate) enum Action {
     DeviceState(DeviceId, String),
     /// A conversion or sample command from a sample player's panel.
     Sampling(DeviceId, crate::session::SamplingCommand),
+    /// Save Preset in the title bar.
+    SavePreset(DeviceId),
+    SaveDefaultPreset(DeviceId),
+    SaveDefaultPluginConfig(DeviceId),
+    SaveChainPreset(DeviceId, ChainId),
+    SaveDefaultPad(DeviceId, u8),
+    CompareCopy(DeviceId),
+    CompareSwitch(DeviceId),
+    /// The Hot-Swap Preset, Sample or chain button.
+    HotSwap(crate::session::SwapTarget),
 }
 
 /// The actions of one frame, in the order they happened.
@@ -164,6 +174,44 @@ fn apply(
             view.scroll_to = Some(id);
         }
         Action::Rack(rack_id, action) => rack::apply(session, view, status, chain, rack_id, action),
+        Action::SavePreset(id) => match session.save_device_preset(chain, id, None) {
+            Ok(path) => view.reveal_saved = Some(path),
+            Err(e) => *status = e,
+        },
+        Action::SaveDefaultPreset(id) => {
+            let exists = session
+                .default_preset_status(chain, id)
+                .is_some_and(|(_, e)| e);
+            if exists {
+                view.confirm_default = Some((chain, id));
+            } else {
+                match session.save_default_preset(chain, id) {
+                    Ok(p) => *status = format!("Saved {}", p.display()),
+                    Err(e) => *status = e,
+                }
+            }
+        }
+        Action::SaveDefaultPluginConfig(id) => {
+            match session.save_default_plugin_config(chain, id) {
+                Ok(p) => *status = format!("Saved {}", p.display()),
+                Err(e) => *status = e,
+            }
+        }
+        Action::SaveChainPreset(rack, chain_id) => {
+            match session.save_chain_preset(chain, rack, chain_id, None) {
+                Ok(path) => view.reveal_saved = Some(path),
+                Err(e) => *status = e,
+            }
+        }
+        Action::SaveDefaultPad(rack, note) => match session.save_default_pad(chain, rack, note) {
+            Ok(p) => *status = format!("Saved {}", p.display()),
+            Err(e) => *status = e,
+        },
+        Action::CompareCopy(id) => session.compare_copy(chain, id),
+        Action::CompareSwitch(id) => session.compare_switch(chain, id),
+        Action::HotSwap(target) => view
+            .swap_requests
+            .push(crate::ui::browser::SwapRequest::Start(target)),
     }
 }
 
@@ -270,19 +318,36 @@ pub(crate) fn ungroup_selected(session: &mut Session, view: &mut DeviceViewState
 }
 
 /// Puts something from the browser in a chain. A sample comes in loaded in a new Sampler.
-pub(super) fn add_item(session: &mut Session, chain: ChainRef, item: BrowserItem) {
+pub(crate) fn add_item(session: &mut Session, chain: ChainRef, item: BrowserItem) {
     match item {
         BrowserItem::Builtin(t) => session.add_builtin(chain, t),
         BrowserItem::Plugin(p) => session.add_plugin(chain, &p),
-        BrowserItem::Sample(path) => {
-            session.add_builtin(chain, "rlive.sampler");
-            let sampler = session.devices(chain).iter().rev().find(|d| {
-                matches!(&d.kind, DeviceKind::Builtin { type_id, .. } if type_id == "rlive.sampler")
-            });
-            if let Some(id) = sampler.map(|d| d.id) {
-                session.set_device_sample(chain, id, path);
+        BrowserItem::Sample(path) => session.add_sampled_device(chain, path),
+        BrowserItem::Preset(source) => {
+            if let Ok(preset) = source.load() {
+                let _ = session.load_preset(chain, None, &preset);
             }
         }
+        BrowserItem::ProjectDevice(id) => {
+            let found = session
+                .chain_of_device(id)
+                .and_then(|at| session.devices(at).iter().find(|d| d.id == id).cloned());
+            if let Some(d) = found {
+                let preset = rlive_browser::Preset::of_device(&d, &d.name);
+                let _ = session.load_preset(chain, None, &preset);
+            }
+        }
+        BrowserItem::Many(items) => {
+            for item in items {
+                add_item(session, chain, item);
+            }
+        }
+        BrowserItem::Groove(_)
+        | BrowserItem::Tuning(_)
+        | BrowserItem::ChordBank(_)
+        | BrowserItem::Clip(_)
+        | BrowserItem::Set(_)
+        | BrowserItem::ProjectClip(_) => {}
     }
 }
 

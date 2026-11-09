@@ -274,6 +274,35 @@ pub struct Device {
     /// A plug-in's MPE Mode: the channels it receives on, when its MPE Mode is on.
     #[serde(default, skip_serializing_if = "is_default")]
     pub mpe: Option<rlive_core::MpeOutput>,
+    /// The device's A/B states (manual pp. 454-457). `None` until they differ.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub compare: Option<Box<DeviceCompare>>,
+}
+
+/// Which of a device's two states is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CompareSlot {
+    #[default]
+    A,
+    B,
+}
+
+/// What a device's other state holds, while the device itself holds the selected one.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DeviceState {
+    pub params: BTreeMap<u32, f64>,
+    pub samples: Vec<Option<FileRef>>,
+    pub state: Option<String>,
+}
+
+/// A built-in device's A/B comparison.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DeviceCompare {
+    pub selected: CompareSlot,
+    /// The state that isn't selected.
+    pub other: DeviceState,
 }
 
 /// The source a device's sidechain input is set to, as its built-in chooser shows it.
@@ -315,6 +344,7 @@ impl Device {
             info: String::new(),
             sidechain: None,
             mpe: None,
+            compare: None,
         }
     }
 
@@ -363,6 +393,30 @@ impl Device {
             DeviceKind::Builtin { samples, .. } => samples.get(slot)?.as_ref(),
             _ => None,
         }
+    }
+
+    /// The state showing now, as the other state of a comparison would hold it.
+    pub fn current_state(&self) -> DeviceState {
+        let (samples, state) = match &self.kind {
+            DeviceKind::Builtin { samples, state, .. } => (samples.clone(), state.clone()),
+            _ => (Vec::new(), None),
+        };
+        DeviceState {
+            params: self.params.clone(),
+            samples,
+            state,
+        }
+    }
+
+    /// Makes both A and B the state showing now: what a copy or a saved preset holds.
+    pub fn flatten_compare(&mut self) {
+        if !matches!(self.kind, DeviceKind::Builtin { .. }) {
+            return;
+        }
+        self.compare = Some(Box::new(DeviceCompare {
+            selected: CompareSlot::A,
+            other: self.current_state(),
+        }));
     }
 
     /// The chains of this device: a rack's chains then its returns, none for anything else.

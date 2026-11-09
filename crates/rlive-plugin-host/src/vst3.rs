@@ -219,6 +219,7 @@ pub fn scan(path: &Path) -> Result<Vec<PluginDescriptor>> {
                 version,
                 path: path.to_path_buf(),
                 is_instrument: sub.split('|').any(|s| s == "Instrument"),
+                subcategories: sub,
             });
         }
     }

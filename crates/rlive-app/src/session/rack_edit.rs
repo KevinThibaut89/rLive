@@ -280,7 +280,11 @@ impl Session {
         let sampler = match reusable {
             Some(id) => id,
             None => {
-                let device = Device::builtin(PAD_SAMPLER, PAD_SAMPLER_NAME);
+                let device = self.dropped_sample_device(
+                    rlive_browser::defaults::DropTarget::OnDrumRack,
+                    PAD_SAMPLER_NAME,
+                    PAD_SAMPLER,
+                );
                 let id = device.id;
                 self.replace_source(at, device);
                 id
@@ -435,8 +439,23 @@ fn is_sampler(d: &Device) -> bool {
     )
 }
 
+/// A copy of a device with ids of its own, what's in it following along.
+pub(super) fn fresh_device(device: &Device) -> Device {
+    let mut copy = device.clone();
+    let mut chains = HashMap::new();
+    let mut devices = HashMap::new();
+    let old = copy.id;
+    copy.id = DeviceId::new();
+    devices.insert(old, copy.id);
+    for c in copy.chains_mut() {
+        refresh_chain(c, &mut chains, &mut devices);
+    }
+    remap_device(&mut copy, &chains, &devices);
+    copy
+}
+
 /// A copy of a chain with ids of its own, its macros and sends following along.
-fn fresh_chain(chain: &Chain) -> Chain {
+pub(super) fn fresh_chain(chain: &Chain) -> Chain {
     let mut copy = chain.clone();
     let mut chains = HashMap::new();
     let mut devices = HashMap::new();
@@ -474,25 +493,33 @@ fn remap_chain(
         }
     }
     for d in &mut chain.devices {
-        if let DeviceKind::Rack { macros, .. } = &mut d.kind {
-            for map in macros.iter_mut().flat_map(|m| m.mappings.iter_mut()) {
-                match &mut map.target.owner {
-                    ParamOwner::Device(id) => {
-                        if let Some(new) = devices.get(id) {
-                            *id = *new;
-                        }
+        remap_device(d, chains, devices);
+    }
+}
+
+fn remap_device(
+    d: &mut Device,
+    chains: &HashMap<ChainId, ChainId>,
+    devices: &HashMap<DeviceId, DeviceId>,
+) {
+    if let DeviceKind::Rack { macros, .. } = &mut d.kind {
+        for map in macros.iter_mut().flat_map(|m| m.mappings.iter_mut()) {
+            match &mut map.target.owner {
+                ParamOwner::Device(id) => {
+                    if let Some(new) = devices.get(id) {
+                        *id = *new;
                     }
-                    ParamOwner::Chain(id) => {
-                        if let Some(new) = chains.get(id) {
-                            *id = *new;
-                        }
-                    }
-                    _ => {}
                 }
+                ParamOwner::Chain(id) => {
+                    if let Some(new) = chains.get(id) {
+                        *id = *new;
+                    }
+                }
+                _ => {}
             }
         }
-        for c in d.chains_mut() {
-            remap_chain(c, chains, devices);
-        }
+    }
+    for c in d.chains_mut() {
+        remap_chain(c, chains, devices);
     }
 }

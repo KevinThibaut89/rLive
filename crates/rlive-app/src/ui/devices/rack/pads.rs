@@ -438,13 +438,14 @@ fn draw_pad(ui: &mut egui::Ui, cx: &mut DrawCx, r: &RackRef, note: u8, rect: Rec
     }
     let platform = crate::ui::keymap::Platform::current();
     let layer = layers(ui.input(|i| i.modifiers), platform);
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
-        cx.queue.push(
-            r.chain,
-            Action::Rack(r.dev.id, RackAction::PadDrop(note, (*item).clone())),
-        );
+    if let Some(item) = crate::ui::widgets::released::<BrowserItem>(&resp) {
+        let action = match &*item {
+            BrowserItem::Many(items) => RackAction::PadDropMany(note, items.clone(), layer),
+            one => RackAction::PadDrop(note, one.clone()),
+        };
+        cx.queue.push(r.chain, Action::Rack(r.dev.id, action));
     }
-    if let Some(drag) = resp.dnd_release_payload::<PadDrag>() {
+    if let Some(drag) = crate::ui::widgets::released::<PadDrag>(&resp) {
         if drag.rack == r.dev.id && drag.note != note {
             cx.queue.push(
                 r.chain,
@@ -460,6 +461,22 @@ fn draw_pad(ui: &mut egui::Ui, cx: &mut DrawCx, r: &RackRef, note: u8, rect: Rec
         }
     }
     resp.context_menu(|ui| {
+        if ui.button("Hot-Swap").clicked() {
+            cx.queue.push(
+                r.chain,
+                Action::HotSwap(crate::session::SwapTarget::Pad {
+                    chain: r.chain,
+                    rack: r.dev.id,
+                    note,
+                }),
+            );
+            ui.close();
+        }
+        if !info_.is_empty() && ui.button("Save as Default Pad").clicked() {
+            cx.queue
+                .push(r.chain, Action::SaveDefaultPad(r.dev.id, note));
+            ui.close();
+        }
         if let Some(target) = &rename_target {
             if ui.button("Rename").clicked() {
                 cx.ui.rename = Some(super::Rename {

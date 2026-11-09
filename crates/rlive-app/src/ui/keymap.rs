@@ -149,6 +149,8 @@ pub enum When {
     NoteInsertMarker,
     /// The note editor has the arrow keys: no marker or loop brace is selected.
     NotesFree,
+    /// The browser is in Hot-Swap mode.
+    HotSwap,
 }
 
 /// Modifier keys. `cmd` is Cmd on macOS and Ctrl elsewhere.
@@ -262,6 +264,8 @@ pub struct KeyContext {
     pub lane_focused: bool,
     /// The note editor has the arrow keys.
     pub notes_free: bool,
+    /// The browser is in Hot-Swap mode.
+    pub hot_swap: bool,
 }
 
 impl KeyContext {
@@ -280,6 +284,7 @@ impl KeyContext {
             When::ArrowsFree => !self.lane_focused,
             When::SlotSelected => self.slot_selected,
             When::NotesFree | When::NoteInsertMarker => self.notes_free,
+            When::HotSwap => self.hot_swap,
             // The rest are built by the milestones that need them.
             _ => false,
         }

@@ -37,6 +37,9 @@ pub struct PluginDescriptor {
     /// Bundle or library path (empty for Audio Units, which are found by id).
     pub path: PathBuf,
     pub is_instrument: bool,
+    /// VST3's `|`-separated subcategories, as declared; empty for other formats.
+    #[serde(default)]
+    pub subcategories: String,
 }
 
 #[derive(Debug, thiserror::Error)]

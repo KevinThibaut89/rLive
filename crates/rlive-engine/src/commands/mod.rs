@@ -15,7 +15,7 @@ pub use graph::{GraphOp, GraphTxn};
 pub use launch::{LaunchCmd, SceneInfo};
 pub use param::ParamCmd;
 pub(crate) use preview::Preview;
-pub use preview::PreviewCmd;
+pub use preview::{PreviewCmd, PreviewSync};
 pub use record::RecordCmd;
 pub use transport::TransportCmd;
 pub use tuning::TuningCmd;

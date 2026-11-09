@@ -468,7 +468,7 @@ pub(super) fn rows(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState
                 Stroke::new(2.0, pal().accent),
             );
         }
-        if let Some(from) = resp.dnd_release_payload::<SceneDrag>() {
+        if let Some(from) = crate::ui::widgets::released::<SceneDrag>(&resp) {
             let selection = if state.sel.scenes.contains(&from.0) {
                 state.sel.scenes.clone()
             } else {

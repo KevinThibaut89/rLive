@@ -201,6 +201,7 @@ fn upgrade_device(d: Device) -> crate::Device {
         info: String::new(),
         sidechain: None,
         mpe: None,
+        compare: None,
     }
 }
 

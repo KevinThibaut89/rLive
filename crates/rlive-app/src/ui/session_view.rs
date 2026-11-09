@@ -566,7 +566,7 @@ fn return_column(
     if resp.double_clicked() {
         state.renaming = Some((id, name.clone()));
     }
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+    if let Some(item) = crate::ui::widgets::released::<BrowserItem>(&resp) {
         drop_on_track(session, state, id, &item, None);
     }
     let resp = info(
@@ -612,6 +612,21 @@ pub(super) fn return_menu(
         ui.close();
     }
     edit_info_item(ui, session, state, InfoTarget::Track(id));
+    let kind = session.project.track(id).map(|t| t.kind);
+    if matches!(kind, Some(TrackKind::Audio | TrackKind::Midi)) {
+        let label = if kind == Some(TrackKind::Audio) {
+            "Save as Default Audio Track"
+        } else {
+            "Save as Default MIDI Track"
+        };
+        if ui.button(label).clicked() {
+            state.status = match session.save_track_default(id) {
+                Ok(path) => format!("Saved {}", path.display()),
+                Err(e) => e,
+            };
+            ui.close();
+        }
+    }
     ui.menu_button("Color", |ui| {
         if let Some(c) = color_picker(ui) {
             if let Some(t) = session.project.track_mut(id) {
@@ -803,10 +818,10 @@ fn track_column(
         {
             widgets::outline(cu.painter(), rect, pal().accent);
         }
-        if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+        if let Some(item) = crate::ui::widgets::released::<BrowserItem>(&resp) {
             drop_on_track(session, state, id, &item, None);
         }
-        if let Some(dragged) = resp.dnd_release_payload::<TrackDrag>() {
+        if let Some(dragged) = crate::ui::widgets::released::<TrackDrag>(&resp) {
             if dragged.0 != id {
                 drop_track(session, dragged.0, id, kind);
             }
@@ -1043,11 +1058,13 @@ fn track_column(
                 state.show_detail = true;
             }
         }
-        if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
-            drop_on_track(session, state, id, &item, Some(slot));
+        if let Some(item) = crate::ui::widgets::released::<BrowserItem>(&resp) {
+            // Cmd drops a multi-selection one clip per track, as a scene (manual p. 195).
+            let spread = ui.input(|i| i.modifiers.command);
+            super::browser::drop_item(session, state, id, &item, Some(slot), spread);
         }
         // A groove on a clip applies it; on an empty MIDI slot, it becomes notes to edit.
-        if let Some(g) = resp.dnd_release_payload::<super::groove_pool::GrooveDrag>() {
+        if let Some(g) = crate::ui::widgets::released::<super::groove_pool::GrooveDrag>(&resp) {
             if session.clip(id, slot).is_some() {
                 session.apply_groove(&[ClipRef::slot(id, slot)], Some(g.0));
             } else if kind == TrackKind::Midi {
@@ -1057,7 +1074,7 @@ fn track_column(
         if clip_info.is_some() {
             resp.dnd_set_drag_payload(ClipDrag { track: id, slot });
         }
-        if let Some(src) = resp.dnd_release_payload::<ClipDrag>() {
+        if let Some(src) = crate::ui::widgets::released::<ClipDrag>(&resp) {
             if (src.track, src.slot) != (id, slot) {
                 let moved = if state.sel.slots.contains(&(src.track, src.slot)) {
                     state.sel.slots.clone()
@@ -1834,11 +1851,19 @@ fn master_column(
             Detail::Scene
         };
     }
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+    if let Some(item) = crate::ui::widgets::released::<BrowserItem>(&resp) {
         match &*item {
             BrowserItem::Builtin(t) => session.add_builtin(ChainRef::Master, t),
             BrowserItem::Plugin(p) => session.add_plugin(ChainRef::Master, p),
-            BrowserItem::Sample(_) => {}
+            BrowserItem::Preset(source) => {
+                if let Err(e) = source
+                    .load()
+                    .and_then(|p| session.load_preset(ChainRef::Master, None, &p))
+                {
+                    state.status = e;
+                }
+            }
+            _ => {}
         }
     }
     let resp = info(
@@ -2156,6 +2181,21 @@ pub(super) fn track_menu(
         ui.close();
     }
     edit_info_item(ui, session, state, InfoTarget::Track(id));
+    let kind = session.project.track(id).map(|t| t.kind);
+    if matches!(kind, Some(TrackKind::Audio | TrackKind::Midi)) {
+        let label = if kind == Some(TrackKind::Audio) {
+            "Save as Default Audio Track"
+        } else {
+            "Save as Default MIDI Track"
+        };
+        if ui.button(label).clicked() {
+            state.status = match session.save_track_default(id) {
+                Ok(path) => format!("Saved {}", path.display()),
+                Err(e) => e,
+            };
+            ui.close();
+        }
+    }
     ui.menu_button("Color", |ui| {
         if let Some(c) = color_picker(ui) {
             if let Some(t) = session.project.track_mut(id) {
@@ -2372,38 +2412,7 @@ pub(super) fn drop_on_track(
     item: &BrowserItem,
     slot: Option<usize>,
 ) {
-    match item {
-        BrowserItem::Builtin(t) => session.add_builtin(ChainRef::Track(id), t),
-        BrowserItem::Plugin(p) => session.add_plugin(ChainRef::Track(id), p),
-        BrowserItem::Sample(path) => {
-            let is_audio = session
-                .project
-                .track(id)
-                .is_some_and(|t| t.kind == TrackKind::Audio);
-            if !is_audio {
-                state.status =
-                    "Drop samples onto an audio track (or into the empty area to create one)"
-                        .into();
-                return;
-            }
-            match session.audio_clip_from_file(path, id) {
-                Ok(c) => {
-                    let slot = slot
-                        .or_else(|| {
-                            session
-                                .project
-                                .track(id)
-                                .and_then(|t| t.clips.iter().position(|c| c.is_none()))
-                        })
-                        .unwrap_or(0);
-                    session.set_clip(id, slot, Some(c));
-                    state.selected_clip = Some(ClipRef::slot(id, slot));
-                }
-                Err(e) => state.status = e,
-            }
-        }
-    }
-    state.selected = Some(ChainRef::Track(id));
+    super::browser::drop_item(session, state, id, item, slot, false);
 }
 
 pub(super) fn new_track_zone(
@@ -2450,9 +2459,15 @@ pub(super) fn new_track_zone(
             },
         );
     }
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+    if let Some(item) = crate::ui::widgets::released::<BrowserItem>(&resp) {
+        // A tuning belongs to the Set, so it doesn't want a track of its own.
+        if let BrowserItem::Tuning(source) = &*item {
+            super::browser::load_tuning(session, state, source);
+            return;
+        }
         let instrument = matches!(&*item, BrowserItem::Plugin(p) if p.is_instrument)
-            || matches!(&*item, BrowserItem::Builtin(b) if rlive_devices::find(b).is_some_and(|b| b.role == rlive_devices::DeviceRole::Instrument));
+            || matches!(&*item, BrowserItem::Builtin(b) if rlive_devices::find(b).is_some_and(|b| b.role == rlive_devices::DeviceRole::Instrument))
+            || matches!(&*item, BrowserItem::Preset(source) if source.load().ok().and_then(|p| p.role()) == Some(rlive_browser::item::Role::Instrument));
         let kind = if instrument {
             TrackKind::Midi
         } else {

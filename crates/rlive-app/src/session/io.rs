@@ -2,15 +2,17 @@
 //! crossfader and cueing.
 
 use super::graph::{audio_outputs, deps_without, Side};
-use super::{ChainRef, PluginWiring, Session};
+use super::{build, ChainRef, PluginWiring, Session};
+use rlive_core::SampleBuffer;
 use rlive_core::{CrossfadeCurve, DeviceId, TrackId};
-use rlive_engine::{mix_cell, EngineCommand, PreviewCmd};
+use rlive_engine::{mix_cell, EngineCommand, PreviewCmd, PreviewSync};
 use rlive_plugin_host::PluginFormat;
 use rlive_project::{
-    ChainTap, Crossfade, Device, DeviceKind, ExternalRoute, Monitor, Project, Route,
-    SidechainSource, Tap, Track, TrackKind,
+    ChainTap, Clip, ClipContent, Crossfade, Device, DeviceKind, ExternalRoute, Monitor, Project,
+    Route, SidechainSource, Tap, Track, TrackKind,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// One line of a chooser in the In/Out section.
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +105,13 @@ impl CrossfaderKeys {
         self.held.retain(|f| *f != field);
         self.held.last().map(|f| f.position())
     }
+}
+
+/// A file to preview once it has loaded.
+#[derive(Debug, Clone)]
+pub(super) struct PendingPreview {
+    path: PathBuf,
+    raw: bool,
 }
 
 impl Session {
@@ -376,9 +385,13 @@ impl Session {
 
     // ------------------------------------------------------------- preview
 
-    /// Heard from the browser, ahead of the mixer: through Cue when it is on, or Main.
-    pub fn preview_file(&mut self, path: &Path) {
-        self.pending_preview = Some(path.to_path_buf());
+    /// Heard from the browser, ahead of the mixer: through Cue when it is on, or Main. Not Raw,
+    /// it starts on the next bar, keeps to the tempo and loops; Raw plays once as it is.
+    pub fn preview_file(&mut self, path: &Path, raw: bool) {
+        self.pending_preview = Some(PendingPreview {
+            path: path.to_path_buf(),
+            raw,
+        });
         self.poll_preview();
     }
 
@@ -387,20 +400,80 @@ impl Session {
         self.send(EngineCommand::Preview(PreviewCmd::Stop));
     }
 
+    /// Jumps a playing preview to this fraction of the file. Raw previews ignore it (p. 119).
+    pub fn scrub_preview(&mut self, fraction: f64) {
+        self.send(EngineCommand::Preview(PreviewCmd::Scrub(fraction)));
+    }
+
+    /// How far through its file the preview is, 0 to 1, while it's sounding.
+    pub fn preview_position(&self) -> Option<f32> {
+        let at = self.engine.shared.preview_position.load();
+        (at >= 0.0).then_some(at)
+    }
+
     pub(super) fn poll_preview(&mut self) {
-        let Some(path) = self.pending_preview.clone() else {
+        let Some(PendingPreview { path, raw }) = self.pending_preview.clone() else {
             return;
         };
         match self.samples.request(&path) {
             rlive_audio_io::SampleStatus::Loading => {}
             rlive_audio_io::SampleStatus::Ready(sample) => {
                 self.pending_preview = None;
-                self.send(EngineCommand::Preview(PreviewCmd::Play(sample)));
+                let cmd = if raw {
+                    PreviewCmd::Play(sample)
+                } else {
+                    PreviewCmd::Start(self.preview_sync(&path, sample))
+                };
+                self.send(EngineCommand::Preview(cmd));
             }
             rlive_audio_io::SampleStatus::Failed(e) => {
                 self.pending_preview = None;
                 self.messages.push(e);
             }
+        }
+    }
+
+    /// Lines a file up with the Set the way a new clip of it would be.
+    fn preview_sync(&mut self, path: &Path, sample: Arc<SampleBuffer>) -> PreviewSync {
+        let seconds = sample.duration_secs();
+        let mut clip = Clip {
+            content: ClipContent::audio(path, 0.0),
+            ..Clip::default()
+        };
+        let already_waiting = self.auto_warp_waiting.contains(path);
+        self.apply_new_clip_defaults(&mut clip, path, seconds);
+        if !already_waiting {
+            self.auto_warp_waiting.remove(path);
+        }
+        let ticks_per_bar = self.project.time_signature.ticks_per_bar() as f64;
+        let (warped, mode) = match &clip.content {
+            ClipContent::Audio { warp, .. } => (warp.enabled, build::warp_mode(warp)),
+            _ => (false, rlive_core::warp::WarpMode::Complex),
+        };
+        let warped = warped && clip.length > 0;
+        // An unwarped file repeats on the next whole bar after it has played out.
+        let native_ticks = seconds * self.project.tempo / 60.0 * rlive_core::PPQ as f64;
+        let loop_ticks = if warped {
+            clip.length as f64
+        } else {
+            (native_ticks / ticks_per_bar).ceil().max(1.0) * ticks_per_bar
+        };
+        let slices = self
+            .samples
+            .transients(path)
+            .map(|found| {
+                found
+                    .iter()
+                    .map(|seconds| seconds * sample.sample_rate)
+                    .collect()
+            })
+            .unwrap_or_default();
+        PreviewSync {
+            sample,
+            loop_ticks,
+            warped,
+            mode,
+            slices: Arc::new(slices),
         }
     }
 

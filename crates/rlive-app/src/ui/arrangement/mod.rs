@@ -1172,7 +1172,7 @@ fn lane_interaction(
     }
     resp.context_menu(|ui| clip_context_menu(ui, session, state));
     if let (Some(g), Some(h)) = (
-        resp.dnd_release_payload::<crate::ui::groove_pool::GrooveDrag>(),
+        crate::ui::widgets::released::<crate::ui::groove_pool::GrooveDrag>(&resp),
         pointer.and_then(hit),
     ) {
         let target = ClipRef::Arr {
@@ -1705,7 +1705,7 @@ fn drops(
         [Pos2::new(x, lane.top()), Pos2::new(x, lane.bottom())],
         Stroke::new(2.0, pal().accent),
     );
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+    if let Some(item) = crate::ui::widgets::released::<BrowserItem>(resp) {
         match &*item {
             BrowserItem::Sample(path) if kind == TrackKind::Audio => {
                 match session.audio_clip_from_file(path, target) {
@@ -1716,7 +1716,7 @@ fn drops(
             other => session_view::drop_on_track(session, state, target, other, None),
         }
     }
-    if let Some(src) = resp.dnd_release_payload::<ClipDrag>() {
+    if let Some(src) = crate::ui::widgets::released::<ClipDrag>(resp) {
         if let Some(c) = session.clip(src.track, src.slot).cloned() {
             if c.is_midi() == (kind == TrackKind::Midi) {
                 place_new(session, state, target, c, start);
@@ -2252,7 +2252,7 @@ fn track_header(
         state.selected = Some(ChainRef::Track(id));
         state.detail = Detail::Devices;
     }
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+    if let Some(item) = crate::ui::widgets::released::<BrowserItem>(&resp) {
         session_view::drop_on_track(session, state, id, &item, None);
     }
     let resp = info(

@@ -561,5 +561,17 @@ pub fn shared_panel(ui: &mut egui::Ui, session: &mut Session, state: &mut UiStat
     panel(ui, session, state, cref, side);
 }
 
+/// Double-click on a `.stacks` file: it replaces the Stacks generator's bank (manual p. 326).
+pub fn load_chord_bank(tools: &mut ToolsState, path: &std::path::Path) -> Result<(), String> {
+    let stacks = tools.generators.iter_mut().find_map(|g| match g {
+        Generator::Stacks(t) => Some(t),
+        _ => None,
+    });
+    let Some(stacks) = stacks else {
+        return Err("There is no Stacks generator to load it into".to_string());
+    };
+    generate::read_bank(stacks, path)
+}
+
 #[cfg(test)]
 mod tests;

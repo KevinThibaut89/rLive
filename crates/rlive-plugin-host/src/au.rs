@@ -114,6 +114,7 @@ pub fn scan() -> Vec<PluginDescriptor> {
                 ),
                 path: Default::default(),
                 is_instrument: ty == kAudioUnitType_MusicDevice,
+                subcategories: String::new(),
             });
         }
     }

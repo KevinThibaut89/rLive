@@ -33,6 +33,7 @@ fn cx(focus: FocusArea) -> KeyContext {
         slot_selected: false,
         lane_focused: false,
         notes_free: false,
+        hot_swap: false,
     }
 }
 

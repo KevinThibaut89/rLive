@@ -2,12 +2,13 @@
 
 mod arrangement;
 mod automation;
-mod browser;
+pub(crate) mod browser;
 pub mod clip_envelopes;
 pub(crate) mod clip_view;
 pub mod commands;
 pub(crate) mod devices;
 mod groove_pool;
+mod history_window;
 mod icons;
 mod in_out;
 mod info_view;
@@ -70,6 +71,24 @@ pub enum BrowserItem {
     Builtin(&'static str),
     Plugin(rlive_plugin_host::PluginDescriptor),
     Sample(PathBuf),
+    /// A device, rack or chain preset.
+    Preset(browser::PresetSource),
+    /// A groove from the Library.
+    Groove(browser::AssetSource),
+    /// A tuning system from the Library.
+    Tuning(browser::AssetSource),
+    /// A `.stacks` chord bank.
+    ChordBank(PathBuf),
+    /// A saved clip.
+    Clip(PathBuf),
+    /// A Set.
+    Set(PathBuf),
+    /// A device already in the Set, from Current Project.
+    ProjectDevice(rlive_core::DeviceId),
+    /// A clip already in the Set, from Current Project.
+    ProjectClip(ClipRef),
+    /// A multi-selection.
+    Many(Vec<BrowserItem>),
 }
 
 enum ScanMsg {
@@ -91,8 +110,12 @@ pub struct UiState {
     pub focus: FocusArea,
     pub keys: KeyState,
     pub clipboard: Option<ClipBoard>,
-    pub browser_filter: String,
-    pub browser_category: browser::Category,
+    pub browser: browser::BrowserState,
+    /// Options > Retune Set On Loading Tuning Systems, mirrored for the browser.
+    pub retune_on_load: bool,
+    pub show_undo_history: bool,
+    /// The step picked in the Undo History, before it's chosen.
+    pub undo_history_cursor: Option<usize>,
     pub meters: HashMap<TrackId, MeterState>,
     pub master_meter: MeterState,
     pub devices: devices::DeviceViewState,
@@ -142,7 +165,6 @@ pub struct UiState {
     pub bounce_copy: Option<crate::session::BounceSource>,
     /// Tracks waiting their turn in a Freeze of several at once.
     pub pending_freezes: Vec<TrackId>,
-    pub sample_files: Vec<PathBuf>,
     pub request_scan: bool,
     /// Device lists are slow to enumerate; refreshed only when Preferences opens.
     audio_devices: Option<Vec<String>>,
@@ -157,8 +179,6 @@ pub struct UiState {
     tap_times: Vec<f64>,
     /// The hardware channels the In/Out choosers offer, from the Channel Configuration.
     pub hardware: AudioHardware,
-    /// Whether clicking a sample in the browser plays it.
-    pub preview_samples: bool,
 }
 
 pub struct RliveApp {
@@ -278,8 +298,10 @@ impl UiState {
             focus: FocusArea::Session,
             keys: KeyState::default(),
             clipboard: None,
-            browser_filter: String::new(),
-            browser_category: browser::Category::Instruments,
+            browser: browser::BrowserState::default(),
+            retune_on_load: false,
+            show_undo_history: false,
+            undo_history_cursor: None,
             meters: HashMap::new(),
             master_meter: MeterState::default(),
             devices: devices::DeviceViewState::default(),
@@ -320,7 +342,6 @@ impl UiState {
             bounce_copy: None,
             pending_freezes: Vec::new(),
             status,
-            sample_files: Vec::new(),
             request_scan: false,
             audio_devices: None,
             audio_inputs: None,
@@ -330,7 +351,6 @@ impl UiState {
             frame_time: 0.0,
             tap_times: Vec::new(),
             hardware: AudioHardware::default(),
-            preview_samples: false,
         }
     }
 }
@@ -379,8 +399,16 @@ impl RliveApp {
             .map(|e| format!("Audio: {e}"))
             .unwrap_or_default();
         let mut ui = UiState::initial(&session, &settings, status);
+        let user_library = settings
+            .user_library
+            .clone()
+            .unwrap_or_else(rlive_browser::defaults::UserLibrary::default_location);
+        session.library = Some(rlive_browser::defaults::UserLibrary::new(user_library));
+        session.backups = true;
+        ui.browser.open(&cc.egui_ctx, &settings);
+        // The old Choose Folder setting carries over as a folder in Places.
         if let Some(dir) = &settings.sample_dir {
-            ui.sample_files = browser::list_samples(dir);
+            ui.browser.op(rlive_browser::Op::AddFolder(dir.clone()));
         }
         if let Some(path) = open {
             if let Err(e) = session.load(&path) {
@@ -572,19 +600,23 @@ impl RliveApp {
             .add_filter("rLive project", &[rlive_project::FILE_EXTENSION])
             .pick_file()
         {
-            match self.session.load(&path) {
-                Ok(()) => {
-                    self.ui.selected = self
-                        .session
-                        .project
-                        .tracks
-                        .first()
-                        .map(|t| ChainRef::Track(t.id));
-                    self.ui.selected_clip = None;
-                    self.ui.status = format!("Opened {}", path.display());
-                }
-                Err(e) => self.ui.status = format!("Open failed: {e}"),
+            self.open_path(&path);
+        }
+    }
+
+    fn open_path(&mut self, path: &std::path::Path) {
+        match self.session.load(path) {
+            Ok(()) => {
+                self.ui.selected = self
+                    .session
+                    .project
+                    .tracks
+                    .first()
+                    .map(|t| ChainRef::Track(t.id));
+                self.ui.selected_clip = None;
+                self.ui.status = format!("Opened {}", path.display());
             }
+            Err(e) => self.ui.status = format!("Open failed: {e}"),
         }
     }
 
@@ -695,6 +727,37 @@ impl RliveApp {
                 Stroke::new(1.0, pal().accent),
                 egui::StrokeKind::Inside,
             );
+        }
+    }
+
+    /// "A default for this device exists: overwrite it?" (manual p. 466).
+    fn confirm_default_overwrite(&mut self, ctx: &egui::Context) {
+        let Some((chain, id)) = self.ui.devices.confirm_default else {
+            return;
+        };
+        let mut answer = None;
+        egui::Window::new("Overwrite Default Preset?")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("This device already has a default preset. Replace it?");
+                ui.horizontal(|ui| {
+                    if ui.button("Overwrite").clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        answer = Some(false);
+                    }
+                });
+            });
+        if let Some(overwrite) = answer {
+            self.ui.devices.confirm_default = None;
+            if overwrite {
+                self.ui.status = match self.session.save_default_preset(chain, id) {
+                    Ok(path) => format!("Saved {}", path.display()),
+                    Err(e) => e,
+                };
+            }
         }
     }
 
@@ -929,6 +992,139 @@ impl RliveApp {
         self.session.devices_of(chain).first().map(|d| d.id)
     }
 
+    /// The browser panel, with the Groove Pool, tuning section and Info View under it.
+    fn browser_panel(&mut self, ui: &mut egui::Ui, rects: &mut FocusRects) {
+        let mapping = self.ui.devices.ui.map.is_some();
+        let remote_mapping = self.session.map_mode().is_some();
+        if self.ui.show_browser || self.ui.show_info || mapping || remote_mapping {
+            let panel = egui::Panel::left("browser")
+                .resizable(true)
+                .default_size(320.0)
+                .size_range(180.0..=520.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(pal().panel)
+                        .stroke(Stroke::new(1.0, pal().separator)),
+                )
+                .show(ui, |ui| {
+                    let full = ui.max_rect();
+                    ui.expand_to_include_rect(full);
+                    let info_h = if self.ui.show_info {
+                        info_view::HEIGHT
+                    } else {
+                        0.0
+                    };
+                    let split = full.bottom() - info_h;
+                    let top = Rect::from_min_max(full.min, Pos2::new(full.right(), split));
+                    if remote_mapping {
+                        let inner = top.shrink(6.0);
+                        let mut mu = ui.new_child(UiBuilder::new().max_rect(inner));
+                        remote_map::browser(&mut mu, &mut self.session, &mut self.ui);
+                    } else if mapping {
+                        let inner = top.shrink(6.0);
+                        let mut mu = ui.new_child(UiBuilder::new().max_rect(inner));
+                        devices::rack::mapping_browser::show(
+                            &mut mu,
+                            &mut self.session,
+                            &mut self.ui,
+                        );
+                    } else if self.ui.show_browser {
+                        let groove_h = if self.ui.show_groove_pool {
+                            groove_pool::HEIGHT
+                        } else {
+                            0.0
+                        };
+                        let tuning_h = match (self.ui.show_tuning, self.ui.tuning_open) {
+                            (false, _) => 0.0,
+                            (true, false) => tuning_section::HEIGHT,
+                            (true, true) => tuning_section::HEIGHT_OPEN,
+                        };
+                        let browser_bottom = (top.bottom() - groove_h - tuning_h).max(top.top());
+                        let browser_rect =
+                            Rect::from_min_max(top.min, Pos2::new(top.right(), browser_bottom));
+                        let mut bu = ui.new_child(UiBuilder::new().max_rect(browser_rect));
+                        browser::show(&mut bu, &mut self.session, &mut self.ui, &mut self.settings);
+                        if self.ui.show_tuning {
+                            let at = Rect::from_min_size(
+                                Pos2::new(top.left(), browser_bottom),
+                                Vec2::new(top.width(), tuning_h),
+                            );
+                            ui.painter().rect_filled(at, 0.0, pal().panel_dark);
+                            tuning_section::show(
+                                ui,
+                                at,
+                                &mut self.session,
+                                &mut self.ui,
+                                self.settings.retune_on_load,
+                            );
+                        }
+                        if self.ui.show_groove_pool {
+                            let at = Rect::from_min_max(
+                                Pos2::new(top.left(), top.bottom() - groove_h),
+                                top.max,
+                            );
+                            ui.painter().rect_filled(at, 0.0, pal().panel_dark);
+                            groove_pool::show(ui, at, &mut self.session, &mut self.ui);
+                        }
+                    }
+                    if self.ui.show_info {
+                        let bottom = Rect::from_min_max(Pos2::new(full.left(), split), full.max);
+                        let mut iu = ui.new_child(UiBuilder::new().max_rect(bottom));
+                        self.info_view(&mut iu);
+                    }
+                });
+            rects.browser = Some(panel.response.rect);
+        }
+    }
+
+    /// The Detail View's panel.
+    fn detail_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, rects: &mut FocusRects) {
+        if self.ui.show_detail {
+            let mut detail = egui::Panel::bottom("detail")
+                .resizable(true)
+                .default_size(250.0)
+                .size_range(130.0..=700.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(pal().panel_dark)
+                        .stroke(Stroke::new(1.0, pal().separator)),
+                );
+            if self.ui.clip_view.full_size && self.ui.detail == Detail::Clip {
+                detail = detail.exact_size((ui.available_height() - 40.0).max(200.0));
+            }
+            let stacked = self.ui.clip_view.stacked
+                && self.ui.selected_clip.is_some()
+                && self.ui.detail != Detail::Scene;
+            let panel = detail.show(ui, |ui| {
+                // A frozen track's Device and Clip Views can be looked at, not changed.
+                let frozen = self.detail_is_frozen(stacked);
+                if frozen {
+                    ui.colored_label(pal().text_dim, "Frozen: unfreeze the track to edit");
+                }
+                ui.add_enabled_ui(!frozen, |ui| {
+                    if stacked {
+                        self.stacked_detail(ui);
+                    } else {
+                        match self.ui.detail {
+                            Detail::Clip if self.ui.selected_clip.is_some() => {
+                                launch_panel::with_launch_strip(
+                                    ui,
+                                    &mut self.session,
+                                    &mut self.ui,
+                                    clip_view::show,
+                                )
+                            }
+                            Detail::Scene => scene_view::show(ui, &mut self.session, &mut self.ui),
+                            _ => devices::show(ui, &mut self.session, &mut self.ui),
+                        }
+                    }
+                });
+            });
+            rects.detail = Some(panel.response.rect);
+            self.detail_edge(ctx, panel.response.rect);
+        }
+    }
+
     /// What the keymap needs to resolve this frame's key presses.
     fn key_context(&self, ctx: &egui::Context) -> KeyContext {
         KeyContext {
@@ -972,6 +1168,7 @@ impl RliveApp {
                     .selected_clip
                     .and_then(|r| self.session.clip_at(r))
                     .is_some_and(|c| c.is_midi()),
+            hot_swap: self.ui.browser.hot_swap.is_some(),
         }
     }
 
@@ -1818,6 +2015,7 @@ impl RliveApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        self.confirm_default_overwrite(ctx);
         self.settings_window(ctx);
         if let Some(t) = self.ui.devices.ui.mpe_settings.take() {
             self.ui.mpe_dialog = Some(t);
@@ -1934,6 +2132,13 @@ impl eframe::App for RliveApp {
         for (target, gesture) in self.session.take_remote_actions() {
             self.remote_action(target, gesture);
         }
+        self.ui.browser.idle(&self.session);
+        self.ui.retune_on_load = self.settings.retune_on_load;
+        browser::poll_requests(&self.session, &mut self.ui);
+        if let Some(path) = self.ui.browser.open_set.take() {
+            self.open_path(&path);
+        }
+        self.end_hot_swap_on_navigation();
         self.poll_scan();
         if std::mem::take(&mut self.ui.request_scan) && self.ui.scan_rx.is_none() {
             self.start_plugin_scan();
@@ -2029,130 +2234,12 @@ impl eframe::App for RliveApp {
                         });
                 });
         }
-        let mapping = self.ui.devices.ui.map.is_some();
-        let remote_mapping = self.session.map_mode().is_some();
-        if self.ui.show_browser || self.ui.show_info || mapping || remote_mapping {
-            let panel = egui::Panel::left("browser")
-                .resizable(true)
-                .default_size(250.0)
-                .size_range(180.0..=520.0)
-                .frame(
-                    egui::Frame::new()
-                        .fill(pal().panel)
-                        .stroke(Stroke::new(1.0, pal().separator)),
-                )
-                .show(ui, |ui| {
-                    let full = ui.max_rect();
-                    ui.expand_to_include_rect(full);
-                    let info_h = if self.ui.show_info {
-                        info_view::HEIGHT
-                    } else {
-                        0.0
-                    };
-                    let split = full.bottom() - info_h;
-                    let top = Rect::from_min_max(full.min, Pos2::new(full.right(), split));
-                    if remote_mapping {
-                        let inner = top.shrink(6.0);
-                        let mut mu = ui.new_child(UiBuilder::new().max_rect(inner));
-                        remote_map::browser(&mut mu, &mut self.session, &mut self.ui);
-                    } else if mapping {
-                        let inner = top.shrink(6.0);
-                        let mut mu = ui.new_child(UiBuilder::new().max_rect(inner));
-                        devices::rack::mapping_browser::show(
-                            &mut mu,
-                            &mut self.session,
-                            &mut self.ui,
-                        );
-                    } else if self.ui.show_browser {
-                        let groove_h = if self.ui.show_groove_pool {
-                            groove_pool::HEIGHT
-                        } else {
-                            0.0
-                        };
-                        let tuning_h = match (self.ui.show_tuning, self.ui.tuning_open) {
-                            (false, _) => 0.0,
-                            (true, false) => tuning_section::HEIGHT,
-                            (true, true) => tuning_section::HEIGHT_OPEN,
-                        };
-                        let browser_bottom = (top.bottom() - groove_h - tuning_h).max(top.top());
-                        let browser_rect =
-                            Rect::from_min_max(top.min, Pos2::new(top.right(), browser_bottom));
-                        let mut bu = ui.new_child(UiBuilder::new().max_rect(browser_rect));
-                        browser::show(&mut bu, &mut self.session, &mut self.ui, &mut self.settings);
-                        if self.ui.show_tuning {
-                            let at = Rect::from_min_size(
-                                Pos2::new(top.left(), browser_bottom),
-                                Vec2::new(top.width(), tuning_h),
-                            );
-                            ui.painter().rect_filled(at, 0.0, pal().panel_dark);
-                            tuning_section::show(
-                                ui,
-                                at,
-                                &mut self.session,
-                                &mut self.ui,
-                                self.settings.retune_on_load,
-                            );
-                        }
-                        if self.ui.show_groove_pool {
-                            let at = Rect::from_min_max(
-                                Pos2::new(top.left(), top.bottom() - groove_h),
-                                top.max,
-                            );
-                            ui.painter().rect_filled(at, 0.0, pal().panel_dark);
-                            groove_pool::show(ui, at, &mut self.session, &mut self.ui);
-                        }
-                    }
-                    if self.ui.show_info {
-                        let bottom = Rect::from_min_max(Pos2::new(full.left(), split), full.max);
-                        let mut iu = ui.new_child(UiBuilder::new().max_rect(bottom));
-                        self.info_view(&mut iu);
-                    }
-                });
-            rects.browser = Some(panel.response.rect);
-        }
-        if self.ui.show_detail {
-            let mut detail = egui::Panel::bottom("detail")
-                .resizable(true)
-                .default_size(250.0)
-                .size_range(130.0..=700.0)
-                .frame(
-                    egui::Frame::new()
-                        .fill(pal().panel_dark)
-                        .stroke(Stroke::new(1.0, pal().separator)),
-                );
-            if self.ui.clip_view.full_size && self.ui.detail == Detail::Clip {
-                detail = detail.exact_size((ui.available_height() - 40.0).max(200.0));
-            }
-            let stacked = self.ui.clip_view.stacked
-                && self.ui.selected_clip.is_some()
-                && self.ui.detail != Detail::Scene;
-            let panel = detail.show(ui, |ui| {
-                // A frozen track's Device and Clip Views can be looked at, not changed.
-                let frozen = self.detail_is_frozen(stacked);
-                if frozen {
-                    ui.colored_label(pal().text_dim, "Frozen: unfreeze the track to edit");
-                }
-                ui.add_enabled_ui(!frozen, |ui| {
-                    if stacked {
-                        self.stacked_detail(ui);
-                    } else {
-                        match self.ui.detail {
-                            Detail::Clip if self.ui.selected_clip.is_some() => {
-                                launch_panel::with_launch_strip(
-                                    ui,
-                                    &mut self.session,
-                                    &mut self.ui,
-                                    clip_view::show,
-                                )
-                            }
-                            Detail::Scene => scene_view::show(ui, &mut self.session, &mut self.ui),
-                            _ => devices::show(ui, &mut self.session, &mut self.ui),
-                        }
-                    }
-                });
-            });
-            rects.detail = Some(panel.response.rect);
-            self.detail_edge(&ctx, panel.response.rect);
+        if self.settings.full_height_browser {
+            self.browser_panel(ui, &mut rects);
+            self.detail_panel(ui, &ctx, &mut rects);
+        } else {
+            self.detail_panel(ui, &ctx, &mut rects);
+            self.browser_panel(ui, &mut rects);
         }
         let panel = egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(pal().grid_bg))
@@ -2182,6 +2269,7 @@ impl eframe::App for RliveApp {
             menu.publish(self.menu_state(&ctx));
         }
         self.dialogs(&ctx);
+        self.undo_history_window(&ctx);
         self.render_progress(&ctx);
         self.run_pending_freezes();
         automation::show_popups(&ctx, &mut self.session, &mut self.ui);

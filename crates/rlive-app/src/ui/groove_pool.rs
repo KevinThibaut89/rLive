@@ -99,7 +99,7 @@ pub fn show(ui: &mut egui::Ui, area: Rect, session: &mut Session, state: &mut Ui
         egui::Sense::hover(),
     );
     // A clip dropped on the pool becomes a groove.
-    if let Some(src) = drop_target.dnd_release_payload::<super::session_view::ClipDrag>() {
+    if let Some(src) = widgets::released::<super::session_view::ClipDrag>(&drop_target) {
         session.extract_groove(ClipRef::slot(src.track, src.slot));
     }
     let grooves: Vec<GrooveId> = session
