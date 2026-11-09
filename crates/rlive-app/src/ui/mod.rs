@@ -17,6 +17,7 @@ mod mac_menu;
 pub(crate) mod panels;
 pub(crate) mod piano_roll;
 mod rack_mixer;
+pub mod remote_map;
 mod sample_editor;
 mod scene_view;
 mod session_select;
@@ -28,16 +29,18 @@ mod timeline;
 pub mod widgets;
 
 use crate::audio::{self, AudioOutput};
-use crate::midi_input::{MidiInput, MidiRouting};
+use crate::midi_input::{self, MidiInput, MidiRouting, OutputBank, PortSwitches};
 use crate::session::InfoTarget;
-use crate::session::{AudioHardware, ChainRef, ClipRef, Session};
+use crate::session::{AudioHardware, ChainRef, ClipRef, RemotePorts, Session};
 use crate::settings::{ChannelBank, DeviceChannels, Settings};
 use commands::{ClipBoard, MenuCommand};
 use egui::{Align2, Key, Pos2, Rect, RichText, Sense, Stroke, UiBuilder, Vec2};
 use keymap::{FocusArea, KeyContext, KeyState, Platform};
+use rlive_core::param::{ParamId, ParamOwner, ParamRef};
 use rlive_core::{MidiMessage, Quantize, TimeSignature, TrackId};
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_project::Project;
+use rlive_project::{MapTarget, RemoteControl};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -135,6 +138,12 @@ pub struct UiState {
     audio_devices: Option<Vec<String>>,
     audio_inputs: Option<Vec<String>>,
     midi_ports: Option<Vec<String>>,
+    /// Output port names, listed when the Link, Tempo & MIDI tab opens.
+    midi_outputs: Option<Vec<String>>,
+    /// The row picked in the Mapping Browser, for Delete.
+    pub mapping_row: Option<usize>,
+    /// The time this frame started, in seconds.
+    pub frame_time: f64,
     tap_times: Vec<f64>,
     /// The hardware channels the In/Out choosers offer, from the Channel Configuration.
     pub hardware: AudioHardware,
@@ -163,6 +172,14 @@ struct FocusRects {
     browser: Option<Rect>,
     detail: Option<Rect>,
     main: Option<Rect>,
+}
+
+/// The Song Tempo, as a mapping target.
+fn tempo_param() -> ParamRef {
+    ParamRef {
+        owner: ParamOwner::Transport,
+        id: ParamId(0),
+    }
 }
 
 /// Where the small light goes that says a song has signature changes.
@@ -288,6 +305,9 @@ impl UiState {
             audio_devices: None,
             audio_inputs: None,
             midi_ports: None,
+            midi_outputs: None,
+            mapping_row: None,
+            frame_time: 0.0,
             tap_times: Vec::new(),
             hardware: AudioHardware::default(),
             preview_samples: false,
@@ -321,11 +341,13 @@ impl RliveApp {
             system: Default::default(),
             mpe: Default::default(),
         };
-        let midi = MidiInput::connect(settings.midi_input.as_deref(), routing.clone())
-            .unwrap_or_else(|e| {
-                log::info!("MIDI input: {e}");
-                MidiInput::none()
-            });
+        let midi = MidiInput::none();
+        let repaint = cc.egui_ctx.clone();
+        session
+            .remote
+            .hub
+            .shared
+            .set_waker(move || repaint.request_repaint());
         let status = audio
             .error
             .clone()
@@ -340,7 +362,7 @@ impl RliveApp {
                 ui.status = format!("Could not open {}: {e}", path.display());
             }
         }
-        Self {
+        let mut app = Self {
             session,
             audio,
             midi,
@@ -351,7 +373,95 @@ impl RliveApp {
             pending: Vec::new(),
             #[cfg(target_os = "macos")]
             mac_menu: mac_menu::MacMenu::install(cc),
+        };
+        app.apply_control_surfaces();
+        app.connect_midi();
+        app
+    }
+
+    /// Takes the Control Surface rows from the settings.
+    fn apply_control_surfaces(&mut self) {
+        for i in 0..rlive_remote::MAX_SURFACES {
+            let row = self
+                .settings
+                .remote
+                .surfaces
+                .get(i)
+                .cloned()
+                .unwrap_or_default();
+            let surfaces = &mut self.session.remote.surfaces;
+            surfaces.set(i, row.script.as_deref());
+            surfaces.set_ports(i, row.input, row.output);
         }
+    }
+
+    /// Opens every MIDI port with its Track, Sync and Remote switches as they're set, and tells
+    /// the session which ports do what.
+    pub(crate) fn connect_midi(&mut self) {
+        self.midi = MidiInput::none();
+        self.session.remote.hub.close_ports();
+        let legacy = self.settings.midi_input.clone();
+        let inputs = midi_input::port_names();
+        let outputs = midi_input::output_names();
+        let surface_in: Vec<String> = self
+            .settings
+            .remote
+            .surfaces
+            .iter()
+            .filter(|s| s.script.is_some())
+            .filter_map(|s| s.input.clone())
+            .collect();
+        let mut in_mask = 0u64;
+        for (i, name) in inputs.iter().enumerate().take(64) {
+            let cfg = self.settings.remote.input(name, legacy.as_deref());
+            if cfg.remote {
+                in_mask |= 1 << i;
+            }
+            if !(cfg.track || cfg.sync || cfg.remote || surface_in.contains(name)) {
+                continue;
+            }
+            let switches = Arc::new(PortSwitches::new(cfg.track, cfg.sync, cfg.remote));
+            let port = self
+                .session
+                .remote
+                .hub
+                .open_port(i as u32, self.routing.clone(), switches);
+            if let Err(e) = self.midi.connect_port(name, port) {
+                log::info!("MIDI input {name}: {e}");
+            }
+        }
+        let surface_out: Vec<String> = self
+            .settings
+            .remote
+            .surfaces
+            .iter()
+            .filter(|s| s.script.is_some())
+            .filter_map(|s| s.output.clone())
+            .collect();
+        let mut out_mask = 0u64;
+        let mut bank = OutputBank::new(self.session.remote.hub.shared.clone());
+        for (i, name) in outputs.iter().enumerate().take(64) {
+            let cfg = self.settings.remote.output(name);
+            if cfg.remote {
+                out_mask |= 1 << i;
+            }
+            let wanted = cfg.track || cfg.sync || cfg.remote || surface_out.contains(name);
+            bank.push(if wanted {
+                midi_input::connect_output(name)
+                    .map_err(|e| log::info!("MIDI output {name}: {e}"))
+                    .ok()
+            } else {
+                None
+            });
+        }
+        self.session.set_remote_ports(RemotePorts {
+            in_names: inputs,
+            in_mask,
+            out_names: outputs,
+            out_mask,
+        });
+        self.session.set_feedback_output(Some(Box::new(bank)));
+        self.session.set_takeover(self.settings.remote.takeover);
     }
 
     fn restart_audio(&mut self) {
@@ -684,6 +794,97 @@ impl RliveApp {
             && ctx.input(|i| i.key_down(Key::F) && (!computer_keys || i.modifiers.shift));
     }
 
+    /// The MIDI and KEY switches that enter the map modes.
+    fn map_switches(&mut self, ru: &mut egui::Ui, h: f32) {
+        use crate::session::MapMode;
+        let (midi, key) = (MapMode::Midi, MapMode::Key);
+        let now = self.session.map_mode();
+        let key_color = remote_map::mode_color(key);
+        let r = widgets::state_button(ru, Vec2::new(30.0, h), now == Some(key), key_color, "KEY");
+        if info(
+            r,
+            "Key Map Mode — click a control, then press a key (Cmd+K)",
+        )
+        .clicked()
+        {
+            self.session.set_map_mode((now != Some(key)).then_some(key));
+        }
+        let midi_color = remote_map::mode_color(midi);
+        let r = widgets::state_button(
+            ru,
+            Vec2::new(34.0, h),
+            now == Some(midi),
+            midi_color,
+            "MIDI",
+        );
+        if info(
+            r,
+            "MIDI Map Mode — click a control, then send a MIDI message (Cmd+M)",
+        )
+        .clicked()
+        {
+            self.session
+                .set_map_mode((now != Some(midi)).then_some(midi));
+        }
+    }
+
+    /// The Control Bar's MIDI lights: a pair, in over out, for each of track and remote traffic,
+    /// with a third for sync only while something's synced.
+    fn midi_lights(&mut self, ru: &mut egui::Ui, h: f32) {
+        let lights = &self.session.remote.hub.shared.lights;
+        let track_in = self.routing.activity.swap(false, Ordering::Relaxed)
+            | lights.track_in.swap(false, Ordering::Relaxed);
+        let track_out = lights.track_out.swap(false, Ordering::Relaxed);
+        let remote_in = lights.remote_in.swap(false, Ordering::Relaxed);
+        let remote_out = lights.remote_out.swap(false, Ordering::Relaxed);
+        let sync_in = lights.sync_in.swap(false, Ordering::Relaxed);
+        let sync_out = lights.sync_out.swap(false, Ordering::Relaxed);
+        let syncing = self.settings.remote.inputs.iter().any(|p| p.sync);
+        let (rect, r) = ru.allocate_exact_size(Vec2::new(38.0, h), Sense::hover());
+        let p = ru.painter();
+        let lit = |on: bool| if on { pal().accent } else { shade(0x4a4a4a) };
+        let mut x = rect.right() - 3.0;
+        let mut pair = |label: &str, top: bool, bottom: bool| {
+            let cx = Pos2::new(x, rect.center().y);
+            p.circle_filled(cx + Vec2::new(0.0, -3.5), 2.2, lit(top));
+            p.circle_filled(cx + Vec2::new(0.0, 3.5), 2.2, lit(bottom));
+            p.text(
+                cx + Vec2::new(-9.0, 0.0),
+                Align2::LEFT_CENTER,
+                label,
+                theme::font(9.0),
+                pal().text_dim,
+            );
+            x -= 12.0;
+        };
+        pair("T", track_in, track_out);
+        pair("R", remote_in, remote_out);
+        if syncing {
+            pair("S", sync_in, sync_out);
+        }
+        info(
+            r,
+            format!(
+                "MIDI lights, in over out: T track, R remote, S sync — {}",
+                if self.midi.port_names.is_empty() {
+                    "no input ports open".to_string()
+                } else {
+                    self.midi.port_names.join(", ")
+                }
+            ),
+        );
+    }
+
+    /// The device a control surface should follow: the one picked in the Device View, or the
+    /// first on the selected chain.
+    fn selected_device(&self) -> Option<rlive_core::DeviceId> {
+        if let Some((_, id)) = self.ui.devices.selected_devices.last() {
+            return Some(*id);
+        }
+        let chain = self.ui.selected?;
+        self.session.devices_of(chain).first().map(|d| d.id)
+    }
+
     /// What the keymap needs to resolve this frame's key presses.
     fn key_context(&self, ctx: &egui::Context) -> KeyContext {
         KeyContext {
@@ -877,6 +1078,8 @@ impl RliveApp {
         let h = 22.0;
         let cy = rect.center().y;
         let narrow = rect.width() < 1100.0;
+        // The map-mode switches squeeze the right-hand group in anything but a wide window.
+        let cramped = rect.width() < 1520.0;
 
         // ---- left: tap, tempo, signature, metronome
         let left = Rect::from_min_max(
@@ -890,6 +1093,7 @@ impl RliveApp {
         );
         lu.spacing_mut().item_spacing.x = 4.0;
         let r = widgets::state_button(&mut lu, Vec2::new(34.0, h), false, pal().accent, "TAP");
+        remote_map::overlay(&lu, r.rect, MapTarget::Control(RemoteControl::TapTempo));
         if info(r, "Tap Tempo — click in time to set the tempo").clicked() {
             let now = lu.input(|i| i.time);
             self.tap_tempo(now);
@@ -907,6 +1111,7 @@ impl RliveApp {
                 )
             })
             .inner;
+        remote_map::overlay(&lu, r.rect, MapTarget::Param(tempo_param()));
         if r.changed() {
             self.session.set_tempo(tempo);
         }
@@ -965,6 +1170,7 @@ impl RliveApp {
             pal().accent,
             icons::metronome,
         );
+        remote_map::overlay(&lu, r.rect, MapTarget::Control(RemoteControl::Metronome));
         if info(r, "Metronome — click on every beat while playing (O)").clicked() {
             self.session.set_metronome(!metro);
         }
@@ -1009,6 +1215,7 @@ impl RliveApp {
             pal().play_green,
             icons::play,
         );
+        remote_map::overlay(&cu, r.rect, MapTarget::Control(RemoteControl::Play));
         if info(r, "Play — start playback (Space)").clicked() {
             self.session.play();
         }
@@ -1019,6 +1226,7 @@ impl RliveApp {
             pal().accent,
             icons::stop,
         );
+        remote_map::overlay(&cu, r.rect, MapTarget::Control(RemoteControl::Stop));
         if info(
             r,
             "Stop — stop playback; stop twice to return to the start (Space)",
@@ -1035,6 +1243,7 @@ impl RliveApp {
             pal().arm_red,
             icons::record,
         );
+        remote_map::overlay(&cu, r.rect, MapTarget::Control(RemoteControl::Record));
         if info(
             r,
             "Arrangement Record — record onto armed tracks in the Arrangement (F9). Shift: the \
@@ -1047,6 +1256,7 @@ impl RliveApp {
         }
         let overdub = self.session.project.midi_arrangement_overdub;
         let r = widgets::state_button(&mut cu, Vec2::new(22.0, h), overdub, pal().accent, "OD");
+        remote_map::overlay(&cu, r.rect, MapTarget::Control(RemoteControl::MidiOverdub));
         if info(
             r,
             "MIDI Arrangement Overdub — recorded MIDI mixes with what is already on the track",
@@ -1057,6 +1267,7 @@ impl RliveApp {
         }
         let a = self.session.project.arrangement.clone();
         let r = widgets::state_button(&mut cu, Vec2::new(22.0, h), a.punch_in, pal().accent, "In");
+        remote_map::overlay(&cu, r.rect, MapTarget::Control(RemoteControl::PunchIn));
         if info(
             r,
             "Punch-In — keep recording out of everything before the loop start",
@@ -1072,6 +1283,7 @@ impl RliveApp {
             pal().accent,
             "Out",
         );
+        remote_map::overlay(&cu, r.rect, MapTarget::Control(RemoteControl::PunchOut));
         if info(
             r,
             "Punch-Out — keep recording out of everything after the loop end",
@@ -1090,6 +1302,11 @@ impl RliveApp {
             session_rec,
             pal().arm_red,
             icons::session_record,
+        );
+        remote_map::overlay(
+            &cu,
+            r.rect,
+            MapTarget::Control(RemoteControl::SessionRecord),
         );
         if info(
             r,
@@ -1112,6 +1329,7 @@ impl RliveApp {
             },
             icons::capture_midi,
         );
+        remote_map::overlay(&cu, r.rect, MapTarget::Control(RemoteControl::CaptureMidi));
         if info(
             r,
             "Capture MIDI — make a clip of what you just played on armed or monitored tracks",
@@ -1129,6 +1347,11 @@ impl RliveApp {
             pal().arm_red,
             icons::automation_arm,
         );
+        remote_map::overlay(
+            &cu,
+            r.rect,
+            MapTarget::Control(RemoteControl::AutomationArm),
+        );
         if info(
             r,
             "Automation Arm — while recording, moving a control records it as automation",
@@ -1144,6 +1367,11 @@ impl RliveApp {
             overridden,
             pal().accent,
             icons::re_enable,
+        );
+        remote_map::overlay(
+            &cu,
+            r.rect,
+            MapTarget::Control(RemoteControl::ReEnableAutomation),
         );
         if info(
             r,
@@ -1187,6 +1415,7 @@ impl RliveApp {
             pal().accent,
             "Loop",
         );
+        remote_map::overlay(&cu, r.rect, MapTarget::Control(RemoteControl::Loop));
         if info(
             r,
             "Loop — repeat the Arrangement between the loop brace's ends (Cmd+L)",
@@ -1198,6 +1427,11 @@ impl RliveApp {
         }
         let back = arrangement::overridden(&self.session);
         let r = widgets::state_button(&mut cu, Vec2::new(44.0, h), back, pal().accent, "Back");
+        remote_map::overlay(
+            &cu,
+            r.rect,
+            MapTarget::Control(RemoteControl::BackToArrangement),
+        );
         if info(
             r,
             "Back to Arrangement — Session clips stop, the timeline plays again",
@@ -1216,6 +1450,7 @@ impl RliveApp {
                 pal().accent,
                 "F",
             );
+            remote_map::overlay(ui, r.rect, MapTarget::Control(RemoteControl::FollowActions));
             if info(
                 r,
                 "Enable Follow Actions Globally — lets you edit running clips",
@@ -1236,11 +1471,12 @@ impl RliveApp {
                 .max_rect(right)
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
         );
-        ru.spacing_mut().item_spacing.x = 6.0;
+        ru.spacing_mut().item_spacing.x = if cramped { 3.0 } else { 6.0 };
+        self.map_switches(&mut ru, h);
         // CPU meter
         let load = self.session.engine.shared.cpu_load.load().clamp(0.0, 1.0);
         let (cr, r) = ru.allocate_exact_size(
-            Vec2::new(if narrow { 34.0 } else { 70.0 }, h),
+            Vec2::new(if cramped { 34.0 } else { 70.0 }, h),
             Sense::hover(),
         );
         ru.painter().rect_filled(cr, 1.0, pal().field_bg);
@@ -1257,7 +1493,7 @@ impl RliveApp {
         ru.painter().text(
             cr.center(),
             Align2::CENTER_CENTER,
-            if narrow {
+            if cramped {
                 format!("{:.0}%", load * 100.0)
             } else {
                 format!("CPU {:.0}%", load * 100.0)
@@ -1269,35 +1505,7 @@ impl RliveApp {
             r,
             "CPU Load — how much of the audio deadline the engine is using",
         );
-        // MIDI activity LED
-        let midi_on = self.routing.activity.swap(false, Ordering::Relaxed);
-        let (lr, r) = ru.allocate_exact_size(Vec2::new(34.0, h), Sense::hover());
-        ru.painter().circle_filled(
-            Pos2::new(lr.right() - 5.0, lr.center().y),
-            3.5,
-            if midi_on {
-                pal().accent
-            } else {
-                shade(0x4a4a4a)
-            },
-        );
-        ru.painter().text(
-            Pos2::new(lr.left(), lr.center().y),
-            Align2::LEFT_CENTER,
-            "MIDI",
-            theme::font(10.0),
-            pal().text_dim,
-        );
-        info(
-            r,
-            format!(
-                "MIDI Input — {}",
-                self.midi
-                    .port_name
-                    .clone()
-                    .unwrap_or_else(|| "none connected".into())
-            ),
-        );
+        self.midi_lights(&mut ru, h);
         if !narrow {
             let keys = self.ui.computer_keys;
             let r = widgets::icon_button(
@@ -1363,6 +1571,7 @@ impl RliveApp {
     fn follow_and_loop_fields(&mut self, ui: &mut egui::Ui, h: f32) {
         let follow = self.ui.arr.follow.on;
         let r = widgets::state_button(ui, Vec2::new(44.0, h), follow, pal().accent, "Follow");
+        remote_map::overlay(ui, r.rect, MapTarget::Control(RemoteControl::Follow));
         if info(r, "Follow — the Arrangement scrolls with the song position").clicked() {
             self.ui.arr.follow.on = !follow;
         }
@@ -1645,7 +1854,15 @@ impl eframe::App for RliveApp {
             ));
         }
         self.session.set_edge_fades(self.settings.create_fades);
+        self.ui.frame_time = ctx.input(|i| i.time);
+        self.session.remote.selected_device = self.selected_device();
         self.session.idle();
+        for sysex in self.routing.system.take_sysex() {
+            self.session.surface_sysex(&sysex);
+        }
+        for (target, gesture) in self.session.take_remote_actions() {
+            self.remote_action(target, gesture);
+        }
         self.poll_scan();
         if std::mem::take(&mut self.ui.request_scan) && self.ui.scan_rx.is_none() {
             self.start_plugin_scan();
@@ -1665,6 +1882,25 @@ impl eframe::App for RliveApp {
         if let Some(menu) = &self.mac_menu {
             menu.drain_into(ctx.text_edit_focused(), raw, &mut self.pending);
         }
+        if !ctx.text_edit_focused() {
+            let mut keep = Vec::with_capacity(raw.events.len());
+            for e in std::mem::take(&mut raw.events) {
+                let taken = match &e {
+                    egui::Event::Key {
+                        key,
+                        pressed,
+                        repeat: false,
+                        modifiers,
+                        ..
+                    } => remote_map::key_event(self, *key, *modifiers, *pressed),
+                    _ => false,
+                };
+                if !taken {
+                    keep.push(e);
+                }
+            }
+            raw.events = keep;
+        }
         // Taking shortcuts here keeps Tab from moving egui's keyboard focus, which would silence
         // Space and the computer keyboard.
         let cx = self.key_context(ctx);
@@ -1673,6 +1909,7 @@ impl eframe::App for RliveApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        remote_map::begin_frame(&ctx, &self.session);
         self.ui.devices.begin_frame();
         self.refresh_hardware();
         let meters_moving = self.update_meters();
@@ -1705,8 +1942,25 @@ impl eframe::App for RliveApp {
             .exact_size(STATUS_H)
             .frame(egui::Frame::new())
             .show(ui, |ui| self.status_bar(ui));
+        if self.session.map_mode().is_some() {
+            egui::Panel::bottom("remote_strip")
+                .exact_size(24.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(pal().panel_dark)
+                        .inner_margin(egui::Margin::symmetric(6, 2)),
+                )
+                .show(ui, |ui| {
+                    egui::ScrollArea::horizontal()
+                        .id_salt("remote_strip_scroll")
+                        .show(ui, |ui| {
+                            remote_map::strip(ui, &self.session, &self.ui);
+                        });
+                });
+        }
         let mapping = self.ui.devices.ui.map.is_some();
-        if self.ui.show_browser || self.ui.show_info || mapping {
+        let remote_mapping = self.session.map_mode().is_some();
+        if self.ui.show_browser || self.ui.show_info || mapping || remote_mapping {
             let panel = egui::Panel::left("browser")
                 .resizable(true)
                 .default_size(250.0)
@@ -1726,7 +1980,11 @@ impl eframe::App for RliveApp {
                     };
                     let split = full.bottom() - info_h;
                     let top = Rect::from_min_max(full.min, Pos2::new(full.right(), split));
-                    if mapping {
+                    if remote_mapping {
+                        let inner = top.shrink(6.0);
+                        let mut mu = ui.new_child(UiBuilder::new().max_rect(inner));
+                        remote_map::browser(&mut mu, &mut self.session, &mut self.ui);
+                    } else if mapping {
                         let inner = top.shrink(6.0);
                         let mut mu = ui.new_child(UiBuilder::new().max_rect(inner));
                         devices::rack::mapping_browser::show(
@@ -1807,6 +2065,7 @@ impl eframe::App for RliveApp {
             || self.session.is_recording()
             || self.session.any_overdubbing();
         self.session.commit_edits(busy);
+        remote_map::end_frame(&ctx, &mut self.session);
         self.ui.devices.end_frame();
         // A chop is adjusted for as long as Cmd stays down.
         if self.ui.piano.chop.is_some() && !ctx.input(|i| i.modifiers.command) {

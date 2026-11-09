@@ -364,6 +364,7 @@ pub(super) fn assign_row(
         );
         let mut child = ui.new_child(UiBuilder::new().max_rect(r));
         let resp = widgets::state_button(&mut child, r.size(), side == button, pal().accent, label);
+        super::remote_map::overlay_track(&child, r, id, rlive_core::param::mixer::CROSSFADE_ASSIGN);
         if info(
             resp,
             "Crossfade Assign — which side of the crossfader this track is on",
@@ -384,6 +385,7 @@ pub(super) fn assign_row(
 pub(super) fn crossfader(ui: &mut egui::Ui, session: &mut Session, rect: Rect) {
     let id = Id::unique("rlive_crossfader");
     let resp = ui.interact(rect, id, Sense::click_and_drag());
+    super::remote_map::overlay_crossfader(ui, rect);
     let p = ui.painter();
     p.rect_filled(rect, 1.0, pal().field_bg);
     p.line_segment(
@@ -560,6 +562,7 @@ pub(super) fn main_section(
     if value != db {
         session.set_cue_volume(value);
     }
+    super::remote_map::overlay_main(&k, resp.rect, rlive_core::param::mixer::CUE_VOLUME);
     info(resp, "Cue Volume — the level of the Cue output");
     y + 3.0 * (ROW_H + 2.0)
 }

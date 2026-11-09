@@ -12,6 +12,7 @@ members = [
     "crates/rlive-test-vst3",
     "crates/rlive-testkit",
     "crates/rlive-stretch",
+    "crates/rlive-remote",
 ]
 default-members = [
     "crates/rlive-core",
@@ -22,6 +23,7 @@ default-members = [
     "crates/rlive-audio-io",
     "crates/rlive-app",
     "crates/rlive-stretch",
+    "crates/rlive-remote",
 ]
 
 [workspace.package]
@@ -40,6 +42,7 @@ rlive-plugin-host = { path = "crates/rlive-plugin-host" }
 rlive-audio-io = { path = "crates/rlive-audio-io" }
 rlive-testkit = { path = "crates/rlive-testkit" }
 rlive-stretch = { path = "crates/rlive-stretch" }
+rlive-remote = { path = "crates/rlive-remote" }
 
 rtrb = "0.4"
 serde = { version = "1", features = ["derive"] }

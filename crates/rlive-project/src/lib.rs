@@ -42,7 +42,10 @@ pub use envelope::{Breakpoint, ClipEnvelope, EnvLoop, EnvMode, Envelope};
 pub use file_ref::FileRef;
 pub use groove::{Groove, GroovePool, Tuning};
 pub use id_walk::walk_ids;
-pub use mapping::{CcEncoding, KeyMapping, MapTarget, MidiMapping, MidiSource};
+pub use mapping::{
+    CcEncoding, ControlKind, CrossfaderPoint, KeyMapping, MapTarget, MidiMapping, MidiSource,
+    RemoteControl,
+};
 pub use project::{Crossfader, Project, ProjectError, FILE_EXTENSION, FORMAT_VERSION, PALETTE};
 pub use recording::{BeatDivision, MetronomeOptions, MetronomeSound, RecordQuantize};
 pub use routing::SEND_OFF_DB;

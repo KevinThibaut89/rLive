@@ -23,6 +23,8 @@ impl Session {
     /// Records that an undoable edit happened.
     pub(super) fn mark_edit(&mut self, label: &'static str) {
         self.dirty = true;
+        // Whatever this edit deleted, mappings to it go in the same undo step.
+        self.project.prune_mappings();
         self.history.pending.get_or_insert(label);
         self.history.settling = 0;
         // Leaders' tempo comes from their clips, which any edit can move.
@@ -321,6 +323,7 @@ impl Session {
             tuning,
             midi_mappings,
             key_mappings,
+            surface_locks,
             solo_in_place,
             delay_compensation,
             follow_actions_on,
@@ -353,6 +356,7 @@ impl Session {
         p.tuning = tuning.clone();
         p.midi_mappings = midi_mappings.clone();
         p.key_mappings = key_mappings.clone();
+        p.surface_locks = surface_locks.clone();
         p.solo_in_place = *solo_in_place;
         p.delay_compensation = *delay_compensation;
         p.follow_actions_on = *follow_actions_on;

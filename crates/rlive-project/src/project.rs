@@ -93,6 +93,9 @@ pub struct Project {
     pub midi_mappings: Vec<MidiMapping>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub key_mappings: Vec<KeyMapping>,
+    /// Control surfaces locked to a device, by which row of the settings they're in.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub surface_locks: Vec<(u8, rlive_core::DeviceId)>,
     /// Soloing a clip or group track leaves the return tracks audible.
     #[serde(
         default = "crate::defaults::yes",
@@ -197,6 +200,7 @@ impl Project {
             tuning: None,
             midi_mappings: Vec::new(),
             key_mappings: Vec::new(),
+            surface_locks: Vec::new(),
             solo_in_place: true,
             delay_compensation: true,
             follow_actions_on: true,
@@ -385,6 +389,8 @@ impl Project {
                 .map(|(new, _)| new as u32)
                 .collect();
         }
+        let map = map.to_vec();
+        self.remap_scene_mappings(&|old| map.iter().position(|i| *i == old));
     }
 
     pub fn to_ron(&self) -> Result<String, ProjectError> {

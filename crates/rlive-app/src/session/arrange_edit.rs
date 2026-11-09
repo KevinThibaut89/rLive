@@ -542,8 +542,11 @@ impl Session {
             return index;
         }
         let name = a.locators[index].name.clone();
+        let from = a.locators[index].tick;
         a.locators[index].tick = tick;
         a.locators.sort_by_key(|l| l.tick);
+        self.project.move_locator_mappings(from, tick);
+        let a = &mut self.project.arrangement;
         let at = a
             .locators
             .iter()

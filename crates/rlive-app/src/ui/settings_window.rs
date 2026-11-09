@@ -7,13 +7,14 @@ use super::commands::{options::Options, MenuCommand};
 use super::theme::{pal, Appearance, ThemeName, ThemeSettings, Tone};
 use super::{sample_editor, session_view, widgets, RliveApp};
 use crate::audio;
-use crate::midi_input::{self, MidiInput};
+use crate::midi_input;
 use crate::session::ShortSampleMode;
 use crate::settings::{ChannelBank, ClipColor, FollowBehavior, InputDevice, ScrollBars, Settings};
 use egui::{Color32, RichText, Sense, Stroke, StrokeKind, Vec2};
 use rlive_audio_io::{BitDepth, FileType};
 use rlive_project::clip_envelope::SessionAutomationIn;
 use rlive_project::WarpMode;
+use rlive_remote::TakeoverMode;
 
 /// A page of the Settings window.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -80,6 +81,34 @@ fn coming(milestone: &str) -> String {
 }
 
 /// A control that doesn't work yet: a label and a greyed-out value.
+/// The Track, Sync and Remote switches of a MIDI port.
+fn port_switches(ui: &mut egui::Ui, cfg: &mut crate::settings::MidiPortConfig) -> bool {
+    let track = ui.checkbox(&mut cfg.track, "").changed();
+    let sync = ui.checkbox(&mut cfg.sync, "").changed();
+    let remote = ui.checkbox(&mut cfg.remote, "").changed();
+    track || sync || remote
+}
+
+/// A chooser of one MIDI port or none.
+fn port_chooser(
+    ui: &mut egui::Ui,
+    salt: (&'static str, usize),
+    ports: &[String],
+    value: &mut Option<String>,
+) -> bool {
+    let before = value.clone();
+    egui::ComboBox::from_id_salt(salt)
+        .selected_text(value.clone().unwrap_or_else(|| "None".into()))
+        .width(120.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, None, "None");
+            for p in ports {
+                ui.selectable_value(value, Some(p.clone()), p);
+            }
+        });
+    before != *value
+}
+
 fn soon(ui: &mut egui::Ui, label: &str, value: &str, milestone: &str) {
     ui.label(RichText::new(label).color(pal().text_faint));
     let r = ui.add_enabled(false, egui::Button::new(value));
@@ -450,41 +479,90 @@ impl RliveApp {
     }
 
     fn tempo_midi_tab(&mut self, ui: &mut egui::Ui) {
-        widgets::section_label(ui, "MIDI INPUT");
-        let ports = self
+        let mut changed = false;
+        let inputs = self
             .ui
             .midi_ports
             .get_or_insert_with(midi_input::port_names)
             .clone();
-        let mut port = self.settings.midi_input.clone();
-        let mut reconnect = false;
-        grid(ui, "midi", |ui| {
-            label(ui, "Input");
-            ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("midi_port")
-                    .width(200.0)
-                    .selected_text(port.clone().unwrap_or_else(|| "First available".into()))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut port, None, "First available");
-                        for p in ports {
-                            ui.selectable_value(&mut port, Some(p.clone()), p);
-                        }
-                    });
-                reconnect = ui.small_button("Reconnect").clicked();
+        let outputs = self
+            .ui
+            .midi_outputs
+            .get_or_insert_with(midi_input::output_names)
+            .clone();
+        widgets::section_label(ui, "MIDI PORTS");
+        if ui.small_button("Rescan").clicked() {
+            self.ui.midi_ports = None;
+            self.ui.midi_outputs = None;
+            changed = true;
+        }
+        let legacy = self.settings.midi_input.clone();
+        egui::Grid::new("midi_ports")
+            .num_columns(4)
+            .spacing([18.0, 4.0])
+            .show(ui, |ui| {
+                label(ui, "Port");
+                label(ui, "Track");
+                label(ui, "Sync");
+                label(ui, "Remote");
+                ui.end_row();
+                for name in &inputs {
+                    let mut cfg = self.settings.remote.input(name, legacy.as_deref());
+                    ui.label(RichText::new(format!("In: {name}")).color(pal().text));
+                    changed |= port_switches(ui, &mut cfg);
+                    ui.end_row();
+                    self.settings.remote.set_input(cfg);
+                }
+                for name in &outputs {
+                    let mut cfg = self.settings.remote.output(name);
+                    ui.label(RichText::new(format!("Out: {name}")).color(pal().text));
+                    changed |= port_switches(ui, &mut cfg);
+                    ui.end_row();
+                    self.settings.remote.set_output(cfg);
+                }
+                if inputs.is_empty() && outputs.is_empty() {
+                    ui.label(RichText::new("No MIDI ports found").color(pal().text_dim));
+                    ui.end_row();
+                }
             });
+        ui.add_space(10.0);
+        widgets::section_label(ui, "CONTROL SURFACES");
+        egui::Grid::new("control_surfaces")
+            .num_columns(4)
+            .spacing([12.0, 4.0])
+            .show(ui, |ui| {
+                label(ui, "Control Surface");
+                label(ui, "Input");
+                label(ui, "Output");
+                ui.label("");
+                ui.end_row();
+                for i in 0..rlive_remote::MAX_SURFACES {
+                    changed |= self.surface_row(ui, i, &inputs, &outputs);
+                    ui.end_row();
+                }
+            });
+        ui.add_space(6.0);
+        grid(ui, "takeover", |ui| {
+            label(ui, "Takeover Mode");
+            let mut mode = self.settings.remote.takeover;
+            egui::ComboBox::from_id_salt("takeover_mode")
+                .selected_text(mode.label())
+                .show_ui(ui, |ui| {
+                    for m in TakeoverMode::ALL {
+                        ui.selectable_value(&mut mode, m, m.label());
+                    }
+                });
+            if mode != self.settings.remote.takeover {
+                self.settings.remote.takeover = mode;
+                self.session.set_takeover(mode);
+                self.settings.save();
+            }
             ui.end_row();
         });
-        if port != self.settings.midi_input || reconnect {
-            self.ui.midi_ports = None;
-            self.settings.midi_input = port;
+        if changed {
             self.settings.save();
-            self.midi = MidiInput::none();
-            self.midi =
-                MidiInput::connect(self.settings.midi_input.as_deref(), self.routing.clone())
-                    .unwrap_or_else(|e| {
-                        self.ui.status = format!("MIDI: {e}");
-                        MidiInput::none()
-                    });
+            self.apply_control_surfaces();
+            self.connect_midi();
         }
         ui.add_space(10.0);
         widgets::section_label(ui, "COMPUTER MIDI KEYBOARD");
@@ -498,14 +576,52 @@ impl RliveApp {
             ui.end_row();
         });
         ui.add_space(10.0);
-        widgets::section_label(ui, "CONTROL SURFACES AND SYNC");
+        widgets::section_label(ui, "SYNC");
         grid(ui, "surfaces", |ui| {
-            soon(ui, "Control Surface", "None", "A15");
-            soon(ui, "Takeover Mode", "Pick-Up", "A15");
-            soon(ui, "Input Tracks / Sync / Remote", "Per port", "A15");
             soon(ui, "Tempo Follower", "Off", "A16");
             soon(ui, "Sync Output", "Off", "A16");
         });
+    }
+
+    /// One row of the Control Surface table.
+    fn surface_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        i: usize,
+        inputs: &[String],
+        outputs: &[String],
+    ) -> bool {
+        let mut changed = false;
+        let row = self.settings.remote.surface_mut(i);
+        let mut script = row.script.clone();
+        egui::ComboBox::from_id_salt(("surface", i))
+            .selected_text(script.clone().unwrap_or_else(|| "None".into()))
+            .width(140.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut script, None, "None");
+                for name in rlive_remote::SurfaceHost::available() {
+                    ui.selectable_value(&mut script, Some(name.to_string()), name);
+                }
+            });
+        changed |= script != row.script;
+        row.script = script;
+        changed |= port_chooser(ui, ("surface_in", i), inputs, &mut row.input);
+        changed |= port_chooser(ui, ("surface_out", i), outputs, &mut row.output);
+        let dump = self
+            .session
+            .remote
+            .surfaces
+            .slots
+            .get(i)
+            .and_then(|s| s.as_ref())
+            .is_some_and(|s| s.surface.preset_dump().is_some());
+        if ui
+            .add_enabled(dump, egui::Button::new("Dump").small())
+            .clicked()
+        {
+            self.session.dump_surface(i);
+        }
+        changed
     }
 
     fn library_tab(&mut self, ui: &mut egui::Ui) {

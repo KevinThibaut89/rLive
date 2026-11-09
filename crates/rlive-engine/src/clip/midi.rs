@@ -40,6 +40,8 @@ pub(crate) struct Voices {
     /// What this run of playback draws its Chance and Velocity Deviation from. Moves on each time
     /// everything is released, so the next run comes out differently.
     luck: u64,
+    /// Semitones the clip playing was launched at.
+    pub transpose: i8,
 }
 
 /// Each player starts somewhere different, so two tracks playing the same clip don't agree.
@@ -48,6 +50,7 @@ static NEXT_LUCK: AtomicU64 = AtomicU64::new(0x51ed_270b_3f9a_16c7);
 impl Voices {
     pub fn new(space: NoteSpace) -> Self {
         Self {
+            transpose: 0,
             sounding: [SILENT; MAX_SOUNDING],
             len: 0,
             ids: NoteIds::new(space),
@@ -102,6 +105,11 @@ impl Voices {
     }
 
     /// Start note `note` of the clip. Returns its new id, or `None` if too many are sounding.
+    /// A note's key at the transposition the clip was launched at.
+    fn keyed(&self, key: u8) -> u8 {
+        (i16::from(key & 127) + i16::from(self.transpose)).clamp(0, 127) as u8
+    }
+
     fn on(&mut self, note: u32, key: u8, release: f32) -> Option<NoteId> {
         if self.len == MAX_SOUNDING {
             return None;
@@ -224,7 +232,7 @@ pub(super) fn render_midi(
                 continue;
             }
             let index = i as u32;
-            let key = note.key & 127;
+            let key = voices.keyed(note.key);
             let on = base + start;
             let off = base + ((note.start + note.length.max(1)) as f64).min(window_to);
             // Start before stop, or a note shorter than the block never gets its note-off.
@@ -291,7 +299,7 @@ pub(crate) fn chase(
         }
         let off = base + ((note.start + note.length.max(1)) as f64).min(window_to);
         if off > at {
-            let key = note.key & 127;
+            let key = voices.keyed(note.key);
             let velocity = voices.fate(note, i as u32, k);
             if let Some((velocity, id)) =
                 velocity.and_then(|v| Some((v, voices.on(i as u32, key, note.release)?)))
@@ -418,5 +426,21 @@ fn push_expr_event(
 pub(crate) fn push_event(events: &mut Vec<MidiEvent>, e: MidiEvent) {
     if events.len() < events.capacity() {
         events.push(e);
+    }
+}
+
+#[cfg(test)]
+mod launch_transpose_tests {
+    use super::*;
+
+    #[test]
+    fn a_transposed_launch_shifts_keys_and_stays_in_range() {
+        let mut v = Voices::new(NoteSpace::Session);
+        v.transpose = 5;
+        assert_eq!(v.keyed(60), 65);
+        v.transpose = -12;
+        assert_eq!(v.keyed(5), 0, "clamped at the bottom");
+        v.transpose = 12;
+        assert_eq!(v.keyed(120), 127, "clamped at the top");
     }
 }

@@ -177,6 +177,8 @@ pub(crate) struct ClipPlayer {
     pub repeat: Option<Repeat>,
     /// The button of a Gate or Repeat launch that hasn't started came up: it stops a quantum in.
     pub released_early: bool,
+    /// Semitones the next launch plays at, for a mapped key of a chromatic range.
+    pub launch_transpose: i8,
     /// The pending launch came from launching a scene, so Cancel Scene Launch takes it back.
     pub from_scene: bool,
     /// Where the playing clip last changed, for the Arrangement to log.
@@ -199,6 +201,7 @@ impl ClipPlayer {
             follow: None,
             repeat: None,
             released_early: false,
+            launch_transpose: 0,
             from_scene: false,
             changed_at: 0.0,
             logged: None,
@@ -301,7 +304,11 @@ impl ClipPlayer {
                         scale_notes(&mut events[first..], gain);
                     }
                     self.arm_follow(&settings, region, at, start_tick, slot);
-                    self.playing = Some(Playing::new(slot, clip.clone(), start_tick, gain));
+                    let mut playing = Playing::new(slot, clip.clone(), start_tick, gain);
+                    let semitones = std::mem::take(&mut self.launch_transpose);
+                    playing.audio.launch_transpose = f32::from(semitones);
+                    self.voices.transpose = semitones;
+                    self.playing = Some(playing);
                     if self.released_early {
                         // The button came up before the clip began: it plays one quantum.
                         let q = settings.quantize.unwrap_or(env.global);

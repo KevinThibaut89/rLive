@@ -21,6 +21,7 @@ impl RliveApp {
                 self.ui.show_settings = true;
                 self.ui.audio_devices = None;
                 self.ui.midi_ports = None;
+                self.ui.midi_outputs = None;
             }
             App::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }

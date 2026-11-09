@@ -368,6 +368,90 @@ impl Default for ClipSettings {
     }
 }
 
+/// A MIDI port's three switches.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MidiPortConfig {
+    pub name: String,
+    pub track: bool,
+    #[serde(default)]
+    pub sync: bool,
+    pub remote: bool,
+}
+
+/// One row of the Control Surface table.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct SurfaceConfig {
+    pub script: Option<String>,
+    #[serde(default)]
+    pub input: Option<String>,
+    #[serde(default)]
+    pub output: Option<String>,
+}
+
+/// Link, Tempo & MIDI: the MIDI ports, control surfaces and takeover.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemoteSettings {
+    pub inputs: Vec<MidiPortConfig>,
+    pub outputs: Vec<MidiPortConfig>,
+    pub surfaces: Vec<SurfaceConfig>,
+    pub takeover: rlive_remote::TakeoverMode,
+}
+
+impl RemoteSettings {
+    /// Switches for an input port, with what a port nobody has configured starts with: on as a
+    /// track input and remote input, as the only port if there was one chosen before there were
+    /// switches at all.
+    pub fn input(&self, name: &str, legacy: Option<&str>) -> MidiPortConfig {
+        self.inputs
+            .iter()
+            .find(|p| p.name == name)
+            .cloned()
+            .unwrap_or_else(|| MidiPortConfig {
+                name: name.to_string(),
+                track: legacy.is_none_or(|l| l == name),
+                sync: false,
+                remote: true,
+            })
+    }
+
+    /// Switches for an output port, all off to begin with.
+    pub fn output(&self, name: &str) -> MidiPortConfig {
+        self.outputs
+            .iter()
+            .find(|p| p.name == name)
+            .cloned()
+            .unwrap_or_else(|| MidiPortConfig {
+                name: name.to_string(),
+                track: false,
+                sync: false,
+                remote: false,
+            })
+    }
+
+    fn set(list: &mut Vec<MidiPortConfig>, cfg: MidiPortConfig) {
+        match list.iter_mut().find(|p| p.name == cfg.name) {
+            Some(p) => *p = cfg,
+            None => list.push(cfg),
+        }
+    }
+
+    pub fn set_input(&mut self, cfg: MidiPortConfig) {
+        Self::set(&mut self.inputs, cfg);
+    }
+
+    pub fn set_output(&mut self, cfg: MidiPortConfig) {
+        Self::set(&mut self.outputs, cfg);
+    }
+
+    pub fn surface_mut(&mut self, index: usize) -> &mut SurfaceConfig {
+        if self.surfaces.len() <= index {
+            self.surfaces.resize(index + 1, SurfaceConfig::default());
+        }
+        &mut self.surfaces[index]
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -411,6 +495,8 @@ pub struct Settings {
     /// Short default fades at clip edges, and crossfades where audio clips touch.
     pub create_fades: bool,
     pub chase_notes: bool,
+    /// MIDI ports' switches, control surfaces and takeover.
+    pub remote: RemoteSettings,
 }
 
 impl Default for Settings {
@@ -444,6 +530,7 @@ impl Default for Settings {
             record_session_automation_in: SessionAutomationIn::default(),
             create_fades: true,
             chase_notes: true,
+            remote: RemoteSettings::default(),
         }
     }
 }
@@ -602,6 +689,7 @@ mod tests {
             record_session_automation_in: SessionAutomationIn::AllTracks,
             create_fades: false,
             chase_notes: false,
+            remote: RemoteSettings::default(),
         };
         let path = temp_file("round-trip.json");
         settings.save_to(&path);

@@ -422,6 +422,11 @@ fn expanded_title(
         cx.queue.push(chain, Action::Fold(dev.id, false));
     }
     let is_rack = matches!(dev.kind, DeviceKind::Rack { .. });
+    // A hand in the title says a control surface is locked to this device (manual p. 867).
+    if cx.session.remote.surfaces.is_locked(dev.id) {
+        let r = widgets::bare_icon(tu, Vec2::new(14.0, 18.0), icons::hand);
+        info(r, "A control surface is locked to this device");
+    }
     // With every view hidden the name moves into the view column, and nothing else fits.
     if rack::RackRef::of(chain, dev, cx.rack_views).is_some_and(|r| r.view.all_hidden(r.kind)) {
         return;
@@ -545,6 +550,41 @@ fn folded_title(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The "Lock to..." entry of a device's context menu, one row per control surface (manual p. 867).
+fn lock_to_menu(ui: &mut egui::Ui, cx: &mut DrawCx, chain: ChainRef, dev: &Device) {
+    let rows: Vec<(usize, String, Option<rlive_core::DeviceId>, bool)> = cx
+        .session
+        .remote
+        .surfaces
+        .in_use()
+        .map(|(i, s)| {
+            (
+                i,
+                s.surface.name().to_string(),
+                s.locked,
+                s.surface.supports_locking(),
+            )
+        })
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    ui.menu_button("Lock to...", |ui| {
+        for (i, name, locked, can_lock) in rows {
+            let on = locked == Some(dev.id);
+            if ui
+                .add_enabled(can_lock, egui::Button::new(name).selected(on))
+                .clicked()
+            {
+                let device = if on { None } else { Some(dev.id) };
+                cx.queue.push(chain, Action::LockSurface(i, device));
+                ui.close();
+            }
+        }
+    });
+    ui.separator();
+}
+
 fn device_menu(
     ui: &mut egui::Ui,
     cx: &mut DrawCx,
@@ -554,6 +594,7 @@ fn device_menu(
     count: usize,
     is_plugin: bool,
 ) {
+    lock_to_menu(ui, cx, chain, dev);
     if ui.button("Rename").clicked() {
         cx.ui.rename = Some(rack::Rename {
             target: rack::RenameTarget::Device(dev.id),

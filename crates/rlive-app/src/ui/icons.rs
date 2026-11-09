@@ -107,6 +107,32 @@ pub fn power(p: &Painter, rect: Rect, color: Color32) {
 }
 
 /// Small triangle pointing right (folded) or down (unfolded).
+/// A raised hand: a control surface is locked to this device.
+pub fn hand(p: &Painter, rect: Rect, color: Color32) {
+    let c = rect.center();
+    let w = s(rect, 0.09);
+    // Palm, then four fingers and a thumb.
+    p.rect_filled(
+        Rect::from_center_size(Pos2::new(c.x, c.y + w * 1.2), egui::vec2(w * 4.6, w * 3.4)),
+        1.0,
+        color,
+    );
+    for i in 0..4 {
+        let x = c.x - w * 1.8 + i as f32 * w * 1.2;
+        p.line_segment(
+            [Pos2::new(x, c.y + w * 0.3), Pos2::new(x, c.y - w * 2.4)],
+            egui::Stroke::new(w * 0.9, color),
+        );
+    }
+    p.line_segment(
+        [
+            Pos2::new(c.x - w * 2.2, c.y + w * 1.2),
+            Pos2::new(c.x - w * 3.2, c.y),
+        ],
+        egui::Stroke::new(w * 0.9, color),
+    );
+}
+
 pub fn fold(p: &Painter, rect: Rect, open: bool, color: Color32) {
     let c = rect.center();
     let r = s(rect, 0.22);

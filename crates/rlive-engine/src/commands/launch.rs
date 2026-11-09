@@ -22,6 +22,11 @@ pub enum LaunchCmd {
         track: TrackId,
         slot: usize,
     },
+    /// The next clip launched on this track plays this many semitones from how it's written.
+    Transpose {
+        track: TrackId,
+        semitones: i8,
+    },
     /// Jump in the playing clip by one global quantization step.
     Nudge {
         track: TrackId,
@@ -107,6 +112,11 @@ impl Engine {
             C::ClipUp { track, slot } => {
                 if let Some(i) = self.track_index(track) {
                     self.release(i, slot);
+                }
+            }
+            C::Transpose { track, semitones } => {
+                if let Some(i) = self.track_index(track) {
+                    self.tracks[i].player.launch_transpose = semitones;
                 }
             }
             C::Nudge { track, forward } => {

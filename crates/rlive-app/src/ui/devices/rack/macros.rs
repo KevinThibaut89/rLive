@@ -130,6 +130,14 @@ fn macro_cell(ui: &mut egui::Ui, cx: &mut DrawCx, r: &RackRef, n: usize, cell: R
         cx.queue
             .push(chain, Action::Rack(rack, RackAction::MacroValue(n, v)));
     }
+    crate::ui::remote_map::overlay(
+        ui,
+        cell,
+        rlive_project::MapTarget::Param(rlive_core::ParamRef {
+            owner: rlive_core::ParamOwner::Device(rack),
+            id: rlive_core::param::rack::macro_id(n),
+        }),
+    );
     if let Some(c) = m.and_then(|m| m.color) {
         let swatch = Rect::from_min_size(cell.min + Vec2::new(0.0, 2.0), Vec2::new(3.0, 12.0));
         ui.painter().rect_filled(swatch, 0.0, rgb(c));

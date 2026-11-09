@@ -369,6 +369,7 @@ pub fn capture(project: &Project, prev: Option<&Snapshot>) -> (Snapshot, usize) 
         tuning: project.tuning.clone(),
         midi_mappings: project.midi_mappings.clone(),
         key_mappings: project.key_mappings.clone(),
+        surface_locks: project.surface_locks.clone(),
         solo_in_place: project.solo_in_place,
         delay_compensation: project.delay_compensation,
         follow_actions_on: project.follow_actions_on,

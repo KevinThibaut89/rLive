@@ -47,6 +47,8 @@ pub(crate) struct AudioCursor {
     /// Clip-local tick the region ends at, which audio ramps out towards. Infinite (no ramp)
     /// for Session clips.
     pub region_end: f64,
+    /// Semitones added by the key that launched the clip.
+    pub launch_transpose: f32,
     /// The stretch voice this cursor plays through.
     voice: usize,
     /// The voice doesn't know where the next render starts.
@@ -73,6 +75,7 @@ impl AudioCursor {
             next_local: 0.0,
             fade_in: 0,
             region_end: f64::INFINITY,
+            launch_transpose: 0.0,
             voice,
             needs_seek: true,
             in_progress: false,
@@ -221,7 +224,9 @@ pub(super) fn render_audio_env(
     // A warped clip with too few markers has no timeline to follow and plays like warp off, as a
     // mode with a real stretcher would otherwise be rendered through the wrong kind of span.
     let (kind, transpose, mode) = match warp {
-        Some(w) if !w.mode.kind().follows_timeline() => (w.mode.kind(), w.transpose, w.mode),
+        Some(w) if !w.mode.kind().follows_timeline() => {
+            (w.mode.kind(), w.transpose + audio.launch_transpose, w.mode)
+        }
         _ if quality.hi_q => (StretchKind::OffHiQ, 0.0, WarpMode::Complex),
         _ => (StretchKind::Off, 0.0, WarpMode::Complex),
     };
@@ -395,7 +400,7 @@ fn render_following(
             Some(curve) => (f64::from(warp.transpose) + curve.at(local))
                 .clamp(-TRANSPOSE_REACH, TRANSPOSE_REACH) as f32,
             None => warp.transpose,
-        };
+        } + audio.launch_transpose;
         let want = map.tick_to_src(read);
         if audio.needs_seek || jumped && f == from || (want - audio.src).abs() > CONTINUOUS_FRAMES {
             voice.seek(want);

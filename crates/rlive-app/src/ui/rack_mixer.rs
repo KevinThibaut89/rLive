@@ -437,6 +437,7 @@ fn strip(
             if locked(session, col, controls::PAN) {
                 ku.disable();
             }
+            map_chain_control(&ku, knob_r, col.chain, controls::PAN);
             if let Some(v) = widgets::pan_knob(&mut ku, value) {
                 push_param(
                     session,
@@ -478,6 +479,7 @@ fn strip(
     if locked(session, col, controls::VOLUME) {
         fu.disable();
     }
+    map_chain_control(&fu, fader_r, col.chain, controls::VOLUME);
     if let Some(db) = widgets::fader(&mut fu, fader_r.size(), vol, meter, pal().accent) {
         if let Some(param) = control(&infos, controls::VOLUME) {
             push_param(
@@ -531,6 +533,7 @@ fn strip(
         pal().activator,
         "",
     );
+    map_chain_control(&bu, r_on.rect, col.chain, controls::ACTIVATOR);
     if info(r_on, "Chain Activator — click to mute or unmute").clicked() {
         push_toggle(session, state, col, controls::ACTIVATOR, !active, queue);
     }
@@ -542,9 +545,22 @@ fn strip(
         pal().solo_blue,
         "S",
     );
+    map_chain_control(&bu, r_solo.rect, col.chain, controls::SOLO);
     if info(r_solo, "Chain Solo").clicked() {
         push_toggle(session, state, col, controls::SOLO, !solo, queue);
     }
+}
+
+/// Marks a chain control as mappable.
+fn map_chain_control(ui: &egui::Ui, rect: Rect, chain: rlive_core::ChainId, id: ParamId) {
+    super::remote_map::overlay(
+        ui,
+        rect,
+        rlive_project::MapTarget::Param(ParamRef {
+            owner: ParamOwner::Chain(chain),
+            id,
+        }),
+    );
 }
 
 fn control(infos: &[ParamInfo], id: ParamId) -> Option<&ParamInfo> {

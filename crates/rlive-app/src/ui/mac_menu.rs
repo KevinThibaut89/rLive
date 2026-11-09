@@ -254,6 +254,7 @@ impl MacMenu {
         let app = NSApplication::sharedApplication(mtm);
         let bar = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Main"));
         let cmd = NSEventModifierFlags::Command;
+        let ctrl_cmd = cmd | NSEventModifierFlags::Control;
         let none = NSEventModifierFlags::empty();
 
         // The app menu must stay first: eframe retitles item 0.
@@ -287,10 +288,21 @@ impl MacMenu {
         b.entries(&view, commands::view::MENU);
         b.entries(&view, commands::clip::VIEW_MENU);
         b.entries(&view, commands::notes::VIEW_ITEMS);
-        b.entries(&b.submenu(&bar, "Options"), commands::options::MENU);
+        let options = b.submenu(&bar, "Options");
+        b.entries(&options, commands::options::MENU);
+        b.separator(&options);
+        b.entries(&options, commands::remote::MENU);
 
         let window = b.submenu(&bar, "Window");
-        b.system(&window, "Minimize", sel!(performMiniaturize:), "m", cmd);
+        // Cmd+M is MIDI Map Mode, as the manual's shortcuts say. Minimize moves to the chord macOS
+        // apps give other window commands: Ctrl+Cmd, as Ctrl+Cmd+F is full screen here.
+        b.system(
+            &window,
+            "Minimize",
+            sel!(performMiniaturize:),
+            "m",
+            ctrl_cmd,
+        );
         b.system(&window, "Zoom", sel!(performZoom:), "", none);
         b.separator(&window);
         let close = b.raw_item("Close Plugin Window", sel!(closeKeyWindow:), "w");

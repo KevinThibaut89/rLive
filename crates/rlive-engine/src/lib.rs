@@ -72,17 +72,47 @@ const GARBAGE_CAPACITY: usize = 4096;
 const EVENT_CAPACITY: usize = 8192;
 const MIDI_CAPACITY: usize = 2048;
 const PLAYED_CAPACITY: usize = 2048;
+const REMOTE_CAPACITY: usize = 2048;
+
+/// Mapped controller input, on its way from the MIDI thread straight to the audio thread.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RemoteCmd {
+    /// A controller moved a parameter. Goes down the same path as a knob in the UI.
+    SetParam {
+        track: TrackRef,
+        cell: CellIx,
+        value: f64,
+    },
+    /// A mapped slot went down, `transpose` semitones from how the clip is written.
+    ClipDown {
+        track: TrackId,
+        slot: u32,
+        velocity: f32,
+        transpose: i8,
+    },
+    ClipUp {
+        track: TrackId,
+        slot: u32,
+    },
+    LaunchScene(u32),
+}
 
 /// Sends live MIDI straight to the audio thread (e.g. from a MIDI-input callback thread),
 /// bypassing the UI. Messages are timestamped here, so recording can place them where they
 /// were played rather than where the audio thread picked them up.
 pub struct MidiSender {
     producer: rtrb::Producer<(TrackId, MidiMessage, Instant)>,
+    remote: rtrb::Producer<RemoteCmd>,
 }
 
 impl MidiSender {
     pub fn send(&mut self, track: TrackId, message: MidiMessage) -> bool {
         self.producer.push((track, message, Instant::now())).is_ok()
+    }
+
+    /// Mapped input for the audio thread, which takes it at the start of the next block.
+    pub fn send_remote(&mut self, cmd: RemoteCmd) -> bool {
+        self.remote.push(cmd).is_ok()
     }
 }
 
@@ -600,6 +630,7 @@ pub struct Engine {
     events: rtrb::Producer<EngineEvent>,
     played: rtrb::Producer<PlayedNote>,
     midi: rtrb::Consumer<(TrackId, MidiMessage, Instant)>,
+    remote: rtrb::Consumer<RemoteCmd>,
     shared: Arc<EngineShared>,
 }
 
@@ -610,6 +641,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
     let (ev_tx, ev_rx) = rtrb::RingBuffer::new(EVENT_CAPACITY);
     let (played_tx, played_rx) = rtrb::RingBuffer::new(PLAYED_CAPACITY);
     let (midi_tx, midi_rx) = rtrb::RingBuffer::new(MIDI_CAPACITY);
+    let (remote_tx, remote_rx) = rtrb::RingBuffer::new(REMOTE_CAPACITY);
     let shared = Arc::new(EngineShared::default());
     shared.sample_rate.store(sample_rate);
     let engine = Engine {
@@ -681,6 +713,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         events: ev_tx,
         played: played_tx,
         midi: midi_rx,
+        remote: remote_rx,
         shared: shared.clone(),
     };
     let handle = EngineHandle {
@@ -691,7 +724,10 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         shared,
         sample_rate,
         max_block,
-        midi: Some(MidiSender { producer: midi_tx }),
+        midi: Some(MidiSender {
+            producer: midi_tx,
+            remote: remote_tx,
+        }),
     };
     (engine, handle)
 }
@@ -882,14 +918,66 @@ impl Engine {
         while let Ok((track, message, at)) = self.midi.pop() {
             self.play_midi(track, message, at);
         }
+        self.drain_remote();
         while let Ok(cmd) = self.commands.pop() {
             self.handle_command(cmd);
+        }
+    }
+
+    /// Mapped controller input that came straight from the MIDI thread.
+    fn drain_remote(&mut self) {
+        while let Ok(cmd) = self.remote.pop() {
+            match cmd {
+                RemoteCmd::SetParam { track, cell, value } => {
+                    self.handle_param(ParamCmd::Set {
+                        track,
+                        cell,
+                        value,
+                        gesture: true,
+                    });
+                }
+                RemoteCmd::ClipDown {
+                    track,
+                    slot,
+                    velocity,
+                    transpose,
+                } => {
+                    self.handle_launch(LaunchCmd::Transpose {
+                        track,
+                        semitones: transpose,
+                    });
+                    self.handle_launch(LaunchCmd::ClipDown {
+                        track,
+                        slot: slot as usize,
+                        velocity,
+                    });
+                }
+                RemoteCmd::ClipUp { track, slot } => {
+                    self.handle_launch(LaunchCmd::ClipUp {
+                        track,
+                        slot: slot as usize,
+                    });
+                }
+                RemoteCmd::LaunchScene(scene) => {
+                    self.handle_launch(LaunchCmd::LaunchScene(scene as usize));
+                }
+            }
         }
     }
 
     /// Parameter commands waiting at the head of the queue, between control steps. Anything else
     /// stays queued until the next block, so commands never overtake each other.
     fn drain_param_commands(&mut self) {
+        while matches!(self.remote.peek(), Ok(RemoteCmd::SetParam { .. })) {
+            if let Ok(RemoteCmd::SetParam { track, cell, value }) = self.remote.pop() {
+                self.handle_param(ParamCmd::Set {
+                    track,
+                    cell,
+                    value,
+                    gesture: true,
+                });
+            }
+        }
         while matches!(self.commands.peek(), Ok(EngineCommand::Param(_))) {
             if let Ok(EngineCommand::Param(c)) = self.commands.pop() {
                 self.handle_param(c);

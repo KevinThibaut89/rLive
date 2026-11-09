@@ -19,6 +19,7 @@ pub mod launch;
 pub mod notes;
 pub mod options;
 pub mod rack;
+pub mod remote;
 pub mod track;
 pub mod transport;
 pub mod view;
@@ -74,6 +75,7 @@ registry! {
     Clip(clip::Clip),
     Bounce(bounce::Bounce),
     Notes(notes::Notes),
+    Remote(remote::Remote),
 }
 
 static ALL: LazyLock<Vec<MenuCommand>> = LazyLock::new(build_all);
@@ -170,6 +172,7 @@ impl RliveApp {
         self.clip_state(&mut s);
         self.bounce_state(&mut s);
         self.notes_state(&mut s);
+        self.remote_state(&mut s);
         s
     }
 
@@ -193,6 +196,7 @@ impl RliveApp {
             MenuCommand::Clip(c) => self.clip_command(c),
             MenuCommand::Bounce(c) => self.bounce_command(c),
             MenuCommand::Notes(c) => self.notes_command(c),
+            MenuCommand::Remote(c) => self.remote_command(c),
         }
     }
 
@@ -254,6 +258,8 @@ impl RliveApp {
             ui.menu_button("Options", |ui| {
                 entries(ui, &[app::PREFERENCES], &st, &mut fired);
                 entries(ui, options::MENU, &st, &mut fired);
+                ui.separator();
+                entries(ui, remote::MENU, &st, &mut fired);
             });
             ui.menu_button("Help", |ui| {
                 entries(ui, &[app::ABOUT], &st, &mut fired);
@@ -291,7 +297,8 @@ mod tests {
             + arrange::Arrange::ALL.len()
             + launch::Launch::ALL.len()
             + clip::Clip::ALL.len()
-            + notes::Notes::ALL.len();
+            + notes::Notes::ALL.len()
+            + remote::Remote::ALL.len();
         assert_eq!(MenuCommand::all().len(), expected);
         let unique: std::collections::HashSet<_> = MenuCommand::all().iter().collect();
         assert_eq!(unique.len(), expected, "a command appears twice");

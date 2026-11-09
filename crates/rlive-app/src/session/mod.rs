@@ -28,6 +28,7 @@ mod launch_log;
 mod rack_edit;
 mod racks;
 mod recording;
+pub mod remote;
 mod render;
 mod routing;
 mod samples;
@@ -62,6 +63,8 @@ mod launch_tests;
 #[cfg(test)]
 mod rack_tests;
 #[cfg(test)]
+mod remote_tests;
+#[cfg(test)]
 mod routing_tests;
 #[cfg(test)]
 mod sample_tests;
@@ -86,6 +89,7 @@ pub use io::{can_arm, AudioHardware, CrossfaderField, CrossfaderKeys, RouteChoic
 pub use launch::{set_follow_on, signature_is_valid, LaunchDefaults};
 pub use rack_edit::PadDrop;
 pub use racks::{ExtractNotes, MacroDisplay, ZoneKind};
+pub use remote::{MapMode, MappingRow, RemotePorts, RemoteState};
 pub use render::JobStatus;
 pub use rlive_audio_io::SampleCache;
 pub use sampling::SamplingCommand;
@@ -200,6 +204,8 @@ pub struct Session {
     timing_held: bool,
     /// What Arrangement Record is writing down.
     launch_log: launch_log::LaunchLog,
+    /// MIDI and key mapping, and control surfaces.
+    pub remote: remote::RemoteState,
 }
 
 impl Session {
@@ -256,6 +262,7 @@ impl Session {
             launch_defaults: LaunchDefaults::default(),
             timing_held: false,
             launch_log: launch_log::LaunchLog::default(),
+            remote: remote::RemoteState::default(),
         };
         s.preload_samples();
         s.rebuild();
@@ -266,6 +273,10 @@ impl Session {
     pub(super) fn set_cell(&mut self, chain: ChainRef, cell: CellIx, value: f64, gesture: bool) {
         if let Some(l) = self.layouts.get_mut(&chain.owner()) {
             l.note_value(cell, value);
+        }
+        // A controller's value got there first, straight from the MIDI thread.
+        if self.remote.store_only {
+            return;
         }
         if gesture {
             self.note_gesture(chain, cell);
@@ -463,6 +474,7 @@ impl Session {
 
     /// Call every UI frame: frees engine garbage and services plugin callbacks.
     pub fn idle(&mut self) {
+        self.poll_remote();
         self.engine.collect_garbage();
         self.poll_samples();
         self.poll_preview();

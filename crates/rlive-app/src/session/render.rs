@@ -861,7 +861,12 @@ fn set_device_value(devices: &mut [Device], id: DeviceId, target: ParamRef, valu
     }
 }
 
-fn set_mixer_value(t: &mut Track, returns: &[TrackId], id: rlive_core::ParamId, value: f64) {
+pub(super) fn set_mixer_value(
+    t: &mut Track,
+    returns: &[TrackId],
+    id: rlive_core::ParamId,
+    value: f64,
+) {
     if id == mixer::VOLUME {
         t.volume_db = value as f32;
     } else if id == mixer::PAN {

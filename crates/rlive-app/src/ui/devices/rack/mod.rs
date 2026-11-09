@@ -675,6 +675,7 @@ pub(crate) fn map_overlay(
     rect: Rect,
     target: ParamRef,
 ) {
+    crate::ui::remote_map::overlay(ui, rect, rlive_project::MapTarget::Param(target));
     let Some(map) = cx.ui.map else {
         return;
     };

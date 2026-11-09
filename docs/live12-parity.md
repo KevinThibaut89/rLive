@@ -80,7 +80,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Overdub and record quantization for drum patterns [M]
 - `[ ]` Automation Arm, record to Arrangement or Session clips; manual change overrides until Re-Enable [L]
 - `[ ]` Clip envelopes for device, mixer, pitch, volume, MIDI CC; unlinked loops [L]
-- `[ ]` MIDI Map and Key Map modes [L]; mapped messages filtered from track input [S]
+- `[~]` MIDI Map and Key Map modes [L]; mapped messages filtered from track input [S]
 - `[ ]` Session clips mapped to key range for chromatic play [M]
 - `[ ]` Dedicated Push 1/2/3 support [XL HW]
 
@@ -208,7 +208,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Arrangement Position fields: drag, type, arrows [S]
 - `[x]` Scrub click starts quantized; hold repeats quantized region [M] → global quantize
 - `[x]` Chase MIDI Notes toggle [M]
-- `[ ]` Locators: add in real time (quantized), context menu, delete, rename, info text, MIDI/key map, double-click plays [M]
+- `[~]` Locators: add in real time (quantized), context menu, delete, rename, info text, MIDI/key map, double-click plays [M]
 - `[x]` Previous/Next locator with quantized jump [S]
 - `[x]` Loop to Next Locator; Set Song Start Time Here on locator or loop brace [S]
 - `[x]` Time signature markers: numerators 1-2 digits, denominators 1/2/4/8/16, unquantized, marker lane hidden if none [L] → tempo map
@@ -276,7 +276,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[~]` Editor modes: Sample, Envelope, Notes, MPE, shortcut cycle [M]
 - `[x]` Start/End and Set buttons quantized during playback; beats if warped, time if not [M]
 - `[x]` Loop toggle (needs Warp for audio); Position, Length, on-the-fly Set buttons [M]
-- `[ ]` Loop controls MIDI mappable [S] → MIDI Map
+- `[~]` Loop controls MIDI mappable [S] → MIDI Map
 - `[x]` Clip time signature, display only, polymeter aid [S]
 - `[ ]` Clip Groove chooser, hot-swap, Commit [S] → ch. 14
 - `[ ]` Commit positive-velocity groove writes volume envelope, overwriting [S]
@@ -524,7 +524,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[x]` Clip quantize: None, Global, bar and note values; Global shortcut [M]
 - `[x]` Velocity Amount: MIDI velocity to volume, 0-100% [S]
 - `[x]` Nudge Backward/Forward by global quantize [S]
-- `[ ]` Mapped scrub control appears in MIDI Map Mode [S]
+- `[~]` Mapped scrub control appears in MIDI Map Mode [S]
 - `[x]` Offsets from master clock retained [S]
 - `[x]` Follow Actions on clips and scenes, off by default, toggle shortcut [L]
 - `[~]` Two actions A/B with Chance and linking slider [S]
@@ -583,14 +583,14 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` External audio I/O: per-channel meters with overload, Configure shortcut, mono/stereo pair configuration, channel renaming stored per audio device. M
 - `[x]` Mono input records mono files; device chains are always stereo; mono to stereo duplicates; stereo to mono output sums with -6 dB. S
 - `[ ]` External MIDI input: one port or All Ins, one channel or All Channels, activity meters. S
-- `[ ]` Per-port switches: Track, Sync, Remote, separately for input and output. M
+- `[~]` Per-port switches: Track, Sync, Remote, separately for input and output. M
 - `[ ]` Sync: MIDI Clock in and out, MIDI Timecode in. L
 - `[ ]` Sync output options: delay in ms; clock type Song (SPP and Continue) or Pattern (Start at next bar). S
 - `[ ]` Hardware Resync: Stop and Start (default), Start Only, Don't; Control Bar button when enabled. S
-- `[ ]` Remote input for mappings and clip triggering; output for LED and motor-fader feedback. Mapped messages do not reach tracks. M. [H] for feedback.
+- `[~]` Remote input for mappings and clip triggering; output for LED and motor-fader feedback. Mapped messages do not reach tracks. M. [H] for feedback.
 - `[ ]` Computer MIDI keyboard: home row white keys from C3, top row black keys, Z/X octave, C/V velocity in steps of 20; steals single-key shortcuts, Shift reaches them. S
 - `[ ]` MIDI out to external synths by port and channel. S
-- `[ ]` Control Bar MIDI LEDs, three in/out pairs: sync, remote, track. Sync pair shows only when a sync source is enabled. S
+- `[~]` Control Bar MIDI LEDs, three in/out pairs: sync, remote, track. Sync pair shows only when a sync source is enabled. S
 - `[x]` Resampling input type records Main output; the recording track's own output is excluded. Files go to Samples/Recorded, or the Temporary Folder until saved. M
 - `[x]` Track-to-track routing from either end (output to track, or input from track). L
 - `[x]` Tap points Pre FX, Post FX, Post Mixer, each with defined solo behaviour. L
@@ -624,7 +624,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[~]` Assign Track Color to grouped tracks and clips, per view; half-lit Solo for nested solo. S
 - `[x]` Return tracks: multiple; Pre/Post toggle; feedback sends disabled by default, with Enable Send and Enable All Sends. M
 - `[x]` Main track: exactly one, hosts effects. S
-- `[ ]` Crossfader: A/B assign on all tracks including returns; 7 curves; left, centre and right mappable, with toggle and snap-back key behaviour; automatable. M
+- `[~]` Crossfader: A/B assign on all tracks including returns; 7 curves; left, centre and right mappable, with toggle and snap-back key behaviour; automatable. M
 - `[x]` Solo in Place option; returns stay audible only with it on. S
 - `[x]` Soloing a return mutes other mains but keeps send audio. S
 - `[~]` Cue mode: separate Main and Cue outputs, Cue Volume, headphone switches, browser preview goes to Cue. M. Needs 4 outputs.
@@ -1132,19 +1132,19 @@ Listed as editable with Suite or Standard plus add-on; otherwise editions not st
 
 **Hardware:** any MIDI or control surface {HW for testing only}. Scripts for vendor surfaces need per-device work.
 
-- `[ ]` Mappable targets: slots, switches, radios, continuous controls, crossfader [M]
-- `[ ]` Up to 6 named control surfaces with ports, preset dump [L] {HW}
-- `[ ]` Instant mappings following selected device; lock to device [L] {HW}
-- `[ ]` Manual surfaces via Remote toggles on input/output ports, merged inputs, feedback output [M]
-- `[ ]` MIDI indicators showing incoming traffic [S]
-- `[ ]` Takeover modes None, Pick-Up, Value Scaling [S]
-- `[ ]` Mapping Browser with path, editable min/max, invert, delete [M]
-- `[ ]` MIDI Map Mode with overlay; note mapping, note range for chromatic slots [M]
-- `[ ]` Absolute 7-bit, 14-bit, pitch bend; reversed ranges invert switches [S]
-- `[ ]` Relative types Signed Bit, Signed Bit 2, Bin Offset, Twos Complement, plus linear variants; auto-detect [M]
-- `[ ]` Relative Session strip: scene up/down, scroll, launch, cancel, track launches [S]
-- `[ ]` Key Map Mode [S]
-- `[ ]` Mapped keys stop reaching the track input [S]
+- `[x]` Mappable targets: slots, switches, radios, continuous controls, crossfader [M]
+- `[~]` Up to 6 named control surfaces with ports, preset dump [L] {HW}
+- `[~]` Instant mappings following selected device; lock to device [L] {HW}
+- `[~]` Manual surfaces via Remote toggles on input/output ports, merged inputs, feedback output [M]
+- `[~]` MIDI indicators showing incoming traffic [S]
+- `[x]` Takeover modes None, Pick-Up, Value Scaling [S]
+- `[~]` Mapping Browser with path, editable min/max, invert, delete [M]
+- `[~]` MIDI Map Mode with overlay; note mapping, note range for chromatic slots [M]
+- `[x]` Absolute 7-bit, 14-bit, pitch bend; reversed ranges invert switches [S]
+- `[x]` Relative types Signed Bit, Signed Bit 2, Bin Offset, Twos Complement, plus linear variants; auto-detect [M]
+- `[~]` Relative Session strip: scene up/down, scroll, launch, cancel, track launches [S]
+- `[~]` Key Map Mode [S]
+- `[x]` Mapped keys stop reaching the track input [S]
 
 Depends on a universal parameter identity and clip-slot addressing.
 
@@ -1316,7 +1316,7 @@ Notation: **Cmd** is Ctrl on Windows; **Alt** is Option on Mac; W:/M: marks diff
 - `[ ]` **Tracks:** Cmd+T audio; Cmd+Shift+T MIDI; Cmd+Alt+T return; +/- groups; U collapse; Cmd+Alt+R returns; Cmd+arrows move; C arm; S solo; 0 deactivate; Cmd+Alt+Shift+F freeze; Delete from title.
 - `[ ]` **Transport:** Space; Shift+Space continue; W: Ctrl+Space / M: Alt+Space stop at selection end; Home; F9 record; Shift+F9 arm Arrangement; F10 back to Arrangement; F1-F8 activators; O metronome; Cmd+Alt+Shift+E engine.
 - `[ ]` **Browser:** arrows; Enter; Shift+Enter or right preview; Cmd+F; Down/Enter results; 1-7 colour, 0 reset; Cmd+Shift+F similar {ML?}; Cmd+[ and ]; Cmd+Alt+G filter; Cmd+Shift+E tags. **Similar swap:** Cmd+R/L next/previous, Up save, Down return; Alt shows controls.
-- `[ ]` **Mapping:** Cmd+M MIDI; Cmd+K key; M computer keyboard; Z/X octave; C/V velocity; Shift+letter while active.
+- `[~]` **Mapping:** Cmd+M MIDI; Cmd+K key; M computer keyboard; Z/X octave; C/V velocity; Shift+letter while active.
 - `[ ]` **Latching:** holding ~500 ms on A, B, S, Z, F1-F8, Tab; Options.txt can disable. **Menus:** W: Alt+letter; M: Cmd+?; Menu or Shift+F10 / VO+Shift+M.
 
 Manual inconsistencies to resolve:
@@ -1337,7 +1337,6 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **C11:** Apply MIDI Tool settings
 - `[ ]` **C12:** Add device from browser; Assign colour 1; Assign colour 2; Assign colour 3; Assign colour 4; Assign colour 5; Assign colour 6; Assign colour 7; Browser history back; Browser history forward; Close folder; Compare A/B; Drop browser clips as a scene; Hide/show Filter View; Hide/show Tag Editor; Hot-swap selected device; Jump to search results; Load selected device; Load selected item; Open folder; Preview selected file; Reset assigned colour; Scroll down; Scroll up; Search in Browser; Toggle Drum Rack/last selected pad; Toggle Hot-Swap Mode
 - `[ ]` **C14:** Export MIDI File
-- `[ ]` **C16:** Toggle Key Map Mode; Toggle MIDI Map Mode
 - `[ ]` **C17:** Hide/show Sends; Hide/show return tracks; Toggle second window
 - `[ ]` **C18:** Hide/show video window
 - `[ ]` **C19:** Cancel value entry; Confirm value entry; Current scene from the last track; Decrement value; Delete track from title bar; Eight scenes down; Eight scenes up; First track of the scene; Focus Mixer; Increment value; Jump to highlighted track title; Last track of the scene; Move nonadjacent tracks down; Move nonadjacent tracks left; Move nonadjacent tracks right; Move nonadjacent tracks up; Next control; Next field; Next name while renaming; Next neighbouring control; Next track while renaming; Previous control; Previous neighbouring control; Return to default; Scene down; Scene up; Select all clips and slots; Select clip above; Select clip below; Select clip left; Select clip right; Type a value; Value down by an octave or fine step; Value up by an octave or fine step

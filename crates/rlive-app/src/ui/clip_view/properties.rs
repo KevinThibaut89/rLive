@@ -7,7 +7,7 @@ use crate::ui::sample_editor;
 use crate::ui::theme::*;
 use crate::ui::widgets::{self, info};
 use crate::ui::UiState;
-use egui::{Pos2, RichText, Sense, Shape, Stroke, Vec2};
+use egui::{Pos2, Rect, RichText, Sense, Shape, Stroke, Vec2};
 use rlive_core::{TimeSignature, PPQ};
 use rlive_devices::devices::b1::common::SCALES;
 use rlive_project::clip_edit::{self as edit, merged};
@@ -200,12 +200,15 @@ fn range_slider(ui: &mut egui::Ui, (lo, hi): (f32, f32), min: f32, max: f32) -> 
 
 struct Toggled {
     clicked: bool,
+    rect: Rect,
 }
 
 fn toggle(ui: &mut egui::Ui, on: bool, label: &str, tip: &str) -> Toggled {
     let r = widgets::state_button(ui, Vec2::new(44.0, 16.0), on, pal().accent, label);
+    let rect = r.rect;
     Toggled {
         clicked: info(r, tip).clicked(),
+        rect,
     }
 }
 
@@ -376,6 +379,11 @@ fn main_panel(
                 ui.painter()
                     .rect_filled(lit, 1.0, pal().accent.gamma_multiply(0.5));
             }
+            super::super::remote_map::overlay(
+                ui,
+                clicked.rect,
+                rlive_project::MapTarget::Control(rlive_project::RemoteControl::ClipLoop),
+            );
             if clicked.clicked {
                 session.set_clip_looped(group, !looped);
             }

@@ -154,6 +154,11 @@ fn launch_section(ui: &mut egui::Ui, session: &mut Session, targets: &[ClipRef])
     if let Some(track) = targets[0].as_slot().map(|s| s.0) {
         row(ui, "Nudge", |ui| {
             let back = widgets::state_button(ui, Vec2::new(30.0, 16.0), false, pal().accent, "<");
+            super::remote_map::overlay(
+                ui,
+                back.rect,
+                rlive_project::MapTarget::Control(rlive_project::RemoteControl::NudgeBack),
+            );
             if info(
                 back,
                 "Nudge Backward — jump back by the global quantization",
@@ -162,7 +167,22 @@ fn launch_section(ui: &mut egui::Ui, session: &mut Session, targets: &[ClipRef])
             {
                 session.nudge_clip(track, false);
             }
+            // In a map mode the scrub control appears between the two (manual p. 365).
+            if session.map_mode().is_some() {
+                let r =
+                    widgets::state_button(ui, Vec2::new(36.0, 16.0), false, pal().accent, "Scrub");
+                super::remote_map::overlay(
+                    ui,
+                    r.rect,
+                    rlive_project::MapTarget::Control(rlive_project::RemoteControl::Scrub),
+                );
+            }
             let fwd = widgets::state_button(ui, Vec2::new(30.0, 16.0), false, pal().accent, ">");
+            super::remote_map::overlay(
+                ui,
+                fwd.rect,
+                rlive_project::MapTarget::Control(rlive_project::RemoteControl::NudgeForward),
+            );
             if info(fwd, "Nudge Forward — jump ahead by the global quantization").clicked() {
                 session.nudge_clip(track, true);
             }

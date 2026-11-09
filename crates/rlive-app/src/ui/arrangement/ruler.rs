@@ -375,6 +375,7 @@ fn locators(
             ui.scope_id().with(("locator", i)),
             Sense::click_and_drag(),
         );
+        crate::ui::remote_map::overlay(ui, rect, rlive_project::MapTarget::Locator(tick));
         let m = ui.input(|i| i.modifiers);
         if resp.double_clicked() && !session.is_playing() {
             state.arr.selected_locator = Some(i);

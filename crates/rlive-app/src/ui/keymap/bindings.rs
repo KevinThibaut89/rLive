@@ -14,6 +14,7 @@ use super::super::commands::launch::Launch as La;
 use super::super::commands::notes::Notes as Nt;
 use super::super::commands::options::Options;
 use super::super::commands::rack::Rack;
+use super::super::commands::remote::Remote;
 use super::super::commands::track::Track;
 use super::super::commands::transport::Transport as Tr;
 use super::super::commands::view::View;
@@ -549,8 +550,8 @@ pub static BINDINGS: &[Binding] = &[
     a("42.23", Dev, "Show similar-sample swap controls", g1("Alt"), p!("A19")),
 
     // 42.24 Key/MIDI Map Mode and the Computer MIDI Keyboard
-    a("42.24", All, "Toggle MIDI Map Mode", k(CMD, Key::M), p!("C16")),
-    a("42.24", All, "Toggle Key Map Mode", k(CMD, Key::K), p!("C16")),
+    a("42.24", All, "Toggle MIDI Map Mode", k(CMD, Key::M), L(M::Remote(Remote::ToggleMidiMap))),
+    a("42.24", All, "Toggle Key Map Mode", k(CMD, Key::K), L(M::Remote(Remote::ToggleKeyMap))),
     a("42.24", All, "Computer MIDI Keyboard", k(NO, Key::M), L(M::Options(Options::ToggleComputerKeys))),
     b("42.24", All, Wh::ComputerKeys, "Computer keyboard octave up", k(NO, Key::X), L(M::Options(Options::OctaveUp))),
     b("42.24", All, Wh::ComputerKeys, "Computer keyboard octave down", k(NO, Key::Z), L(M::Options(Options::OctaveDown))),

@@ -25,6 +25,8 @@ pub(crate) enum Action {
     ShowAll(DeviceId),
     /// Open the Info View's editor on this device.
     EditInfo(DeviceId),
+    /// Lock a control surface to a device, or let it go.
+    LockSurface(usize, Option<DeviceId>),
     /// Open the Info View's editor on something else in a rack.
     EditInfoTarget(InfoTarget),
     /// Something dropped from the browser into a chain.
@@ -124,6 +126,7 @@ fn apply(
             }
         }
         Action::EditInfo(id) => view.edit_info = Some(InfoTarget::Device(chain, id)),
+        Action::LockSurface(row, device) => session.lock_surface(row, device),
         Action::EditInfoTarget(target) => view.edit_info = Some(target),
         Action::ShowAll(id) => {
             let all = &mut view.show_all;

@@ -316,6 +316,11 @@ pub const MIDI_NOTE_KEYS: [Key; 13] = [
 ];
 const MIDI_CONTROL_KEYS: [Key; 4] = [Key::Z, Key::X, Key::C, Key::V];
 
+/// Whether the Computer MIDI Keyboard has this key, as a note or an octave or velocity key.
+pub fn is_note_key(key: Key) -> bool {
+    is_midi_keyboard_key(key)
+}
+
 fn is_midi_keyboard_key(key: Key) -> bool {
     MIDI_NOTE_KEYS.contains(&key) || MIDI_CONTROL_KEYS.contains(&key)
 }
@@ -480,13 +485,14 @@ pub fn resolve(chord: Chord, cx: &KeyContext) -> Resolution {
 
 /// Every command that has a menu item.
 fn menu_commands() -> Vec<MenuCommand> {
-    use super::commands::{app, clip, create, edit, file, notes, options, view, Entry};
-    let menus: [&[Entry]; 10] = [
+    use super::commands::{app, clip, create, edit, file, notes, options, remote, view, Entry};
+    let menus: [&[Entry]; 11] = [
         file::MENU,
         edit::MENU,
         create::MENU,
         view::MENU,
         options::MENU,
+        remote::MENU,
         clip::VIEW_MENU,
         clip::EDIT_MENU,
         notes::EDIT_ITEMS,

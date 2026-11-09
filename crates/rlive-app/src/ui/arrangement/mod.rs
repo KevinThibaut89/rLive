@@ -2153,6 +2153,7 @@ fn track_header(
             pal().activator,
             &(index + 1).to_string(),
         );
+        crate::ui::remote_map::overlay_track(ui, r.rect, id, rlive_core::param::mixer::MUTE);
         if info(r, "Track Activator — click to mute/unmute").clicked() {
             if let Some(t) = session.project.track_mut(id) {
                 t.mute = !mute;
@@ -2183,6 +2184,7 @@ fn track_header(
                 pal().text,
             );
         }
+        crate::ui::remote_map::overlay_track(ui, r.rect, id, rlive_core::param::mixer::SOLO);
         let r = info(r, "Solo — Cmd-click to solo several tracks");
         if r.clicked() {
             session_view::toggle_solo(session, id, solo, bu.input(|i| i.modifiers.command));

@@ -447,6 +447,7 @@ pub(super) fn rows(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState
                 true,
             );
         }
+        super::remote_map::overlay(&cu, resp.rect, rlive_project::MapTarget::Scene(i));
         if resp.clicked() {
             if over_launch {
                 launch_scene(session, state, i);

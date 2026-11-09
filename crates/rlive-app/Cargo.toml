@@ -17,6 +17,7 @@ rlive-devices.workspace = true
 rlive-project.workspace = true
 rlive-plugin-host.workspace = true
 rlive-audio-io.workspace = true
+rlive-remote.workspace = true
 egui = "0.37"
 cpal = "0.18"
 midir = "0.11"

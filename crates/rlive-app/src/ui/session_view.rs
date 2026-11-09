@@ -17,6 +17,7 @@ use super::in_out;
 use super::info_view::edit_info_item;
 use super::keymap::{self, Platform};
 use super::rack_mixer::{self, ChainColumn, ColumnRects, MixFold};
+use super::remote_map;
 use super::scene_view::{self, SceneRows};
 use super::session_select::{click_slot, select_one, selected_slots};
 use super::session_status;
@@ -31,7 +32,7 @@ use rlive_core::param::{mixer, EnvTarget, ParamId, ParamOwner, ParamRef};
 use rlive_core::TrackId;
 use rlive_engine::mix_cell;
 use rlive_engine::shared::{NO_SLOT, STOP_QUEUED};
-use rlive_project::{ArrangementClip, TrackDelay, TrackKind, PALETTE, SEND_OFF_DB};
+use rlive_project::{ArrangementClip, MapTarget, TrackDelay, TrackKind, PALETTE, SEND_OFF_DB};
 use std::sync::atomic::Ordering;
 
 const HEADER_H: f32 = 22.0;
@@ -1083,6 +1084,7 @@ fn track_column(
                 .unwrap_or_default(),
         );
         resp.context_menu(|ui| clip_menu(ui, session, state, id, slot, kind));
+        remote_map::overlay(&cu, rect, MapTarget::ClipSlot { track: id, slot });
     }
 
     // ---- clip stop button
@@ -1124,6 +1126,9 @@ fn track_column(
             Rect::from_min_size(rect.min, Vec2::new(stop_w, rect.height())),
             col,
         );
+        if kind != TrackKind::Group {
+            remote_map::overlay(ui, rect, MapTarget::TrackStop(id));
+        }
         if kind == TrackKind::Group {
             if info(resp, "Group Stop — stop every clip in this group").clicked() {
                 session.stop_group(id);
@@ -1368,6 +1373,7 @@ fn mixer_strip(
         if let Some(v) = widgets::pan_knob(&mut ku, shown) {
             new_mix.1 = v;
         }
+        remote_map::overlay_track(&ku, knob_r, id, mixer::PAN);
         if let Some(moved) = session.modulated_cell_norm(chain, mix_cell::PAN) {
             let needle = (shown + 1.0) / 2.0;
             if let Some(span) = widgets::mod_ring_span(needle, moved) {
@@ -1416,6 +1422,7 @@ fn mixer_strip(
     ) {
         new_mix.0 = db;
     }
+    remote_map::overlay_track(&fu, fader_r, id, mixer::VOLUME);
     if let Some(norm) = session.modulated_cell_norm(chain, mix_cell::VOLUME) {
         let db = mixer::VOLUME_MIN_DB as f32
             + norm * (mixer::VOLUME_MAX_DB - mixer::VOLUME_MIN_DB) as f32;
@@ -1483,6 +1490,7 @@ fn mixer_strip(
         activator_color,
         label,
     );
+    remote_map::overlay_track(&bu, r.rect, id, mixer::MUTE);
     if info(r, "Track Activator — click to mute/unmute").clicked() {
         new_mix.2 = !shown_mute;
     }
@@ -1493,6 +1501,7 @@ fn mixer_strip(
         pal().solo_blue,
         if cue_mode { "Cue" } else { "S" },
     );
+    remote_map::overlay_track(&bu, r.rect, id, mixer::SOLO);
     if holds_solo && !solo {
         // A soloed track somewhere inside: the button lights up half way.
         let half =
@@ -1534,6 +1543,7 @@ fn mixer_strip(
             pal().arm_red,
             icons::record,
         );
+        remote_map::overlay(&bu, r.rect, MapTarget::TrackArm(id));
         if info(r, "Arm — record onto this track (Cmd-click to arm several)").clicked() {
             let exclusive = session.record.exclusive_arm && !bu.input(|i| i.modifiers.command);
             let selection = if state.selected_tracks.contains(&id) {
@@ -1629,6 +1639,7 @@ fn send_knobs(
         if let Some(value) = changed {
             session.set_send(id, *ret, value);
         }
+        remote_map::overlay_track(ui, hit, id, ParamId(mixer::FIRST_SEND.0 + n as u32));
         if !is_return {
             let target = mixer_target(id, ParamId(mixer::FIRST_SEND.0 + n as u32));
             automation::control_zone(ui, session, state, hit, ChainRef::Track(id), target);
@@ -1914,6 +1925,11 @@ fn master_column(
         theme::font(10.5),
         pal().text_dim,
     );
+    remote_map::overlay(
+        ui,
+        sr,
+        MapTarget::Control(rlive_project::RemoteControl::StopAllClips),
+    );
     if info(resp, "Stop All Clips — stop every clip in the Session").clicked() {
         session.stop_all_clips();
     }
@@ -1972,6 +1988,7 @@ fn master_column(
         ) {
             session.set_master_volume(db);
         }
+        remote_map::overlay_main(&fu, fader_r, mixer::VOLUME);
         let db_r = Rect::from_center_size(
             Pos2::new(inner.center().x, bottom + 12.0),
             Vec2::new(54.0, 14.0),

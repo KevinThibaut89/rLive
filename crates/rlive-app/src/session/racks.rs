@@ -503,7 +503,7 @@ impl Session {
         self.mark_edit("Change Chain");
     }
 
-    fn write_chain_param(
+    pub(super) fn write_chain_param(
         &mut self,
         chain: ChainRef,
         rack: DeviceId,
@@ -1417,7 +1417,7 @@ impl Session {
     }
 
     /// Where a rack chain is: the device chain holding its rack, and the rack.
-    fn find_chain(&self, owner: ChainRef, id: ChainId) -> Option<(ChainRef, DeviceId)> {
+    pub(super) fn find_chain(&self, owner: ChainRef, id: ChainId) -> Option<(ChainRef, DeviceId)> {
         fn walk(devices: &[Device], here: ChainRef, id: ChainId) -> Option<(ChainRef, DeviceId)> {
             for d in devices {
                 if d.chains().any(|c| c.id == id) {

@@ -1,0 +1,11 @@
+[package]
+name = "rlive-remote"
+description = "rLive: decoding MIDI remote control, takeover, mapping tables and the control-surface framework"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rlive-core.workspace = true
+rlive-project.workspace = true
+serde.workspace = true
