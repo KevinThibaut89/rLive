@@ -65,6 +65,31 @@ pub struct CueSettings {
     pub volume_db: f32,
 }
 
+/// How the Set's windows are laid out, saved with the Set. View state: undo leaves it alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowLayout {
+    pub second_window: bool,
+    /// The Detail View is in the second window, not the first.
+    pub detail_in_second: bool,
+    /// The second window's position and size in points, as `[x, y, w, h]`.
+    pub second_rect: Option<[f32; 4]>,
+    pub show_sends: bool,
+    pub show_returns: bool,
+}
+
+impl Default for WindowLayout {
+    fn default() -> Self {
+        Self {
+            second_window: false,
+            detail_in_second: false,
+            second_rect: None,
+            show_sends: true,
+            show_returns: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     pub version: u32,
@@ -126,6 +151,9 @@ pub struct Project {
     /// MIDI recorded into the Arrangement mixes with what is there, rather than replacing it.
     #[serde(default, skip_serializing_if = "is_default")]
     pub midi_arrangement_overdub: bool,
+    /// The second window and the mixer sections hidden by the View menu.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub window_layout: WindowLayout,
 }
 
 impl Default for Project {
@@ -208,6 +236,7 @@ impl Project {
             metronome_options: MetronomeOptions::default(),
             record_quantize: RecordQuantize::default(),
             midi_arrangement_overdub: false,
+            window_layout: WindowLayout::default(),
         }
     }
 

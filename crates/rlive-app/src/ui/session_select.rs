@@ -94,6 +94,7 @@ pub fn selected_slots(session: &Session, state: &UiState) -> Vec<(TrackId, usize
 /// Selects one clip, as clicking it does.
 pub fn select_one(state: &mut UiState, track: TrackId, slot: usize) {
     state.sel.clear();
+    state.title_focus = None;
     state.sel.slots = vec![(track, slot)];
     state.sel.anchor = Some((track, slot));
     state.selected_clip = Some(ClipRef::slot(track, slot));
@@ -108,6 +109,7 @@ pub fn click_slot(
     shift: bool,
     cmd: bool,
 ) {
+    state.title_focus = None;
     state.sel.scenes.clear();
     state.sel.scene_anchor = None;
     if cmd {
@@ -147,6 +149,7 @@ fn rectangle(session: &Session, a: (TrackId, usize), b: (TrackId, usize)) -> Vec
 
 /// Applies a click on a scene, with Shift extending and Cmd toggling.
 pub fn click_scene(state: &mut UiState, scene: usize, shift: bool, cmd: bool) {
+    state.title_focus = None;
     state.sel.slots.clear();
     state.sel.anchor = None;
     state.selected_clip = None;

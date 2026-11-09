@@ -37,6 +37,12 @@ fn cx(focus: FocusArea) -> KeyContext {
         take_lane: false,
         take_header: false,
         take_area: false,
+        tab_focus: false,
+        renaming: false,
+        value_control: false,
+        track_title: false,
+        scene_selected: false,
+        in_track: false,
     }
 }
 
@@ -1024,4 +1030,269 @@ fn the_note_editor_arrows_yield_to_a_selected_marker() {
             super::super::commands::clip::Clip::ShiftRegionLeft
         ))
     );
+}
+
+// ---------------------------------------------------------------- C17 and C19
+
+fn run(c: impl Into<MenuCommand>) -> Resolution {
+    Resolution::Run(c.into())
+}
+
+fn cmd_alt(key: Key) -> Chord {
+    Chord {
+        mods: Mods {
+            cmd: true,
+            alt: true,
+            ..Mods::default()
+        },
+        key,
+    }
+}
+
+#[test]
+fn the_second_window_sends_and_returns_are_global_view_commands() {
+    use super::super::commands::view::View;
+    for focus in FocusArea::ALL {
+        let c = cx(focus);
+        let cmd_shift_w = Chord {
+            mods: Mods {
+                cmd: true,
+                shift: true,
+                ..Mods::default()
+            },
+            key: Key::W,
+        };
+        assert_eq!(resolve(cmd_shift_w, &c), run(View::ToggleSecondWindow));
+        assert_eq!(resolve(cmd_alt(Key::S), &c), run(View::ToggleSends));
+        assert_eq!(resolve(cmd_alt(Key::R), &c), run(View::ToggleReturns));
+    }
+}
+
+#[test]
+fn f12_still_flips_the_detail_view_from_every_focus() {
+    use super::super::commands::view::View;
+    for focus in FocusArea::ALL {
+        assert_eq!(resolve(bare(Key::F12), &cx(focus)), run(View::SwitchDetail));
+    }
+}
+
+fn focused_control(focus: FocusArea) -> KeyContext {
+    KeyContext {
+        value_control: true,
+        ..cx(focus)
+    }
+}
+
+#[test]
+fn a_focused_control_takes_the_arrows_digits_and_entry_keys() {
+    use super::super::commands::nav::Nav;
+    for focus in [
+        FocusArea::Session,
+        FocusArea::Device,
+        FocusArea::Browser,
+        FocusArea::Arrangement,
+    ] {
+        let mut c = focused_control(focus);
+        // A slot being selected must not take the arrows away from the control.
+        c.slot_selected = true;
+        assert_eq!(resolve(bare(Key::ArrowUp), &c), run(Nav::ValueUp));
+        assert_eq!(resolve(bare(Key::ArrowDown), &c), run(Nav::ValueDown));
+        assert_eq!(resolve(shift(Key::ArrowUp), &c), run(Nav::ValueUpFine));
+        assert_eq!(resolve(shift(Key::ArrowDown), &c), run(Nav::ValueDownFine));
+        assert_eq!(resolve(bare(Key::Delete), &c), run(Nav::ValueDefault));
+        assert_eq!(resolve(bare(Key::Enter), &c), run(Nav::ValueConfirm));
+        assert_eq!(resolve(bare(Key::Escape), &c), run(Nav::ValueCancel));
+        assert_eq!(resolve(bare(Key::Num7), &c), run(Nav::Digit7));
+        assert_eq!(resolve(bare(Key::Period), &c), run(Nav::NextField));
+        assert_eq!(resolve(bare(Key::Comma), &c), run(Nav::NextField));
+        assert_eq!(resolve(bare(Key::Minus), &c), run(Nav::Minus));
+    }
+}
+
+#[test]
+fn value_keys_do_nothing_extra_without_a_focused_control() {
+    use super::super::commands::track::Track;
+    let c = cx(FocusArea::Session);
+    assert_eq!(resolve(bare(Key::Num0), &c), run(Track::ToggleActivator));
+    assert_eq!(resolve(bare(Key::Num7), &c), Resolution::Unbound);
+}
+
+#[test]
+fn digits_for_values_work_on_azerty_where_the_row_types_symbols() {
+    use super::super::commands::nav::Nav;
+    // The key labelled 7 on AZERTY types "è": the keymap goes by the physical key.
+    let chord = chord_of(Key::Minus, Some(Key::Num6), Modifiers::NONE, MAC);
+    assert_eq!(chord.key, Key::Num6);
+    let c = focused_control(FocusArea::Device);
+    assert_eq!(resolve(chord, &c), run(Nav::Digit6));
+}
+
+#[test]
+fn the_grid_arrows_need_a_slot_scene_or_title() {
+    use super::super::commands::launch::Launch;
+    let plain = cx(FocusArea::Session);
+    assert_eq!(resolve(bare(Key::ArrowUp), &plain), Resolution::Unbound);
+    let slot = KeyContext {
+        slot_selected: true,
+        ..plain
+    };
+    assert_eq!(resolve(bare(Key::ArrowUp), &slot), run(Launch::ArrowUp));
+    assert_eq!(
+        resolve(bare(Key::ArrowRight), &slot),
+        run(Launch::ArrowRight)
+    );
+    let scene = KeyContext {
+        scene_selected: true,
+        ..plain
+    };
+    assert_eq!(
+        resolve(bare(Key::ArrowDown), &scene),
+        run(Launch::ArrowDown)
+    );
+    assert_eq!(
+        resolve(bare(Key::ArrowLeft), &scene),
+        run(Launch::ArrowLeft)
+    );
+    let title = KeyContext {
+        track_title: true,
+        ..plain
+    };
+    assert_eq!(
+        resolve(bare(Key::ArrowRight), &title),
+        run(Launch::ArrowRight)
+    );
+    assert_eq!(
+        resolve(bare(Key::ArrowDown), &title),
+        run(Launch::ArrowDown)
+    );
+    assert_eq!(resolve(bare(Key::PageDown), &plain), run(Launch::PageDown));
+    assert_eq!(resolve(bare(Key::Home), &slot), run(Launch::SlotHome));
+    assert_eq!(resolve(bare(Key::End), &title), run(Launch::SlotEnd));
+}
+
+#[test]
+fn home_and_end_stay_the_transport_keys_outside_the_grid() {
+    use super::super::commands::transport::Transport;
+    let c = cx(FocusArea::Session);
+    assert_eq!(
+        resolve(bare(Key::Home), &c),
+        run(Transport::InsertMarkerToStart)
+    );
+}
+
+#[test]
+fn tab_moves_focus_only_in_tab_mode() {
+    use super::super::commands::nav::Nav;
+    use super::super::commands::view::View;
+    let off = cx(FocusArea::Session);
+    assert_eq!(resolve(bare(Key::Tab), &off), run(View::ToggleMainView));
+    assert_eq!(resolve(shift(Key::Tab), &off), run(View::SwitchDetail));
+    let on = KeyContext {
+        tab_focus: true,
+        ..off
+    };
+    assert_eq!(resolve(bare(Key::Tab), &on), run(Nav::NextControl));
+    assert_eq!(resolve(shift(Key::Tab), &on), run(Nav::PrevControl));
+}
+
+#[test]
+fn neighbor_keys_are_for_the_mixers_and_leave_clip_tabs_alone() {
+    use super::super::commands::clip::Clip;
+    use super::super::commands::nav::Nav;
+    let alt_tab = chord_of(Key::Tab, Some(Key::Tab), Modifiers::ALT, MAC);
+    let mut c = cx(FocusArea::Session);
+    c.platform = MAC;
+    c.tab_focus = true;
+    assert_eq!(resolve(alt_tab, &c), run(Nav::NextNeighbor));
+    let mut clip = cx(FocusArea::Clip);
+    clip.platform = MAC;
+    clip.tab_focus = true;
+    assert_eq!(
+        resolve(alt_tab, &clip),
+        run(Clip::CycleEditorMode),
+        "the Clip View's tab shortcut is still there in Tab mode"
+    );
+}
+
+#[test]
+fn tab_goes_through_names_while_renaming() {
+    use super::super::commands::nav::Nav;
+    let mut c = cx(FocusArea::Session);
+    c.renaming = true;
+    c.keyboard_taken = true;
+    c.text_focused = true;
+    assert_eq!(resolve(bare(Key::Tab), &c), run(Nav::RenameNext));
+    // Other bare keys stay with the text field.
+    assert_eq!(resolve(bare(Key::Delete), &c), Resolution::Unbound);
+}
+
+#[test]
+fn tab_is_the_dialogs_own_while_one_is_open() {
+    let mut c = cx(FocusArea::Session);
+    c.dialog_open = true;
+    assert_eq!(resolve(bare(Key::Tab), &c), Resolution::Unbound);
+}
+
+#[test]
+fn delete_on_a_title_bar_deletes_the_track_but_not_otherwise() {
+    use super::super::commands::edit::Edit;
+    let plain = cx(FocusArea::Session);
+    assert_eq!(resolve(bare(Key::Delete), &plain), run(Edit::Delete));
+    let mut title = plain;
+    title.track_title = true;
+    assert_eq!(
+        resolve(bare(Key::Delete), &title),
+        run(Track::DeleteFromTitle)
+    );
+}
+
+#[test]
+fn cmd_arrows_move_nonadjacent_tracks_from_the_title_bar() {
+    let plain = cx(FocusArea::Session);
+    assert_eq!(resolve(cmd(Key::ArrowLeft), &plain), run(Track::MoveLeft));
+    let mut title = plain;
+    title.track_title = true;
+    assert_eq!(
+        resolve(cmd(Key::ArrowLeft), &title),
+        run(Track::MoveTracksLeft)
+    );
+    assert_eq!(
+        resolve(cmd(Key::ArrowRight), &title),
+        run(Track::MoveTracksRight)
+    );
+    let mut arr = cx(FocusArea::Arrangement);
+    arr.track_title = true;
+    assert_eq!(resolve(cmd(Key::ArrowUp), &arr), run(Track::MoveTracksUp));
+    assert_eq!(
+        resolve(cmd(Key::ArrowDown), &arr),
+        run(Track::MoveTracksDown)
+    );
+}
+
+#[test]
+fn escape_reaches_the_title_bar_from_inside_a_track() {
+    use super::super::commands::nav::Nav;
+    let mut c = cx(FocusArea::Session);
+    c.in_track = true;
+    assert_eq!(resolve(bare(Key::Escape), &c), run(Nav::JumpToTitle));
+    let mut arr = cx(FocusArea::Arrangement);
+    arr.in_track = true;
+    assert_eq!(resolve(bare(Key::Escape), &arr), run(Nav::JumpToTitle));
+}
+
+#[test]
+fn escape_still_closes_a_dialog_first() {
+    use super::super::commands::view::View;
+    let mut c = cx(FocusArea::Session);
+    c.in_track = true;
+    c.dialog_open = true;
+    assert_eq!(resolve(bare(Key::Escape), &c), run(View::CloseDialog));
+}
+
+#[test]
+fn left_and_right_step_devices_in_the_device_view() {
+    use super::super::commands::nav::Nav;
+    let c = cx(FocusArea::Device);
+    assert_eq!(resolve(bare(Key::ArrowLeft), &c), run(Nav::DeviceLeft));
+    assert_eq!(resolve(bare(Key::ArrowRight), &c), run(Nav::DeviceRight));
 }

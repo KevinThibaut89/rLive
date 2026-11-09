@@ -24,6 +24,13 @@ impl TimeSel {
         }
     }
 
+    /// The selection reduced to a point at `tick`, on the same lanes.
+    pub fn collapsed(mut self, tick: f64) -> Self {
+        self.start = tick;
+        self.end = tick;
+        self
+    }
+
     pub fn is_point(&self) -> bool {
         self.start == self.end
     }

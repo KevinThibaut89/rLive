@@ -12,6 +12,7 @@ use super::commands::bounce;
 use super::icons;
 use super::info_view::edit_info_item;
 use super::keymap::{self, Platform};
+use super::nav;
 use super::session_view::{self, ClipDrag};
 use super::theme::{self, *};
 use super::timeline::{self, TimeAxis};
@@ -394,7 +395,12 @@ impl Rows {
             add(ChainRef::Track(id), Some(v), &mut top);
         }
         if auto {
-            for r in &session.project.returns {
+            let shown = if session.project.window_layout.show_returns {
+                session.project.returns.len()
+            } else {
+                0
+            };
+            for r in session.project.returns.iter().take(shown) {
                 add(ChainRef::Track(r.id), None, &mut top);
             }
             add(ChainRef::Master, None, &mut top);
@@ -526,7 +532,12 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let bottom_rows = if auto_mode {
         0
     } else {
-        session.project.returns.len() + 1
+        let returns = if session.project.window_layout.show_returns {
+            session.project.returns.len()
+        } else {
+            0
+        };
+        returns + 1
     };
     let bottom_h = bottom_rows as f32 * RETURN_ROW_H;
     let lanes_bottom = full.bottom() - SCROLLBAR - bottom_h - TIME_RULER_H;
@@ -2094,11 +2105,22 @@ fn locator_buttons(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState
     }
     let selected = state.arr.selected_locator;
     let label = if selected.is_some() { "Del" } else { "Set" };
+    let r = widgets::state_button(&mut bu, Vec2::new(26.0, 16.0), false, pal().accent, label);
+    let op = nav::control(
+        &bu,
+        &r,
+        nav::Spec {
+            role: "set_locator",
+            label: "Set Locator",
+            kind: nav::Kind::Button { on: false },
+        },
+    );
     if info(
-        widgets::state_button(&mut bu, Vec2::new(26.0, 16.0), false, pal().accent, label),
+        r,
         "Set Locator — add a locator, quantized while playing; deletes the selected locator",
     )
     .clicked()
+        || nav::toggled(op, false)
     {
         match selected {
             Some(i) => {
@@ -2146,7 +2168,11 @@ fn return_rows(
         [area.left_top(), area.right_top()],
         Stroke::new(2.0, pal().separator),
     );
-    let returns: Vec<TrackId> = session.project.returns.iter().map(|t| t.id).collect();
+    let returns: Vec<TrackId> = if session.project.window_layout.show_returns {
+        session.project.returns.iter().map(|t| t.id).collect()
+    } else {
+        Vec::new()
+    };
     for (i, id) in returns.iter().enumerate() {
         let row = Rect::from_min_size(
             Pos2::new(lanes_right, area.top() + i as f32 * RETURN_ROW_H),

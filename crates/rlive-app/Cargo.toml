@@ -47,7 +47,7 @@ hound.workspace = true
 # macOS renders with Metal. Plugin editors commonly make their own OpenGL
 # context current on the main thread, which corrupts eframe's OpenGL drawing.
 [target.'cfg(target_os = "macos")'.dependencies]
-eframe = { version = "0.37", default-features = false, features = ["default_fonts", "clipboard", "wgpu_no_default_features"] }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "clipboard", "wgpu_no_default_features", "accesskit"] }
 egui-wgpu = { version = "0.37", default-features = false, features = ["macos-window-resize-jitter-fix"] }
 objc2 = "0.6"
 objc2-foundation = "0.3"
@@ -55,4 +55,4 @@ objc2-app-kit = "0.3"
 raw-window-handle = "0.6"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-eframe = { version = "0.37", default-features = false, features = ["default_fonts", "clipboard", "glow", "wayland", "x11"] }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "clipboard", "glow", "wayland", "x11", "accesskit"] }

@@ -238,7 +238,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** A11, C7, C17
 
-- `[ ]` Clip Launch and Stop per slot; keyboard select and Enter launch, arrows move [L]
+- `[x]` Clip Launch and Stop per slot; keyboard select and Enter launch, arrows move [L]
 - `[ ]` Transport keeps running after clips stop; double Stop resets [S]
 - `[ ]` Multi-select rename with Tab flow, info text, colours [S]
 - `[~]` Group slots: shading by left-most clip colour, group launch and stop, click selects children [M]
@@ -249,7 +249,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[~]` Position-derived scene numbers [S]
 - `[~]` Scene Tempo 20-999 and Time Signature, hidden by default, disable by reset [M] → tempo engine
 - `[~]` Coloured launch button for scenes with tempo/meter [S]
-- `[ ]` Tab/arrow navigation across scene fields [S]
+- `[x]` Tab/arrow navigation across scene fields [S]
 - `[ ]` Legacy name-encoded tempo migrated [S; only if importing old Sets]
 - `[~]` Scene View panel: tempo, signature, Follow Actions, multi-scene edit [M] → ch. 16
 - `[~]` Track Status: loop pie with counts, one-shot remaining time, input monitor icon, Arrangement mini-display; click opens clip [M]
@@ -269,7 +269,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** C2
 
-- `[ ]` Panels plus editor, resizable, auto-close at bottom, fold, opens in focused window, F12 moves between windows [M]
+- `[~]` Panels plus editor, resizable, auto-close at bottom, fold, opens in focused window, F12 moves between windows [M]
 - `[~]` Panels horizontal, vertical, or automatic by height [M]
 - `[x]` Clip Activator, multi-clip [S]
 - `[x]` Name independent of file, colour, assign track colour to clips, group colour to children and clips, view-scoped [S]
@@ -1268,16 +1268,16 @@ Benchmark: match those jitter figures.
 **Milestones:** C19
 
 
-- `[ ]` Screen readers through native OS accessibility on macOS and Windows [XL] (egui's AccessKit helps; custom widgets are the cost)
-- `[ ]` High-contrast theme [S]
-- `[ ]` Tab focus mode, wrap, neighbour navigation; Navigate menu; Move Clips with Arrows option [L]
+- `[~]` Screen readers through native OS accessibility on macOS and Windows [XL] (egui's AccessKit helps; custom widgets are the cost)
+- `[x]` High-contrast theme [S]
+- `[~]` Tab focus mode, wrap, neighbour navigation; Navigate menu; Move Clips with Arrows option [L]
 - `[ ]` Settings keyboard navigation; language selection [M]
 - `[ ]` Speak toggles: menu commands, slider limits, seconds; Speak Help Text [M]
-- `[ ]` Session keyboard flows: title bars, slots, scenes, mixer [L]
-- `[ ]` Arrangement flows: locators, clip edges, selections, export [L]
-- `[ ]` MIDI editing by keyboard: selection, transpose, length, velocity, probability [M]
+- `[x]` Session keyboard flows: title bars, slots, scenes, mixer [L]
+- `[~]` Arrangement flows: locators, clip edges, selections, export [L]
+- `[x]` MIDI editing by keyboard: selection, transpose, length, velocity, probability [M]
 - `[~]` Audio editing: warp markers and transients by keyboard [M]
-- `[ ]` Device and Browser keyboard flows, preview, multi-select [M]
+- `[~]` Device and Browser keyboard flows, preview, multi-select [M]
 - `[ ]` Keyboard breakpoint create, jump, select, value entry, focus and undo colours [M]
 - `[ ]` Switching automation lanes by keyboard [S]
 
@@ -1331,9 +1331,7 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **A19:** Next similar sample; Previous similar sample; Return to reference; Save as similarity reference; Show similar-sample swap controls; Similarity search
 - `[ ]` **A5:** Audio engine on/off
 - `[ ]` **A9:** Reverse audio selection; Stretch warped clip
-- `[ ]` **C17:** Hide/show Sends; Hide/show return tracks; Toggle second window
 - `[ ]` **C18:** Hide/show video window
-- `[ ]` **C19:** Cancel value entry; Confirm value entry; Current scene from the last track; Decrement value; Delete track from title bar; Eight scenes down; Eight scenes up; First track of the scene; Focus Mixer; Increment value; Jump to highlighted track title; Last track of the scene; Move nonadjacent tracks down; Move nonadjacent tracks left; Move nonadjacent tracks right; Move nonadjacent tracks up; Next control; Next field; Next name while renaming; Next neighbouring control; Next track while renaming; Previous control; Previous neighbouring control; Return to default; Scene down; Scene up; Select all clips and slots; Select clip above; Select clip below; Select clip left; Select clip right; Type a value; Value down by an octave or fine step; Value up by an octave or fine step
 - `[ ]` **out:** Focus Learn View; Hide/show Learn View
 <!-- pending-shortcuts:end -->
 

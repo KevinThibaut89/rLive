@@ -57,7 +57,9 @@ pub use mapping::{
     CcEncoding, ControlKind, CrossfaderPoint, KeyMapping, MapTarget, MidiMapping, MidiSource,
     RemoteControl,
 };
-pub use project::{Crossfader, Project, ProjectError, FILE_EXTENSION, FORMAT_VERSION, PALETTE};
+pub use project::{
+    Crossfader, Project, ProjectError, WindowLayout, FILE_EXTENSION, FORMAT_VERSION, PALETTE,
+};
 pub use recording::{BeatDivision, MetronomeOptions, MetronomeSound, RecordQuantize};
 pub use routing::SEND_OFF_DB;
 pub use scene::Scene;

@@ -18,6 +18,7 @@ pub mod create;
 pub mod edit;
 pub mod file;
 pub mod launch;
+pub mod nav;
 pub mod notes;
 pub mod options;
 pub mod rack;
@@ -80,6 +81,7 @@ registry! {
     Remote(remote::Remote),
     Browser(browser::Browser),
     Comp(comping::Comp),
+    Nav(nav::Nav),
 }
 
 static ALL: LazyLock<Vec<MenuCommand>> = LazyLock::new(build_all);
@@ -178,6 +180,7 @@ impl RliveApp {
         self.bounce_state(&mut s);
         self.notes_state(&mut s);
         self.remote_state(&mut s);
+        self.nav_state(&mut s);
         s
     }
 
@@ -204,6 +207,7 @@ impl RliveApp {
             MenuCommand::Remote(c) => self.remote_command(c),
             MenuCommand::Browser(c) => self.browser_command(c),
             MenuCommand::Comp(c) => self.comp_command(c),
+            MenuCommand::Nav(c) => self.nav_command(ctx, c),
         }
     }
 
@@ -262,6 +266,9 @@ impl RliveApp {
                 entries(ui, clip::VIEW_MENU, &st, &mut fired);
                 entries(ui, notes::VIEW_ITEMS, &st, &mut fired);
             });
+            ui.menu_button("Navigate", |ui| {
+                entries(ui, nav::MENU, &st, &mut fired);
+            });
             ui.menu_button("Options", |ui| {
                 entries(ui, &[app::PREFERENCES], &st, &mut fired);
                 entries(ui, options::MENU, &st, &mut fired);
@@ -307,7 +314,8 @@ mod tests {
             + notes::Notes::ALL.len()
             + remote::Remote::ALL.len()
             + browser::Browser::ALL.len()
-            + comping::Comp::ALL.len();
+            + comping::Comp::ALL.len()
+            + nav::Nav::ALL.len();
         assert_eq!(MenuCommand::all().len(), expected);
         let unique: std::collections::HashSet<_> = MenuCommand::all().iter().collect();
         assert_eq!(unique.len(), expected, "a command appears twice");

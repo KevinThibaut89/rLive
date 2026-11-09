@@ -375,6 +375,7 @@ impl Session {
             metronome_options,
             record_quantize,
             midi_arrangement_overdub,
+            window_layout: _,
         } = shell;
         let mut commands = Vec::new();
         let p = &mut self.project;

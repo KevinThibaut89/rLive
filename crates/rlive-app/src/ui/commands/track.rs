@@ -28,6 +28,11 @@ super::domain! {
         LaunchSelectedClip,
         StopSelectedTrack,
         InsertMidiClip,
+        MoveTracksUp,
+        MoveTracksDown,
+        MoveTracksLeft,
+        MoveTracksRight,
+        DeleteFromTitle,
     }
 }
 
@@ -85,6 +90,12 @@ impl RliveApp {
         if let Some(to) = i.checked_add_signed(delta) {
             self.session.move_track(id, to);
         }
+    }
+
+    /// Moves the selected tracks one place, gaps and all.
+    fn shift_selected_tracks(&mut self, delta: isize) {
+        let ids = self.selected_track_ids();
+        self.session.shift_tracks(&ids, delta);
     }
 
     /// Puts an empty one-bar MIDI clip in the selected slot.
@@ -158,6 +169,22 @@ impl RliveApp {
                 }
             }
             Track::InsertMidiClip => self.insert_midi_clip(),
+            Track::MoveTracksUp | Track::MoveTracksLeft => self.shift_selected_tracks(-1),
+            Track::MoveTracksDown | Track::MoveTracksRight => self.shift_selected_tracks(1),
+            Track::DeleteFromTitle => {
+                for id in self.selected_track_ids() {
+                    self.session.delete_track(id);
+                }
+                self.ui.selected = self
+                    .session
+                    .project
+                    .tracks
+                    .first()
+                    .map(|t| ChainRef::Track(t.id));
+                self.ui.selected_tracks.clear();
+                self.ui.title_focus = None;
+                self.ui.arr.header_selected = false;
+            }
         }
     }
 }

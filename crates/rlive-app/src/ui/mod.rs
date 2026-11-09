@@ -20,12 +20,14 @@ mod launch_panel;
 #[cfg(target_os = "macos")]
 mod mac_menu;
 pub mod midi_settings;
+pub(crate) mod nav;
 pub(crate) mod panels;
 pub(crate) mod piano_roll;
 mod rack_mixer;
 pub mod remote_map;
 mod sample_editor;
 mod scene_view;
+mod second_window;
 mod session_select;
 mod session_status;
 mod session_view;
@@ -56,7 +58,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use theme::*;
 use widgets::{info, MeterState};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MainView {
     Session,
     Arrangement,
@@ -157,6 +159,8 @@ impl FilesUi {
 
 pub struct UiState {
     pub selected: Option<ChainRef>,
+    /// The track whose title bar the keyboard is on.
+    pub title_focus: Option<TrackId>,
     /// Tracks selected together, for commands like Group Tracks. Includes `selected`.
     pub selected_tracks: Vec<TrackId>,
     /// A group slot whose clips are selected, as a group and a scene.
@@ -168,6 +172,12 @@ pub struct UiState {
     pub main_view: MainView,
     pub focus: FocusArea,
     pub keys: KeyState,
+    /// The second window has the keyboard, not the first.
+    pub second_focused: bool,
+    /// Where the second window was asked to open.
+    pub second_start: Option<[f32; 4]>,
+    /// The second window has a drag or text edit under way, so edits shouldn't commit yet.
+    pub second_pointer_busy: bool,
     pub clipboard: Option<ClipBoard>,
     pub browser: browser::BrowserState,
     /// Options > Retune Set On Loading Tuning Systems, mirrored for the browser.
@@ -277,6 +287,8 @@ struct FocusRects {
     browser: Option<Rect>,
     detail: Option<Rect>,
     main: Option<Rect>,
+    /// The view that `main` shows, when it isn't the first window's.
+    main_view: Option<MainView>,
 }
 
 /// The Song Tempo, as a mapping target.
@@ -352,6 +364,15 @@ fn count_in_label(left: f64, sig: rlive_core::TimeSignature) -> String {
 }
 
 impl UiState {
+    /// The view the keyboard is in: the first window's, unless the focus is in the other one.
+    pub(crate) fn active_view(&self) -> MainView {
+        match self.focus {
+            FocusArea::Session => MainView::Session,
+            FocusArea::Arrangement => MainView::Arrangement,
+            _ => self.main_view,
+        }
+    }
+
     /// The UI's state on opening, with `status` on the status bar.
     pub(crate) fn initial(session: &Session, settings: &Settings, status: String) -> Self {
         Self {
@@ -360,6 +381,7 @@ impl UiState {
                 .tracks
                 .first()
                 .map(|t| ChainRef::Track(t.id)),
+            title_focus: None,
             selected_tracks: Vec::new(),
             group_slot: None,
             selected_clip: None,
@@ -368,6 +390,9 @@ impl UiState {
             main_view: MainView::Session,
             focus: FocusArea::Session,
             keys: KeyState::default(),
+            second_focused: false,
+            second_start: None,
+            second_pointer_busy: false,
             clipboard: None,
             browser: browser::BrowserState::default(),
             retune_on_load: false,
@@ -981,7 +1006,7 @@ impl RliveApp {
                 Detail::Clip => FocusArea::Clip,
                 Detail::Devices | Detail::Scene => FocusArea::Device,
             }
-        } else if self.ui.main_view == MainView::Arrangement {
+        } else if rects.main_view.unwrap_or(self.ui.main_view) == MainView::Arrangement {
             FocusArea::Arrangement
         } else {
             FocusArea::Session
@@ -1163,6 +1188,9 @@ impl RliveApp {
 
     fn toggle_detail(&mut self) {
         self.ui.show_detail = !self.ui.show_detail;
+        if self.ui.show_detail {
+            self.open_detail_in_focused_window();
+        }
         self.settings.show_detail = Some(self.ui.show_detail);
         self.settings.save();
     }
@@ -1393,8 +1421,14 @@ impl RliveApp {
     }
 
     /// The Detail View's panel.
-    fn detail_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, rects: &mut FocusRects) {
-        if self.ui.show_detail {
+    fn detail_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        rects: &mut FocusRects,
+        in_second: bool,
+    ) {
+        if self.ui.show_detail && self.detail_in_second() == in_second {
             let mut detail = egui::Panel::bottom("detail")
                 .resizable(true)
                 .default_size(250.0)
@@ -1410,6 +1444,14 @@ impl RliveApp {
             let stacked = self.ui.clip_view.stacked
                 && self.ui.selected_clip.is_some()
                 && self.ui.detail != Detail::Scene;
+            nav::set_area(
+                ctx,
+                if self.ui.detail == Detail::Clip {
+                    FocusArea::Clip
+                } else {
+                    FocusArea::Device
+                },
+            );
             let panel = detail.show(ui, |ui| {
                 // A frozen track's Device and Clip Views can be looked at, not changed.
                 let frozen = self.detail_is_frozen(stacked);
@@ -1489,6 +1531,25 @@ impl RliveApp {
             take_header: self.ui.focus == FocusArea::Arrangement
                 && self.ui.arr.take_header.is_some(),
             take_area: self.take_area_active(),
+            tab_focus: self.settings.tab_moves_focus,
+            renaming: self.ui.renaming.is_some(),
+            value_control: nav::focused(ctx).is_some(),
+            track_title: match self.ui.focus {
+                FocusArea::Session => self.ui.title_focus.is_some(),
+                FocusArea::Arrangement => self.ui.arr.header_selected,
+                _ => false,
+            },
+            scene_selected: self.ui.focus == FocusArea::Session
+                && (!self.ui.sel.scenes.is_empty() || self.ui.sel.scene_field.is_some()),
+            in_track: match self.ui.focus {
+                FocusArea::Session => {
+                    self.ui.selected_clip.and_then(ClipRef::as_slot).is_some()
+                        || !self.ui.sel.slots.is_empty()
+                        || self.ui.group_slot.is_some()
+                }
+                FocusArea::Arrangement => self.ui.arr.has_selection(),
+                _ => false,
+            },
         }
     }
 
@@ -2503,10 +2564,12 @@ impl RliveApp {
     }
 }
 
-impl eframe::App for RliveApp {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl RliveApp {
+    /// Each frame's work that doesn't draw: eframe's `logic`, callable without a real window.
+    pub(crate) fn tick(&mut self, ctx: &egui::Context) {
         theme::begin_frame(ctx, &self.settings.theme);
         widgets::info_begin_frame(ctx);
+        nav::begin_frame(ctx);
         self.session.colors = self.settings.colors;
         self.session.collect_on_export =
             self.settings.collect_on_export != crate::settings::CollectFiles::Never;
@@ -2589,15 +2652,14 @@ impl eframe::App for RliveApp {
             self.handle_shortcuts(ctx);
         }
     }
+}
 
-    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        #[cfg(target_os = "macos")]
-        if let Some(menu) = &self.mac_menu {
-            menu.drain_into(ctx.text_edit_focused(), raw, &mut self.pending);
-        }
+impl RliveApp {
+    /// Takes key events through Key Map Mode and the keymap, before egui sees them.
+    pub(crate) fn filter_key_events(&mut self, ctx: &egui::Context, events: &mut Vec<egui::Event>) {
         if !ctx.text_edit_focused() {
-            let mut keep = Vec::with_capacity(raw.events.len());
-            for e in std::mem::take(&mut raw.events) {
+            let mut keep = Vec::with_capacity(events.len());
+            for e in std::mem::take(events) {
                 let taken = match &e {
                     egui::Event::Key {
                         key,
@@ -2612,15 +2674,16 @@ impl eframe::App for RliveApp {
                     keep.push(e);
                 }
             }
-            raw.events = keep;
+            *events = keep;
         }
         // Taking shortcuts here keeps Tab from moving egui's keyboard focus, which would silence
         // Space and the computer keyboard.
         let cx = self.key_context(ctx);
-        self.ui.keys.process(raw, &cx, &mut self.pending);
+        self.ui.keys.process_events(events, &cx, &mut self.pending);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    /// Draws the first window's contents, and the second window: eframe's `ui`.
+    pub(crate) fn draw_root(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         remote_map::begin_frame(&ctx, &self.session);
         self.ui.devices.begin_frame();
@@ -2646,6 +2709,7 @@ impl eframe::App for RliveApp {
             )
             .show(ui, |ui| self.menu_bar(ui));
         let mut rects = FocusRects::default();
+        nav::set_area(&ctx, FocusArea::ControlBar);
         let panel = egui::Panel::top("control_bar")
             .exact_size(CONTROL_BAR_H)
             .frame(egui::Frame::new())
@@ -2673,23 +2737,34 @@ impl eframe::App for RliveApp {
         }
         if self.settings.full_height_browser {
             self.browser_panel(ui, &mut rects);
-            self.detail_panel(ui, &ctx, &mut rects);
+            self.detail_panel(ui, &ctx, &mut rects, false);
         } else {
-            self.detail_panel(ui, &ctx, &mut rects);
+            self.detail_panel(ui, &ctx, &mut rects, false);
             self.browser_panel(ui, &mut rects);
         }
         let panel = egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(pal().grid_bg))
-            .show(ui, |ui| match self.ui.main_view {
-                MainView::Session => session_view::show(ui, &mut self.session, &mut self.ui),
-                MainView::Arrangement => arrangement::show(ui, &mut self.session, &mut self.ui),
+            .show(ui, |ui| {
+                nav::set_area(
+                    ui.ctx(),
+                    match self.ui.main_view {
+                        MainView::Session => FocusArea::Session,
+                        MainView::Arrangement => FocusArea::Arrangement,
+                    },
+                );
+                match self.ui.main_view {
+                    MainView::Session => session_view::show(ui, &mut self.session, &mut self.ui),
+                    MainView::Arrangement => arrangement::show(ui, &mut self.session, &mut self.ui),
+                }
             });
         rects.main = Some(panel.response.rect);
         self.track_focus(&ctx, &rects);
         self.paint_focus_outline(&ctx, &rects);
+        self.second_window(&ctx);
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         self.session.pointer_frame(pointer_down);
         let busy = pointer_down
+            || self.ui.second_pointer_busy
             || self.ui.piano.chop.is_some()
             || ctx.text_edit_focused()
             || self.session.is_recording()
@@ -2711,6 +2786,26 @@ impl eframe::App for RliveApp {
         self.run_pending_freezes();
         automation::show_popups(&ctx, &mut self.session, &mut self.ui);
     }
+}
+
+impl eframe::App for RliveApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.tick(ctx);
+    }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        #[cfg(target_os = "macos")]
+        if !self.ui.second_focused {
+            if let Some(menu) = &self.mac_menu {
+                menu.drain_into(ctx.text_edit_focused(), &mut raw.events, &mut self.pending);
+            }
+        }
+        self.filter_key_events(ctx, &mut raw.events);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.draw_root(ui);
+    }
 
     #[cfg(target_os = "macos")]
     fn on_exit(&mut self) {
@@ -2727,6 +2822,8 @@ impl eframe::App for RliveApp {
     }
 }
 
+#[cfg(test)]
+mod c19_tests;
 #[cfg(test)]
 mod count_in_tests {
     use super::count_in_label;

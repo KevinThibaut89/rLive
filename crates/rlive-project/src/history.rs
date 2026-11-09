@@ -388,6 +388,8 @@ pub fn capture(project: &Project, prev: Option<&Snapshot>) -> (Snapshot, usize) 
         metronome_options: project.metronome_options,
         record_quantize: project.record_quantize,
         midi_arrangement_overdub: project.midi_arrangement_overdub,
+        // Windows are view state: an undo must not reopen or close one.
+        window_layout: Default::default(),
     };
     let snapshot = Snapshot {
         shell: share(

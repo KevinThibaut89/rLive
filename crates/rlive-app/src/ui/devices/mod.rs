@@ -344,6 +344,7 @@ fn device(
     let is_rack = matches!(dev.kind, DeviceKind::Rack { .. });
     let rounding = if is_rack { RACK_ROUNDING } else { 1.0 };
     let selected = cx.selected_devices.contains(&(chain, dev.id));
+    crate::ui::nav::set_group(ui.ctx(), crate::ui::nav::Group::Device(dev.id));
 
     let (rect, bg) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     if cx.scroll_to == Some(dev.id) {

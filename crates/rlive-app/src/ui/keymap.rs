@@ -112,6 +112,10 @@ pub enum When {
     Always,
     /// The Computer MIDI Keyboard is on.
     ComputerKeys,
+    /// A scene is selected in the Session grid.
+    SceneSelected,
+    /// The keyboard is on something inside a track: a clip slot or a selection.
+    InTrack,
     /// A window such as Settings is open.
     DialogOpen,
     /// "Use Tab to Move Focus" is on.
@@ -276,6 +280,18 @@ pub struct KeyContext {
     pub take_header: bool,
     /// Time or clip headers are selected on a track with take lanes.
     pub take_area: bool,
+    /// Use Tab Key to Move Focus is on.
+    pub tab_focus: bool,
+    /// A track's name is being typed.
+    pub renaming: bool,
+    /// A control has the keyboard for typed values and the arrow keys.
+    pub value_control: bool,
+    /// A track title bar has the keyboard.
+    pub track_title: bool,
+    /// A scene is selected in the Session grid.
+    pub scene_selected: bool,
+    /// The keyboard is on something inside a track.
+    pub in_track: bool,
 }
 
 impl KeyContext {
@@ -298,6 +314,12 @@ impl KeyContext {
             When::TakeLane => self.take_lane,
             When::TakeHeader => self.take_header,
             When::TakeArea => self.take_area,
+            When::TabFocus => self.tab_focus,
+            When::Renaming => self.renaming,
+            When::ValueControl => self.value_control,
+            When::TrackTitle => self.track_title,
+            When::SceneSelected => self.scene_selected,
+            When::InTrack => self.in_track,
             // The rest are built by the milestones that need them.
             _ => false,
         }
@@ -460,7 +482,12 @@ fn lookup(chord: Chord, cx: &KeyContext) -> Option<&'static Binding> {
         .filter(|b| b.area.contains(cx.focus, cx.clip_is_midi) && cx.holds(b.when))
         .max_by_key(|b| {
             let ranks_as_always = matches!(b.when, When::Always | When::ArrowsFree);
-            (!ranks_as_always, b.area.specificity())
+            // A dialog, a focused control or a name being typed comes before anything else.
+            let captured = matches!(
+                b.when,
+                When::ValueControl | When::Renaming | When::DialogOpen
+            );
+            (captured, !ranks_as_always, b.area.specificity())
         })
         .copied()
 }
@@ -476,7 +503,12 @@ fn outcome(b: &Binding) -> Resolution {
 /// Resolves a key press: what the Computer MIDI Keyboard takes first, then the focused area,
 /// then what applies everywhere.
 pub fn resolve(chord: Chord, cx: &KeyContext) -> Resolution {
-    if cx.keyboard_taken && !survives_typing(chord, cx.text_focused) {
+    // Settings and the other dialogs move their own keyboard focus with Tab (manual p. 1004).
+    if cx.dialog_open && chord.key == Key::Tab {
+        return Resolution::Unbound;
+    }
+    let tabs_through_names = cx.renaming && chord.key == Key::Tab && chord.mods == Mods::default();
+    if cx.keyboard_taken && !survives_typing(chord, cx.text_focused) && !tabs_through_names {
         return Resolution::Unbound;
     }
     let m = chord.mods;
@@ -586,8 +618,18 @@ impl KeyState {
         cx: &KeyContext,
         commands: &mut Vec<MenuCommand>,
     ) {
+        self.process_events(&mut raw.events, cx, commands);
+    }
+
+    /// [`Self::process`] on a list of events: the second window has no `RawInput` to give.
+    pub fn process_events(
+        &mut self,
+        events: &mut Vec<Event>,
+        cx: &KeyContext,
+        commands: &mut Vec<MenuCommand>,
+    ) {
         let down = &mut self.down;
-        raw.events.retain(|e| {
+        events.retain(|e| {
             if matches!(e, Event::WindowFocused(false)) {
                 down.clear();
             }

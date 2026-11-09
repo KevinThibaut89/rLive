@@ -36,7 +36,7 @@ pub const CONSOLIDATE_TO_SCENE: Entry = Item(
 
 /// What the current selection would bounce, in the view on show.
 pub fn source_of(session: &Session, state: &UiState) -> Option<BounceSource> {
-    if state.main_view == MainView::Session {
+    if state.active_view() == MainView::Session {
         if let Some(slot) = state.group_slot {
             return Some(BounceSource::Slots(vec![slot]));
         }

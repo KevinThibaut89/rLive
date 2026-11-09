@@ -218,14 +218,27 @@ impl RliveApp {
                 self.set_zoom(&ui.ctx().clone(), z);
             }
             ui.end_row();
-            soon(ui, "Second Window Zoom", "100%", "C17");
-            soon(ui, "Settings Window Zoom", "100%", "C17");
+            label(ui, "Second Window Zoom");
+            ui.label("Follows Zoom Display");
+            ui.end_row();
+            label(ui, "Settings Window Zoom");
+            ui.label("Follows Zoom Display");
+            ui.end_row();
         });
         ui.add_space(10.0);
         widgets::section_label(ui, "DISPLAY OPTIONS");
         grid(ui, "display_options", |ui| {
             label(ui, "Outline View in Focus");
             ui.checkbox(&mut self.settings.outline_focus, "");
+            ui.end_row();
+            label(ui, "Use Tab Key to Move Focus");
+            ui.checkbox(&mut self.settings.tab_moves_focus, "");
+            ui.end_row();
+            label(ui, "Wrap Tab Navigation");
+            ui.checkbox(&mut self.settings.wrap_tab, "");
+            ui.end_row();
+            label(ui, "Move Clips with Arrow Keys");
+            ui.checkbox(&mut self.settings.move_clips_with_arrows, "");
             ui.end_row();
             label(ui, "Scroll Bars");
             let before = self.settings.scroll_bars;

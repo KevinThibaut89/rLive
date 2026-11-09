@@ -7,7 +7,7 @@ use super::commands::app::App;
 use super::commands::edit::{self, Edit};
 use super::commands::{self, Entry, MenuCommand, MenuState};
 use super::keymap;
-use egui::{Event, Key, Modifiers, RawInput};
+use egui::{Event, Key, Modifiers};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, Sel};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
@@ -33,7 +33,9 @@ impl MenuShared {
     fn foreign_key_window(&self, mtm: MainThreadMarker) -> Option<Retained<NSWindow>> {
         let key = NSApplication::sharedApplication(mtm).keyWindow()?;
         let main = self.main_window.as_ref()?;
-        (Retained::as_ptr(&key) != Retained::as_ptr(main)).then_some(key)
+        let ours = Retained::as_ptr(&key) == Retained::as_ptr(main)
+            || key.title().to_string() == crate::ui::second_window::TITLE;
+        (!ours).then_some(key)
     }
 }
 
@@ -288,6 +290,7 @@ impl MacMenu {
         b.entries(&view, commands::view::MENU);
         b.entries(&view, commands::clip::VIEW_MENU);
         b.entries(&view, commands::notes::VIEW_ITEMS);
+        b.entries(&b.submenu(&bar, "Navigate"), commands::nav::MENU);
         let options = b.submenu(&bar, "Options");
         b.entries(&options, commands::options::MENU);
         b.separator(&options);
@@ -341,11 +344,11 @@ impl MacMenu {
     pub fn drain_into(
         &self,
         text_focused: bool,
-        raw: &mut RawInput,
+        events: &mut Vec<Event>,
         commands: &mut Vec<MenuCommand>,
     ) {
         for c in self.shared.queue.borrow_mut().drain(..) {
-            if !(text_focused && inject_text_edit(c, raw)) {
+            if !(text_focused && inject_text_edit(c, events)) {
                 commands.push(c);
             }
         }
@@ -369,7 +372,7 @@ fn pasteboard_text() -> Option<String> {
     Some(text.to_string())
 }
 
-fn inject_text_edit(c: MenuCommand, raw: &mut RawInput) -> bool {
+fn inject_text_edit(c: MenuCommand, events: &mut Vec<Event>) -> bool {
     let shift = Modifiers {
         shift: true,
         ..Modifiers::COMMAND
@@ -379,16 +382,16 @@ fn inject_text_edit(c: MenuCommand, raw: &mut RawInput) -> bool {
     };
     let (key, modifiers) = match c {
         Edit::Cut => {
-            raw.events.push(Event::Cut);
+            events.push(Event::Cut);
             return true;
         }
         Edit::Copy => {
-            raw.events.push(Event::Copy);
+            events.push(Event::Copy);
             return true;
         }
         Edit::Paste => {
             if let Some(text) = pasteboard_text() {
-                raw.events.push(Event::Paste(text));
+                events.push(Event::Paste(text));
             }
             return true;
         }
@@ -398,7 +401,7 @@ fn inject_text_edit(c: MenuCommand, raw: &mut RawInput) -> bool {
         _ => return false,
     };
     for pressed in [true, false] {
-        raw.events.push(Event::Key {
+        events.push(Event::Key {
             key,
             physical_key: None,
             pressed,

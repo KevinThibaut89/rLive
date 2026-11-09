@@ -148,6 +148,63 @@ impl Session {
         self.reposition(id, Place::Index(to));
     }
 
+    /// Moves each track of `selection` one place, keeping the gaps between them (manual
+    /// p. 1030). `delta` is -1 or 1. Nothing moves if the first one to go is already at the edge.
+    pub fn shift_tracks(&mut self, selection: &[TrackId], delta: isize) {
+        let project = &self.project;
+        let mut chosen: Vec<TrackId> = selection
+            .iter()
+            .copied()
+            .filter(|t| project.track_index(*t).is_some())
+            .collect();
+        // A group moves with its contents, so a member inside a selected group doesn't also go.
+        let groups = chosen.clone();
+        chosen.retain(|t| {
+            !groups
+                .iter()
+                .any(|g| g != t && project.track_block(*g).contains(t))
+        });
+        chosen.sort_by_key(|t| project.track_index(*t));
+        chosen.dedup();
+        if delta > 0 {
+            chosen.reverse();
+        }
+        let Some(&first) = chosen.first() else {
+            return;
+        };
+        if self.track_shift_target(first, delta).is_none() {
+            return;
+        }
+        for id in chosen {
+            if let Some(to) = self.track_shift_target(id, delta) {
+                self.move_track(id, to);
+            }
+        }
+        self.mark_edit("Move Track");
+    }
+
+    /// Where `move_track` must put a track for it to swap with its neighbour, if it has one.
+    fn track_shift_target(&self, id: TrackId, delta: isize) -> Option<usize> {
+        let project = &self.project;
+        let start = project.track_index(id)?;
+        let block = project.track_block(id);
+        let parent = project.parent_group(id);
+        if delta < 0 {
+            let before = project.tracks[..start]
+                .iter()
+                .rev()
+                .find(|t| project.parent_group(t.id) == parent)?;
+            project.track_index(before.id)
+        } else {
+            let next_start = start + block.len();
+            let next = project.tracks[next_start..]
+                .iter()
+                .find(|t| project.parent_group(t.id) == parent)?;
+            let at = project.track_index(next.id)?;
+            Some(at - block.len() + project.track_block(next.id).len())
+        }
+    }
+
     /// Moves a track into a group, as its last member.
     pub fn move_into_group(&mut self, id: TrackId, group: TrackId) {
         let inside = self.project.track_block(id).contains(&group);

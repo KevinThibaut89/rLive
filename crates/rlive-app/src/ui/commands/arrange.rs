@@ -161,7 +161,7 @@ impl RliveApp {
     pub(super) fn arrange_state(&self, s: &mut MenuState) {
         let on = |c: Arrange| M::Arrange(c);
         let span = self.span().is_some();
-        let arr = self.ui.main_view == MainView::Arrangement;
+        let arr = self.ui.active_view() == MainView::Arrangement;
         for c in [
             Arrange::Split,
             Arrange::Crop,
@@ -231,6 +231,10 @@ impl RliveApp {
             Arrange::InsertSilence => self.start_insert_silence(),
             Arrange::LoopSelection => self.loop_selection(),
             Arrange::SelectLoop => self.ui.arr.select_loop(&self.session),
+            // With Move Clips with Arrow Keys off, the arrows collapse the selection instead.
+            Arrange::NudgeLeft | Arrange::NudgeRight if !self.settings.move_clips_with_arrows => {
+                self.collapse_time_selection(c == Arrange::NudgeRight);
+            }
             Arrange::NudgeLeft => self.nudge(-grid),
             Arrange::NudgeRight => self.nudge(grid),
             Arrange::ExtendLeft => self.extend(-grid),
@@ -401,6 +405,16 @@ impl RliveApp {
     }
 
     /// Moves the selection by whole grid steps.
+    /// Reduces the time selection to its start or end (manual p. 1004).
+    fn collapse_time_selection(&mut self, to_end: bool) {
+        let Some((a, b)) = self.span() else {
+            return;
+        };
+        self.ui.arr.selection.clear();
+        let tick = if to_end { b } else { a } as f64;
+        self.ui.arr.time = self.ui.arr.time.take().map(|t| t.collapsed(tick));
+    }
+
     fn nudge(&mut self, delta: i64) {
         if !self.ui.arr.selection.is_empty() {
             let moves: Vec<crate::session::ArrMove> = self

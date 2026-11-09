@@ -1,6 +1,7 @@
 //! Commands that show, hide and move between parts of the window.
 
 use super::{Entry, Entry::Item, Entry::Separator, MenuCommand as M, MenuState};
+use crate::session::ChainRef;
 use crate::ui::keymap::FocusArea;
 use crate::ui::{Detail, MainView, RliveApp};
 
@@ -36,6 +37,9 @@ super::domain! {
         FocusGroovePool,
         CloseDialog,
         TogglePluginWindows,
+        ToggleSecondWindow,
+        ToggleSends,
+        ToggleReturns,
     }
 }
 
@@ -47,6 +51,7 @@ pub const MENU: &[Entry] = &[
         M::View(View::SwitchDetail),
     ),
     Separator,
+    Item("Second Window", M::View(View::ToggleSecondWindow)),
     Item("Browser", M::View(View::ToggleBrowser)),
     Item("Groove Pool", M::View(View::ToggleGroovePool)),
     Item("Tuning", M::View(View::ToggleTuning)),
@@ -54,6 +59,8 @@ pub const MENU: &[Entry] = &[
     Item("Detail View", M::View(View::ToggleDetail)),
     Item("Mixer", M::View(View::ToggleMixer)),
     Item("In/Out", M::View(View::ToggleInOut)),
+    Item("Sends", M::View(View::ToggleSends)),
+    Item("Return Tracks", M::View(View::ToggleReturns)),
     Item("Crossfader", M::View(View::ToggleCrossfader)),
     Item("Info View", M::View(View::ToggleInfoView)),
     Item(
@@ -92,6 +99,10 @@ impl RliveApp {
             self.ui.layout.show_crossfader,
         );
         s.check(M::View(View::ToggleInfoView), self.ui.show_info);
+        let l = &self.session.project.window_layout;
+        s.check(M::View(View::ToggleSecondWindow), l.second_window);
+        s.check(M::View(View::ToggleSends), l.show_sends);
+        s.check(M::View(View::ToggleReturns), l.show_returns);
     }
 
     /// Shows the Detail View on one of its two sides, or hides it if that side is showing.
@@ -123,10 +134,33 @@ impl RliveApp {
         }
     }
 
-    fn move_focus(&mut self, area: FocusArea) {
+    fn move_focus(&mut self, ctx: &egui::Context, area: FocusArea) {
         match area {
-            FocusArea::Session => self.ui.main_view = MainView::Session,
-            FocusArea::Arrangement => self.ui.main_view = MainView::Arrangement,
+            FocusArea::Session | FocusArea::Arrangement => {
+                let view = if area == FocusArea::Session {
+                    MainView::Session
+                } else {
+                    MainView::Arrangement
+                };
+                if self.session.project.window_layout.second_window {
+                    // Both views are showing: bring up the window that has this one.
+                    self.focus_window_of(ctx, view);
+                } else {
+                    self.ui.main_view = view;
+                }
+                // The arrow keys need somewhere to start from.
+                if area == FocusArea::Session
+                    && self.ui.selected_clip.is_none()
+                    && self.ui.sel.slots.is_empty()
+                    && self.ui.sel.scenes.is_empty()
+                    && self.ui.title_focus.is_none()
+                {
+                    self.ui.title_focus = match self.ui.selected {
+                        Some(ChainRef::Track(t)) => Some(t),
+                        _ => self.session.project.tracks.first().map(|t| t.id),
+                    };
+                }
+            }
             FocusArea::Clip | FocusArea::Device => {
                 if !self.ui.show_detail {
                     self.toggle_detail();
@@ -161,6 +195,19 @@ impl RliveApp {
                 self.ui.arr.auto.mode = !self.ui.arr.auto.mode;
                 self.ui.main_view = MainView::Arrangement;
             }
+            View::ToggleSecondWindow => self.toggle_second_window(),
+            View::ToggleSends => {
+                let l = &mut self.session.project.window_layout;
+                l.show_sends = !l.show_sends;
+            }
+            View::ToggleReturns => {
+                let l = &mut self.session.project.window_layout;
+                l.show_returns = !l.show_returns;
+            }
+            // With two windows, F12 and Shift+Tab move the Detail View across (manual p. 200).
+            View::SwitchDetail if self.session.project.window_layout.second_window => {
+                self.move_detail_between_windows();
+            }
             View::SwitchDetail => {
                 self.ui.show_detail = true;
                 self.ui.detail = match self.ui.detail {
@@ -184,7 +231,7 @@ impl RliveApp {
             View::FocusGroovePool => {
                 self.ui.show_groove_pool = true;
                 self.ui.show_browser = true;
-                self.move_focus(FocusArea::Browser);
+                self.move_focus(ctx, FocusArea::Browser);
             }
             View::ToggleFullHeightBrowser => {
                 self.settings.full_height_browser = !self.settings.full_height_browser;
@@ -208,12 +255,12 @@ impl RliveApp {
             View::ZoomReset => self.set_zoom(ctx, 1.0),
             View::RulerZoomIn => self.ui.arr.zoom_ruler(1.25),
             View::RulerZoomOut => self.ui.arr.zoom_ruler(0.8),
-            View::FocusControlBar => self.move_focus(FocusArea::ControlBar),
-            View::FocusSession => self.move_focus(FocusArea::Session),
-            View::FocusArrangement => self.move_focus(FocusArea::Arrangement),
-            View::FocusClip => self.move_focus(FocusArea::Clip),
-            View::FocusDevice => self.move_focus(FocusArea::Device),
-            View::FocusBrowser => self.move_focus(FocusArea::Browser),
+            View::FocusControlBar => self.move_focus(ctx, FocusArea::ControlBar),
+            View::FocusSession => self.move_focus(ctx, FocusArea::Session),
+            View::FocusArrangement => self.move_focus(ctx, FocusArea::Arrangement),
+            View::FocusClip => self.move_focus(ctx, FocusArea::Clip),
+            View::FocusDevice => self.move_focus(ctx, FocusArea::Device),
+            View::FocusBrowser => self.move_focus(ctx, FocusArea::Browser),
             View::CloseDialog => self.close_top_dialog(),
         }
     }

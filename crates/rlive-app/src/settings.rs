@@ -668,6 +668,12 @@ pub struct Settings {
     pub colors: ColorSettings,
     /// Draw a border around the view that has keyboard focus.
     pub outline_focus: bool,
+    /// Use Tab Key to Move Focus.
+    pub tab_moves_focus: bool,
+    /// Wrap Tab Navigation.
+    pub wrap_tab: bool,
+    /// Move Clips with Arrow Keys.
+    pub move_clips_with_arrows: bool,
     pub scroll_bars: ScrollBars,
     pub samples: SampleSettings,
     pub warp: WarpDefaults,
@@ -724,6 +730,9 @@ impl Default for Settings {
             theme: ThemeSettings::default(),
             colors: ColorSettings::default(),
             outline_focus: false,
+            tab_moves_focus: false,
+            wrap_tab: false,
+            move_clips_with_arrows: true,
             scroll_bars: ScrollBars::default(),
             samples: SampleSettings::default(),
             launch: LaunchPrefs::default(),
@@ -771,6 +780,10 @@ impl Settings {
     }
 
     pub fn save(&self) {
+        // Tests drive the real commands, and must not write over the user's settings.
+        if cfg!(test) {
+            return;
+        }
         self.save_to(&Self::path());
     }
 
@@ -828,6 +841,9 @@ mod tests {
     #[test]
     fn round_trips_every_setting_through_a_file() {
         let settings = Settings {
+            tab_moves_focus: true,
+            wrap_tab: true,
+            move_clips_with_arrows: false,
             audio_device: Some("Interface".into()),
             audio_channels: BTreeMap::from([(
                 "Interface".to_string(),

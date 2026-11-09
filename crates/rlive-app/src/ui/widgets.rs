@@ -1,6 +1,7 @@
 //! Custom Ableton-style widgets: knobs, faders, meters, flat buttons and the info view.
 
 use super::icons;
+use super::nav;
 use super::theme::{self, *};
 use egui::{Align2, Color32, Id, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, Vec2};
 use rlive_core::{db_to_gain, gain_to_db, ParamInfo, ParamKind};
@@ -104,6 +105,9 @@ pub fn info_text(ctx: &egui::Context) -> Option<String> {
 /// Flat square state button (track activator, solo, …).
 pub fn state_button(ui: &mut Ui, size: Vec2, on: bool, on_color: Color32, label: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, label.to_string())
+    });
     let p = ui.painter();
     let fill = if on {
         on_color
@@ -163,6 +167,33 @@ pub fn bare_icon(
     };
     draw(ui.painter(), rect, c);
     resp
+}
+
+// ------------------------------------------------------------------ keyboard
+
+fn value_spec<'a>(param: &'a ParamInfo, value: f64) -> nav::Spec<'a> {
+    nav::Spec {
+        role: &param.name,
+        label: &param.name,
+        kind: nav::Kind::Value(value),
+    }
+}
+
+/// What the keyboard makes of a device parameter: a step, its default, or a typed value.
+fn apply_param_op(op: Option<nav::ValueOp>, param: &ParamInfo, value: f64) -> Option<f64> {
+    let stepped_kind = matches!(param.kind, ParamKind::Stepped { .. });
+    let step = match param.kind {
+        ParamKind::Continuous { .. } => (param.max - param.min) / 100.0,
+        _ => 1.0,
+    };
+    let fine_is_octave = stepped_kind && param.max - param.min >= 24.0;
+    let v = match op? {
+        nav::ValueOp::Step { up, fine: true } if fine_is_octave => {
+            value + if up { 12.0 } else { -12.0 }
+        }
+        o => nav::stepped(Some(o), value, step, param.default)?,
+    };
+    Some(v.clamp(param.min, param.max))
 }
 
 // ------------------------------------------------------------------ knobs
@@ -324,6 +355,7 @@ pub fn knob(
     let mut norm = param.to_normalized(value);
     let mut changed = None;
     let toggle = matches!(param.kind, ParamKind::Toggle);
+    let op = nav::control(ui, &resp, value_spec(param, value));
     if resp.dragged() && !toggle {
         let fine = ui.input(|i| i.modifiers.shift);
         let delta = -resp.drag_delta().y as f64 / if fine { 900.0 } else { 180.0 };
@@ -337,10 +369,16 @@ pub fn knob(
         changed = Some(param.default);
         norm = param.to_normalized(param.default);
     }
-    if toggle && resp.clicked() {
+    if toggle && (resp.clicked() || nav::toggled(op, value >= 0.5)) {
         let v = if value >= 0.5 { 0.0 } else { 1.0 };
         changed = Some(v);
         norm = v;
+    }
+    if !toggle && !state.disabled {
+        if let Some(v) = apply_param_op(op, param, value) {
+            changed = Some(v);
+            norm = param.to_normalized(v);
+        }
     }
     let active = resp.hovered() || resp.dragged();
     let p = ui.painter_at(rect.expand(2.0));
@@ -442,6 +480,13 @@ pub fn slider(
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(116.0, 30.0), sense);
     let mut norm = param.to_normalized(value) as f32;
     let mut changed = None;
+    let op = nav::control(ui, &resp, value_spec(param, value));
+    if !state.disabled {
+        if let Some(v) = apply_param_op(op, param, value) {
+            changed = Some(v);
+            norm = param.to_normalized(v) as f32;
+        }
+    }
     if resp.dragged() {
         let fine = ui.input(|i| i.modifiers.shift);
         let delta = resp.drag_delta().x / if fine { 900.0 } else { rect.width() };
@@ -527,6 +572,15 @@ pub fn toggle(ui: &mut Ui, param: &ParamInfo, value: f64, state: ControlState) -
         Sense::click()
     };
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(56.0, 18.0), sense);
+    let op = nav::control(
+        ui,
+        &resp,
+        nav::Spec {
+            role: &param.name,
+            label: &param.name,
+            kind: nav::Kind::Button { on },
+        },
+    );
     let fill = match (on, state.disabled) {
         (true, false) => pal().accent,
         (true, true) => pal().text_faint,
@@ -552,7 +606,8 @@ pub fn toggle(ui: &mut Ui, param: &ParamInfo, value: f64, state: ControlState) -
     state.led.paint(p, rect.left_top() + Vec2::new(4.0, 9.0));
     re_enable_menu(&resp, state);
     let resp = info(resp, format!("{}: {word}  —  {hint}", param.name));
-    (resp.clicked() && !state.disabled).then_some(if on { param.min } else { param.max })
+    let pressed = resp.clicked() || nav::toggled(op, on);
+    (pressed && !state.disabled).then_some(if on { param.min } else { param.max })
 }
 
 /// Drop-down for a stepped parameter, with its name above. Returns the new plain value.
@@ -662,6 +717,19 @@ pub fn pan_knob(ui: &mut Ui, pan: f32) -> Option<f32> {
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(28.0, 26.0), Sense::click_and_drag());
     let mut v = pan;
     let mut changed = None;
+    let op = nav::control(
+        ui,
+        &resp,
+        nav::Spec {
+            role: "pan",
+            label: "Pan",
+            kind: nav::Kind::Value(f64::from(pan) * 50.0),
+        },
+    );
+    if let Some(new) = nav::stepped(op, f64::from(pan) * 50.0, 2.0, 0.0) {
+        v = (new as f32 / 50.0).clamp(-1.0, 1.0);
+        changed = Some(v);
+    }
     if resp.dragged() {
         let fine = ui.input(|i| i.modifiers.shift);
         v = (v - resp.drag_delta().y / if fine { 400.0 } else { 80.0 }).clamp(-1.0, 1.0);
@@ -758,6 +826,20 @@ pub fn fader(ui: &mut Ui, size: Vec2, db: f32, peaks: (f32, f32), color: Color32
     );
     let mut pos = db_to_pos(db);
     let mut changed = None;
+    let op = nav::control(
+        ui,
+        &resp,
+        nav::Spec {
+            role: "volume",
+            label: "Volume",
+            kind: nav::Kind::Value(f64::from(db)),
+        },
+    );
+    if let Some(new) = nav::stepped(op, f64::from(db), 0.5, 0.0) {
+        let new = new.clamp(-70.0, 6.0) as f32;
+        pos = db_to_pos(new);
+        changed = Some(new);
+    }
     if resp.dragged() {
         let fine = ui.input(|i| i.modifiers.shift);
         pos = (pos - resp.drag_delta().y / (track.height() * if fine { 6.0 } else { 1.0 }))
