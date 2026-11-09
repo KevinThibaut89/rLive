@@ -8,7 +8,7 @@
 
 use super::{ChainRef, Session};
 use crate::midi_input::{RemoteEvent, RemoteHub};
-use rlive_core::param::{mixer, ParamOwner, ParamRange, ParamRef, ACTIVATOR};
+use rlive_core::param::{mixer, transport, ParamOwner, ParamRange, ParamRef, ACTIVATOR};
 use rlive_core::{ChainId, DeviceId, TrackId};
 use rlive_engine::CellIx;
 use rlive_project::{
@@ -459,6 +459,9 @@ impl Session {
             ),
             ParamOwner::Chain(c) => ("Rack Chain".into(), format!("Control {}", c.0)),
             ParamOwner::Master => ("Main".into(), mixer_control_name(r.id).to_string()),
+            ParamOwner::Transport if r == transport_fine() => {
+                ("Control Bar".into(), "Fine Tempo".into())
+            }
             ParamOwner::Transport => ("Control Bar".into(), "Tempo".into()),
         }
     }
@@ -504,6 +507,14 @@ impl Session {
 
     /// A parameter's range, wherever it is.
     pub(crate) fn param_range(&self, r: ParamRef) -> Option<ParamRange> {
+        if r == transport_fine() {
+            return Some(ParamRange {
+                min: 0.0,
+                max: 0.99,
+                skew: 1.0,
+                quantized: false,
+            });
+        }
         if r.owner == ParamOwner::Transport {
             return Some(ParamRange {
                 min: 20.0,
@@ -970,7 +981,7 @@ impl Session {
         super::automation::cell_of(target, owner, layout)
     }
 
-    fn write_mapped_param(&mut self, target: ParamRef, value: f64) {
+    pub(super) fn write_mapped_param(&mut self, target: ParamRef, value: f64) {
         match target.owner {
             ParamOwner::Device(d) => {
                 let Some(chain) = self.chain_of_device(d) else {
@@ -1016,6 +1027,9 @@ impl Session {
                 } else if target.id == mixer::CUE_VOLUME {
                     self.set_cue_volume(value as f32);
                 }
+            }
+            ParamOwner::Transport if target.id == transport::TEMPO_FINE => {
+                self.set_tempo(self.project.tempo.floor() + value);
             }
             ParamOwner::Transport => self.set_tempo(value),
         }
@@ -1397,5 +1411,13 @@ struct SinkRef<'a>(&'a mut (dyn FeedbackSink + Send));
 impl FeedbackSink for SinkRef<'_> {
     fn send(&mut self, port: u32, bytes: &[u8]) {
         self.0.send(port, bytes);
+    }
+}
+
+/// The fine half of the tempo field, as a mapping target.
+pub(crate) fn transport_fine() -> ParamRef {
+    ParamRef {
+        owner: ParamOwner::Transport,
+        id: transport::TEMPO_FINE,
     }
 }

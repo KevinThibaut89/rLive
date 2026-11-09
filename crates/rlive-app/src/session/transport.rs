@@ -31,18 +31,6 @@ impl Session {
         self.send(EngineCommand::Transport(TransportCmd::Stop));
     }
 
-    pub fn set_tempo(&mut self, bpm: f64) {
-        // While clips lead the tempo, the tempo field is theirs.
-        if self.project.has_tempo_leader() {
-            return;
-        }
-        self.project.tempo = bpm.clamp(20.0, 999.0);
-        self.send(EngineCommand::Transport(TransportCmd::SetTempo(
-            self.project.tempo,
-        )));
-        self.mark_edit("Change Tempo");
-    }
-
     pub fn set_time_signature(&mut self, sig: TimeSignature) {
         self.project.time_signature = sig;
         self.send(EngineCommand::Transport(TransportCmd::SetTimeSignature(

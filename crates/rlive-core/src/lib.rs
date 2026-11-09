@@ -17,6 +17,8 @@ pub mod mpe;
 pub mod param;
 pub mod processor;
 pub mod sample;
+pub mod sync;
+pub mod tempo_follower;
 pub mod time;
 pub mod tuning;
 pub mod view;

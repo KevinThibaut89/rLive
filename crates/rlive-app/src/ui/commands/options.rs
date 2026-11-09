@@ -20,6 +20,7 @@ super::domain! {
         ToggleMidiEnvelopeAutoReset,
         ToggleChaseNotes,
         ToggleRetuneSet,
+        ToggleExternalSync,
     }
 }
 
@@ -48,6 +49,7 @@ pub const MENU: &[Entry] = &[
         "Retune Set On Loading Tuning Systems",
         M::Options(Options::ToggleRetuneSet),
     ),
+    Item("External Sync", M::Options(Options::ToggleExternalSync)),
     Item("Rescan Plugins", M::Options(Options::RescanPlugins)),
 ];
 
@@ -73,6 +75,14 @@ impl RliveApp {
         s.check(
             M::Options(Options::ToggleRetuneSet),
             self.settings.retune_on_load,
+        );
+        s.check(
+            M::Options(Options::ToggleExternalSync),
+            self.session.external_sync(),
+        );
+        s.enable(
+            M::Options(Options::ToggleExternalSync),
+            self.session.external_sync_available(),
         );
         s.enable(
             M::Options(Options::RescanPlugins),
@@ -131,6 +141,11 @@ impl RliveApp {
                 self.settings.save();
                 return;
             }
+            Options::ToggleExternalSync => {
+                let on = self.session.external_sync();
+                self.set_external_sync(!on);
+                return;
+            }
             Options::ToggleChaseNotes => {
                 self.settings.chase_notes = !self.settings.chase_notes;
                 self.session.set_chase(self.settings.chase_notes);
@@ -156,6 +171,7 @@ impl RliveApp {
             | Options::ToggleLockEnvelopes
             | Options::ToggleMidiEnvelopeAutoReset
             | Options::ToggleChaseNotes
+            | Options::ToggleExternalSync
             | Options::ToggleRetuneSet => {}
         }
     }

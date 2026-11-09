@@ -171,7 +171,12 @@ impl RliveApp {
                             Tab::Display => self.display_tab(ui),
                             Tab::Theme => self.theme_tab(ui),
                             Tab::Audio => self.audio_tab(ui),
-                            Tab::Link => link_tab(ui),
+                            Tab::Link => {
+                                if link_tab(ui, &mut self.settings) {
+                                    self.settings.save();
+                                    self.apply_sync_settings();
+                                }
+                            }
                             Tab::TempoMidi => self.tempo_midi_tab(ui),
                             Tab::FileFolder => self.file_folder_tab(ui),
                             Tab::Library => self.library_tab(ui),
@@ -585,12 +590,93 @@ impl RliveApp {
             }
             ui.end_row();
         });
+        changed |= self.sync_options(ui, &inputs, &outputs);
+        self.follower_options(ui);
+        if changed {
+            self.apply_sync_settings();
+        }
+    }
+
+    /// Sync Type, timecode options and Sync Delay of each port with its Sync switch on.
+    fn sync_options(&mut self, ui: &mut egui::Ui, inputs: &[String], outputs: &[String]) -> bool {
+        let legacy = self.settings.midi_input.clone();
+        let mut changed = false;
         ui.add_space(10.0);
         widgets::section_label(ui, "SYNC");
-        grid(ui, "surfaces", |ui| {
-            soon(ui, "Tempo Follower", "Off", "A16");
-            soon(ui, "Sync Output", "Off", "A16");
+        egui::Grid::new("sync_ports")
+            .num_columns(2)
+            .spacing([12.0, 4.0])
+            .show(ui, |ui| {
+                let mut any = false;
+                for name in inputs {
+                    let mut cfg = self.settings.remote.input(name, legacy.as_deref());
+                    if !cfg.sync {
+                        continue;
+                    }
+                    any = true;
+                    changed |= input_sync_row(ui, &mut cfg);
+                    self.settings.remote.set_input(cfg);
+                }
+                for name in outputs {
+                    let mut cfg = self.settings.remote.output(name);
+                    if !cfg.sync {
+                        continue;
+                    }
+                    any = true;
+                    label(ui, &format!("Out: {name}: Sync Delay (ms)"));
+                    changed |= ui
+                        .add(egui::DragValue::new(&mut cfg.sync_delay_ms).range(-1000.0..=1000.0))
+                        .changed();
+                    ui.end_row();
+                    self.settings.remote.set_output(cfg);
+                }
+                if !any {
+                    ui.label(RichText::new("No port has its Sync switch on").color(pal().text_dim));
+                    ui.end_row();
+                }
+            });
+        if changed {
+            self.settings.save();
+        }
+        changed
+    }
+
+    fn follower_options(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(10.0);
+        widgets::section_label(ui, "TEMPO FOLLOWER");
+        let channels = self.session.engine.shared.input_meters.len();
+        let mut changed = false;
+        let sync = &mut self.settings.sync;
+        grid(ui, "tempo_follower", |ui| {
+            label(ui, "Input Channel (Ext. In)");
+            let selected = sync
+                .follower_channel
+                .map_or("None".to_string(), |c| format!("{}", c + 1));
+            egui::ComboBox::from_id_salt("follower_channel")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    changed |= ui
+                        .selectable_value(&mut sync.follower_channel, None, "None")
+                        .changed();
+                    for c in 0..channels.min(16) as u16 {
+                        changed |= ui
+                            .selectable_value(
+                                &mut sync.follower_channel,
+                                Some(c),
+                                format!("{}", c + 1),
+                            )
+                            .changed();
+                    }
+                });
+            ui.end_row();
+            label(ui, "Show Tempo Follower Toggle");
+            changed |= ui.checkbox(&mut sync.show_follower_toggle, "").changed();
+            ui.end_row();
         });
+        if changed {
+            self.settings.save();
+            self.apply_sync_settings();
+        }
     }
 
     /// One row of the Control Surface table.
@@ -960,13 +1046,73 @@ fn channel_bank(
     changed
 }
 
-fn link_tab(ui: &mut egui::Ui) {
+/// One input port's sync options, and how far it has them from what it was.
+fn input_sync_row(ui: &mut egui::Ui, cfg: &mut crate::settings::MidiPortConfig) -> bool {
+    use crate::settings::SyncKind;
+    use rlive_core::sync::FrameRate;
+    let mut changed = false;
+    label(ui, &format!("In: {}", cfg.name));
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt(("sync_kind", cfg.name.clone()))
+            .selected_text(match cfg.sync_kind {
+                SyncKind::Clock => "MIDI Clock",
+                SyncKind::Timecode => "MIDI Timecode",
+            })
+            .show_ui(ui, |ui| {
+                changed |= ui
+                    .selectable_value(&mut cfg.sync_kind, SyncKind::Clock, "MIDI Clock")
+                    .changed();
+                changed |= ui
+                    .selectable_value(&mut cfg.sync_kind, SyncKind::Timecode, "MIDI Timecode")
+                    .changed();
+            });
+        if cfg.sync_kind == SyncKind::Timecode {
+            egui::ComboBox::from_id_salt(("mtc_rate", cfg.name.clone()))
+                .selected_text(cfg.mtc_rate.map_or("SMPTE All", FrameRate::label))
+                .show_ui(ui, |ui| {
+                    changed |= ui
+                        .selectable_value(&mut cfg.mtc_rate, None, "SMPTE All")
+                        .changed();
+                    for rate in FrameRate::ALL {
+                        changed |= ui
+                            .selectable_value(&mut cfg.mtc_rate, Some(rate), rate.label())
+                            .changed();
+                    }
+                });
+            ui.label("Offset (s)");
+            changed |= ui
+                .add(egui::DragValue::new(&mut cfg.mtc_offset).range(0.0..=86_400.0))
+                .changed();
+        }
+        ui.label("Delay (ms)");
+        changed |= ui
+            .add(egui::DragValue::new(&mut cfg.sync_delay_ms).range(-1000.0..=1000.0))
+            .changed();
+    });
+    ui.end_row();
+    changed
+}
+
+fn link_tab(ui: &mut egui::Ui, settings: &mut Settings) -> bool {
+    let mut changed = false;
     widgets::section_label(ui, "LINK");
+    if !crate::link_backend::available() {
+        ui.label(
+            RichText::new("Link isn't in this build: it is a GPL build option (--features link).")
+                .color(pal().text_dim),
+        );
+    }
+    let sync = &mut settings.sync;
     grid(ui, "link", |ui| {
-        soon_check(ui, "Show Link Toggle", false, "A16");
-        soon_check(ui, "Start Stop Sync", false, "A16");
+        label(ui, "Show Link Toggle");
+        changed |= ui.checkbox(&mut sync.show_link_toggle, "").changed();
+        ui.end_row();
+        label(ui, "Start Stop Sync");
+        changed |= ui.checkbox(&mut sync.start_stop_sync, "").changed();
+        ui.end_row();
         soon_check(ui, "Link Audio", false, "A16");
     });
+    changed
 }
 
 fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
@@ -974,6 +1120,7 @@ fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     let clip = &mut settings.clip;
     let record = &mut settings.record;
     let launch = &mut settings.launch;
+    let sync = &mut settings.sync;
     let session_automation = &mut settings.record_session_automation_in;
     let create_fades = &mut settings.create_fades;
     widgets::section_label(ui, "RECORD");
@@ -1018,6 +1165,9 @@ fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
         ui.end_row();
         label(ui, "Start Playback with Record");
         ui.checkbox(&mut record.start_playback_with_record, "");
+        ui.end_row();
+        label(ui, "Start Playback with Tap Tempo");
+        ui.checkbox(&mut sync.start_playback_with_tap, "");
         ui.end_row();
         label(ui, "Start Recording on Scene Launch");
         ui.checkbox(&mut record.start_recording_on_scene_launch, "");

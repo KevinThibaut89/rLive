@@ -68,6 +68,8 @@ const UNDO_SWEEP_FRAMES: usize = 16_384;
 /// would act on: tempo to set, and 1 to start or 2 to stop the song.
 pub const VIEW: ViewId = ViewId(0);
 pub const VIEW_LEN: usize = 10;
+/// Which value of the view is the tempo Set & Follow asks for, or 0.
+pub const TEMPO_REQUEST_SLOT: usize = 8;
 
 /// What the device is doing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

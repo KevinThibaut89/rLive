@@ -30,6 +30,15 @@ serde.workspace = true
 serde_json.workspace = true
 rtrb.workspace = true
 
+# Ableton Link. Off by default: the SDK is GPL-2.0-or-later, so a build with this feature on is
+# a GPL build. The default build does not compile or link any of it.
+[features]
+link = ["dep:rusty_link"]
+
+[dependencies.rusty_link]
+version = "0.4.9"
+optional = true
+
 [dev-dependencies]
 rlive-testkit.workspace = true
 hound.workspace = true

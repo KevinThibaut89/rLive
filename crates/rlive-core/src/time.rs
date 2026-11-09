@@ -1,3 +1,4 @@
+use crate::envelope;
 use serde::{Deserialize, Serialize};
 
 /// Ticks per quarter note. All musical positions are expressed in ticks.
@@ -184,17 +185,96 @@ fn ticks_per_second(bpm: f64) -> f64 {
     bpm / 60.0 * PPQ as f64
 }
 
-/// A tempo at a song position. Tempo ramps linearly in ticks to the next point; two points at
-/// the same tick make a step.
+/// A tempo at a song position. Tempo ramps to the next point; two points at the same tick make
+/// a step. `curve` bends the ramp with the shape every other envelope uses, so the map, the
+/// drawn automation and the engine all agree on what tempo plays where.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TempoPoint {
     pub tick: f64,
     pub bpm: f64,
+    /// Shape of the ramp to the next point, as in [`crate::envelope::curve_shape`].
+    pub curve: f32,
 }
 
 impl TempoPoint {
     pub fn new(tick: f64, bpm: f64) -> Self {
-        Self { tick, bpm }
+        Self {
+            tick,
+            bpm,
+            curve: 0.0,
+        }
+    }
+
+    /// A point whose ramp to the next one follows `curve`.
+    pub fn curved(tick: f64, bpm: f64, curve: f32) -> Self {
+        Self { tick, bpm, curve }
+    }
+}
+
+/// `bpm(x) = a + d * e^(k x)` with `x` running 0..1 over `len` ticks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TempoCurve {
+    a: f64,
+    d: f64,
+    k: f64,
+    len: f64,
+}
+
+impl TempoCurve {
+    fn new(from: f64, to: f64, k: f64, len: f64) -> Self {
+        let d = (to - from) / k.exp_m1();
+        Self {
+            a: from - d,
+            d,
+            k,
+            len,
+        }
+    }
+
+    fn x_of(&self, dt: f64) -> f64 {
+        (dt / self.len).clamp(0.0, 1.0)
+    }
+
+    fn bpm(&self, x: f64) -> f64 {
+        self.a + self.d * (self.k * x).exp()
+    }
+
+    /// Seconds to cover `x` of the segment: the integral of `60 / (PPQ * bpm)`.
+    fn seconds(&self, x: f64) -> f64 {
+        let scale = 60.0 * self.len / PPQ as f64;
+        let start = self.a + self.d;
+        if self.a.abs() <= 1e-9 * start.abs() {
+            // The tempo is a pure exponential: the general form below would divide by nothing.
+            return scale * (-(self.k * x)).exp_m1() / (-self.k * self.d);
+        }
+        scale * (self.k * x - (self.bpm(x) / start).ln()) / (self.k * self.a)
+    }
+
+    /// Ticks covered in `ds` seconds. There is no closed form, so this searches: Newton from a
+    /// straight-line guess, held inside the bracket so it can't run away.
+    fn ticks_over(&self, ds: f64) -> f64 {
+        let (mut lo, mut hi) = (0.0, 1.0);
+        let whole = self.seconds(1.0);
+        let mut x = (ds / whole).clamp(0.0, 1.0);
+        let scale = 60.0 * self.len / PPQ as f64;
+        for _ in 0..24 {
+            let err = self.seconds(x) - ds;
+            if err.abs() < 1e-12 {
+                break;
+            }
+            if err > 0.0 {
+                hi = x;
+            } else {
+                lo = x;
+            }
+            let next = x - err * self.bpm(x) / scale;
+            x = if next > lo && next < hi {
+                next
+            } else {
+                (lo + hi) / 2.0
+            };
+        }
+        x * self.len
     }
 }
 
@@ -206,11 +286,16 @@ struct TempoSeg {
     slope: f64,
     /// Seconds from tick 0 to `tick`.
     seconds: f64,
+    /// The shape of this ramp, when it isn't straight. `slope` is then only its average.
+    curve: Option<TempoCurve>,
 }
 
 impl TempoSeg {
     /// Seconds to cover `dt` ticks from the start of the segment.
     fn seconds_over(&self, dt: f64) -> f64 {
+        if let Some(c) = &self.curve {
+            return c.seconds(c.x_of(dt));
+        }
         if self.slope == 0.0 {
             dt / ticks_per_second(self.bpm)
         } else {
@@ -220,6 +305,9 @@ impl TempoSeg {
 
     /// Ticks covered in `ds` seconds from the start of the segment.
     fn ticks_over(&self, ds: f64) -> f64 {
+        if let Some(c) = &self.curve {
+            return c.ticks_over(ds);
+        }
         if self.slope == 0.0 {
             ds * ticks_per_second(self.bpm)
         } else {
@@ -284,6 +372,7 @@ impl TempoMap {
                 bpm: bpm.clamp(MIN_BPM, MAX_BPM),
                 slope: 0.0,
                 seconds: 0.0,
+                curve: None,
             }],
         }
     }
@@ -297,6 +386,7 @@ impl TempoMap {
             .map(|p| TempoPoint {
                 tick: p.tick.max(0.0),
                 bpm: p.bpm.clamp(MIN_BPM, MAX_BPM),
+                curve: p.curve,
             })
             .collect();
         if pts.is_empty() {
@@ -316,6 +406,7 @@ impl TempoMap {
                     bpm: p.bpm,
                     slope: 0.0,
                     seconds,
+                    curve: None,
                 });
                 break;
             };
@@ -324,11 +415,14 @@ impl TempoMap {
             if dt <= 0.0 {
                 continue;
             }
+            let k = f64::from(p.curve) * envelope::CURVE_STEEPNESS;
             let seg = TempoSeg {
                 tick: p.tick,
                 bpm: p.bpm,
                 slope: (q.bpm - p.bpm) / dt,
                 seconds,
+                curve: (k.abs() >= 1e-9 && q.bpm != p.bpm)
+                    .then(|| TempoCurve::new(p.bpm, q.bpm, k, dt)),
             };
             seconds += seg.seconds_over(dt);
             segs.push(seg);
@@ -351,6 +445,20 @@ impl TempoMap {
         constant
     }
 
+    /// One tempo for the whole song, whatever the map held before: what an override of the tempo
+    /// or an external clock does. Never allocates, so it can run on the audio thread; the points
+    /// come back when the map is rebuilt.
+    pub fn flatten(&mut self, bpm: f64) {
+        self.segs.truncate(1);
+        self.segs[0] = TempoSeg {
+            tick: 0.0,
+            bpm: bpm.clamp(MIN_BPM, MAX_BPM),
+            slope: 0.0,
+            seconds: 0.0,
+            curve: None,
+        };
+    }
+
     /// One tempo from `tick` on, as a launched scene sets. Whatever the map held after it is
     /// gone until the map is rebuilt. Never allocates, so it can run on the audio thread.
     pub fn hold_from(&mut self, tick: f64, bpm: f64) {
@@ -368,10 +476,12 @@ impl TempoMap {
                 bpm,
                 slope: 0.0,
                 seconds: seg.seconds + seg.seconds_over(dt),
+                curve: None,
             });
         } else {
             self.segs[i].bpm = bpm;
             self.segs[i].slope = 0.0;
+            self.segs[i].curve = None;
         }
     }
 
@@ -384,9 +494,11 @@ impl TempoMap {
     pub fn bpm_at(&self, tick: f64) -> f64 {
         let seg = &self.segs[self.index_at(tick)];
         if tick < seg.tick {
-            seg.bpm
-        } else {
-            seg.bpm + seg.slope * (tick - seg.tick)
+            return seg.bpm;
+        }
+        match &seg.curve {
+            Some(c) => c.bpm(c.x_of(tick - seg.tick)),
+            None => seg.bpm + seg.slope * (tick - seg.tick),
         }
     }
 
@@ -423,11 +535,43 @@ impl TempoMap {
                 until: seg.tick,
             };
         }
+        // A curved ramp has its slope at the position, good for the short blocks it is run in.
+        let slope = match &seg.curve {
+            Some(c) => c.k * (self.bpm_at(tick) - c.a) / c.len,
+            None => seg.slope,
+        };
         TempoRun {
             ticks_per_sample: ticks_per_sample(self.bpm_at(tick), sample_rate),
-            ramp: ticks_per_sample(seg.slope, sample_rate),
+            ramp: ticks_per_sample(slope, sample_rate),
             until: self.segs.get(i + 1).map_or(f64::INFINITY, |s| s.tick),
         }
+    }
+
+    /// Whether the tempo at `tick` is on a curved ramp, whose blocks need to stay short.
+    pub fn curved_at(&self, tick: f64) -> bool {
+        self.segs[self.index_at(tick)].curve.is_some()
+    }
+
+    /// How time runs over the `frames` samples from `tick`, ending exactly where the map says.
+    /// A curve is not an exponential, so the local [`run_at`](Self::run_at) drifts; this corrects
+    /// it for one short block so ticks can't wander from the map.
+    pub fn exact_run(&self, tick: f64, frames: usize, sample_rate: f64) -> TempoRun {
+        let mut run = self.run_at(tick, sample_rate);
+        if frames == 0 {
+            return run;
+        }
+        let end =
+            self.seconds_to_tick(self.tick_to_seconds(tick) + frames as f64 / sample_rate) - tick;
+        let at_end = ticks_per_sample(self.bpm_at(tick + end), sample_rate);
+        if end > 0.0 {
+            run.ramp = (at_end - run.ticks_per_sample) / end;
+            run.ticks_per_sample = if run.ramp == 0.0 {
+                end / frames as f64
+            } else {
+                end * run.ramp / (run.ramp * frames as f64).exp_m1()
+            };
+        }
+        run
     }
 }
 
@@ -903,6 +1047,97 @@ mod tests {
             1e-11,
         );
         close(run.frames_to(t - start), 8000.0, 1e-7);
+    }
+
+    #[test]
+    fn a_curved_ramp_plays_the_shape_every_envelope_shares() {
+        let curve = 0.7;
+        let map = TempoMap::new([
+            TempoPoint::curved(0.0, 100.0, curve),
+            TempoPoint::new(9600.0, 200.0),
+        ]);
+        assert!(map.curved_at(4000.0));
+        assert!(!map.curved_at(9600.0));
+        for i in 0..=100 {
+            let x = i as f64 / 100.0;
+            let tick = x * 9600.0;
+            close(
+                map.bpm_at(tick),
+                envelope::segment_value(100.0, 200.0, x, curve),
+                1e-9,
+            );
+        }
+    }
+
+    /// `map`'s seconds over its first `ticks`, by the midpoint rule from its own tempo.
+    fn integrated_seconds(map: &TempoMap, ticks: f64) -> f64 {
+        let n = 2_000_000;
+        let dt = ticks / n as f64;
+        (0..n)
+            .map(|i| dt / ticks_per_second(map.bpm_at((i as f64 + 0.5) * dt)))
+            .sum()
+    }
+
+    #[test]
+    fn a_curved_ramp_takes_the_integral_of_its_tempo() {
+        for curve in [-1.0f32, -0.6, 0.3, 1.0] {
+            let map = TempoMap::new([
+                TempoPoint::curved(0.0, 110.0, curve),
+                TempoPoint::new(7680.0, 60.0),
+                TempoPoint::new(9600.0, 60.0),
+            ]);
+            close(
+                map.tick_to_seconds(7680.0),
+                integrated_seconds(&map, 7680.0),
+                1e-5,
+            );
+        }
+    }
+
+    #[test]
+    fn seconds_round_trip_through_a_curve_in_both_directions() {
+        let map = TempoMap::new([
+            TempoPoint::curved(0.0, 90.0, 0.8),
+            TempoPoint::curved(3840.0, 170.0, -0.5),
+            TempoPoint::new(7680.0, 80.0),
+        ]);
+        for i in 0..4000 {
+            let tick = i as f64 * 2.3;
+            close(map.seconds_to_tick(map.tick_to_seconds(tick)), tick, 1e-6);
+        }
+    }
+
+    #[test]
+    fn an_exact_run_ends_where_the_map_says() {
+        let map = TempoMap::new([
+            TempoPoint::curved(0.0, 100.0, 1.0),
+            TempoPoint::new(19200.0, 300.0),
+        ]);
+        let sr = 48_000.0;
+        let mut tick = 123.0;
+        for _ in 0..2000 {
+            let run = map.exact_run(tick, 64, sr);
+            let next = tick + run.advance(64.0);
+            let want = map.seconds_to_tick(map.tick_to_seconds(tick) + 64.0 / sr);
+            close(next, want, 1e-8);
+            // The first sample of the block is at the map's tempo too.
+            close(
+                run.ticks_per_sample,
+                ticks_per_sample(map.bpm_at(tick), sr),
+                1e-3,
+            );
+            tick = next;
+        }
+    }
+
+    #[test]
+    fn flattening_a_map_never_needs_room() {
+        let mut map = ramped();
+        let cap = map.segs.capacity();
+        map.flatten(87.0);
+        assert!(map.is_constant());
+        assert_eq!(map.bpm_at(50_000.0), 87.0);
+        assert_eq!(map.segs.capacity(), cap);
     }
 
     #[test]

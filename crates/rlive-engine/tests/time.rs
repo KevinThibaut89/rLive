@@ -318,3 +318,107 @@ fn a_fresh_engine_runs_at_120_in_four_four() {
     let spaced = frames.iter().map(|i| *i as f64).collect::<Vec<_>>();
     assert_eq!(spaced[..4], [0.0, 24_000.0, 48_000.0, 72_000.0]);
 }
+
+#[test]
+fn a_division_that_no_longer_fits_falls_back_to_the_denominator() {
+    // 1/2 notes in 4/4, then a bar of 3/4, where a half note doesn't fit, then 4/4 again.
+    let bars = BarMap::new(sig(4, 4), [(3840, sig(3, 4)), (6720, sig(4, 4))]);
+    let (mut engine, mut h) = engine_with(TimeMaps {
+        tempo: TempoMap::constant(120.0),
+        bars,
+    });
+    send(&mut h, TransportCmd::SetMetronome(true));
+    send(
+        &mut h,
+        TransportCmd::SetMetronomeConfig(rlive_engine::MetronomeConfig {
+            division: Some(1920),
+            ..Default::default()
+        }),
+    );
+    send(&mut h, TransportCmd::Play);
+    let got = onsets(&run_blocks(&mut engine, (10_500.0 / 0.04) as usize, 256));
+    let ticks: Vec<f64> = got.iter().map(|(i, _)| (*i as f64 - 1.0) * 0.04).collect();
+    let want = [0.0, 1920.0, 3840.0, 4800.0, 5760.0, 6720.0, 8640.0];
+    assert_eq!(ticks.len(), want.len(), "{ticks:?}");
+    for (g, w) in ticks.iter().zip(want) {
+        assert!((g - w).abs() < 0.1, "{ticks:?}");
+    }
+}
+
+#[test]
+fn enable_only_while_recording_sounds_from_the_punch_in_point() {
+    let (mut engine, mut h) = create_engine(SR, BLOCK);
+    send(&mut h, TransportCmd::SetMetronome(true));
+    send(
+        &mut h,
+        TransportCmd::SetMetronomeConfig(rlive_engine::MetronomeConfig {
+            only_while_recording: true,
+            ..Default::default()
+        }),
+    );
+    assert!(h
+        .send(EngineCommand::Record(rlive_engine::RecordCmd::SetPunch {
+            punch_in: Some(1920.0),
+            punch_out: None,
+        }))
+        .is_ok());
+    assert!(h
+        .send(EngineCommand::Record(
+            rlive_engine::RecordCmd::SetRecording(true)
+        ))
+        .is_ok());
+    send(&mut h, TransportCmd::Play);
+    let got = onsets(&run_blocks(&mut engine, 72_000, 256));
+    // Clicks at 0 and beat 1 are silent, then beat 2 onwards, ticks 1920 and 2880.
+    let frames: Vec<usize> = got.iter().map(|(i, _)| i - 1).collect();
+    assert_eq!(frames, vec![48_000]);
+}
+
+#[test]
+fn each_sound_has_its_own_pitch_and_only_recording_without_recording_is_silent() {
+    let render = |sound: u8, only: bool| {
+        let (mut engine, mut h) = create_engine(SR, BLOCK);
+        send(&mut h, TransportCmd::SetMetronome(true));
+        send(
+            &mut h,
+            TransportCmd::SetMetronomeConfig(rlive_engine::MetronomeConfig {
+                sound,
+                division: None,
+                only_while_recording: only,
+            }),
+        );
+        send(&mut h, TransportCmd::Play);
+        run_blocks(&mut engine, 2000, 256)
+    };
+    let a = render(0, false);
+    let b = render(1, false);
+    assert!(a.iter().any(|s| s.abs() > 0.01));
+    assert_ne!(a, b, "the sound chooser is heard");
+    assert!(render(0, true).iter().all(|s| *s == 0.0));
+}
+
+#[test]
+fn the_preview_volume_sets_the_metronome_level() {
+    let peak = |cue_db: Option<f64>| {
+        let (mut engine, mut h) = create_engine(SR, BLOCK);
+        send(&mut h, TransportCmd::SetMetronome(true));
+        if let Some(db) = cue_db {
+            assert!(h
+                .send(EngineCommand::Param(rlive_engine::ParamCmd::Set {
+                    track: rlive_engine::TrackRef::Master,
+                    cell: rlive_engine::mix_cell::CUE_VOLUME,
+                    value: db,
+                    gesture: false,
+                }))
+                .is_ok());
+        }
+        send(&mut h, TransportCmd::Play);
+        // The second click: the first went out before the cell's value reached the mixer.
+        let audio = run_blocks(&mut engine, 26_000, 256);
+        audio[20_000..].iter().fold(0f32, |m, s| m.max(s.abs()))
+    };
+    let unity = peak(None);
+    assert_eq!(unity, peak(Some(0.0)));
+    let quieter = peak(Some(-6.0206));
+    assert!((quieter / unity - 0.5).abs() < 0.01, "{quieter} vs {unity}");
+}

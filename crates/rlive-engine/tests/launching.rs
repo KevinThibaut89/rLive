@@ -1534,3 +1534,81 @@ fn launching_and_following_never_allocate() {
         h.collect_garbage();
     }
 }
+
+#[test]
+fn notes_land_where_the_tempo_map_says_under_a_ramp_and_a_curve() {
+    for curve in [0.0f32, 0.8, -0.8] {
+        let tempo = TempoMap::new([
+            rlive_core::time::TempoPoint::curved(0.0, 80.0, curve),
+            rlive_core::time::TempoPoint::new(7680.0, 170.0),
+        ]);
+        let mut r = rig(vec![(0, beats_clip(8, 60, false))], vec![]);
+        r.cmd(EngineCommand::Transport(TransportCmd::SetTimeMaps(
+            Arc::new(TimeMaps {
+                tempo: tempo.clone(),
+                bars: BarMap::default(),
+            }),
+        )));
+        r.quantize(Quantize::None);
+        r.play(0);
+        r.cmd(EngineCommand::Transport(TransportCmd::Play));
+        let last = tempo.tick_to_seconds(7000.0) * SR;
+        r.run(last as usize + 4000);
+        let got = r.ons(60);
+        assert_eq!(got.len(), 8, "{got:?}");
+        for (beat, frame) in got.iter().enumerate() {
+            let due = tempo.tick_to_seconds(beat as f64 * 960.0) * SR;
+            assert!(
+                (*frame as f64 - due).abs() <= 1.5,
+                "curve {curve} beat {beat}: at {frame}, due {due}"
+            );
+        }
+    }
+}
+
+#[test]
+fn audio_starts_where_the_tempo_map_says_under_a_ramp() {
+    let tempo = TempoMap::new([
+        rlive_core::time::TempoPoint::curved(0.0, 90.0, 0.5),
+        rlive_core::time::TempoPoint::new(3840.0, 160.0),
+    ]);
+    let (mut engine, mut h) = create_engine(SR, BLOCK);
+    let id = TrackId::new();
+    let mut t = Box::new(TrackNode::new(id, BLOCK));
+    t.set_slot(0, Some(dc_clip(0.5, 4)));
+    let _ = h.send(EngineCommand::graph(GraphOp::AddTrack {
+        index: 0,
+        track: t,
+    }));
+    let _ = h.send(EngineCommand::Transport(TransportCmd::SetTimeMaps(
+        Arc::new(TimeMaps {
+            tempo: tempo.clone(),
+            bars: BarMap::default(),
+        }),
+    )));
+    let _ = h.send(EngineCommand::Transport(TransportCmd::SetQuantize(
+        Quantize::Beat,
+    )));
+    let _ = h.send(EngineCommand::Transport(TransportCmd::Play));
+    let (mut l, mut r) = (vec![0.0; BLOCK], vec![0.0; BLOCK]);
+    engine.process_stereo(&mut l, &mut r);
+    // Launched just after the start, so it waits for beat 2 and the ramp is what places it.
+    let _ = h.send(EngineCommand::Launch(LaunchCmd::LaunchClip {
+        track: id,
+        slot: 0,
+    }));
+    let due = tempo.tick_to_seconds(960.0) * SR;
+    let mut signal = Vec::new();
+    let total = due as usize + 4000;
+    let mut left = vec![0.0f32; total];
+    let mut right = vec![0.0f32; total];
+    for (cl, cr) in left.chunks_mut(BLOCK).zip(right.chunks_mut(BLOCK)) {
+        engine.process_stereo(cl, cr);
+    }
+    signal.extend_from_slice(&left);
+    let first = signal.iter().position(|s| s.abs() > 1e-6).unwrap() + BLOCK;
+    assert!(
+        (first as f64 - due).abs() <= 1.5,
+        "starts at {first}, due {due}"
+    );
+}

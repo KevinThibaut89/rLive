@@ -5,7 +5,6 @@ use super::grooves::grooved_warp;
 use super::modulators::{ModPlan, ModSlots};
 use super::ChainRef;
 use rlive_audio_io::{SampleCache, SampleStatus};
-use rlive_core::envelope::segment_value;
 use rlive_core::param::plugin_sidechain;
 use rlive_core::param::{chain as chain_controls, rack as rack_params, ClipParam, EnvTarget};
 use rlive_core::time::{BarMap, TempoMap, TempoPoint, TimeMaps};
@@ -109,9 +108,6 @@ impl DeviceRuntime {
     }
 }
 
-/// How many linear ramps a curved segment of the tempo envelope is drawn with.
-const CURVED_TEMPO_STEPS: usize = 32;
-
 /// The song's tempo and meter for the engine.
 pub fn time_maps(project: &Project) -> TimeMaps {
     let tempo = project.tempo_points_in_force();
@@ -142,21 +138,12 @@ pub(super) fn metronome_config(project: &Project) -> rlive_engine::MetronomeConf
     }
 }
 
-/// A tempo map only ramps linearly, so a curved segment becomes a run of short ones.
+/// The tempo envelope's points for the tempo map. A curved segment stays one curved segment.
 fn tempo_points(points: &[Breakpoint]) -> Vec<TempoPoint> {
-    let mut out = Vec::with_capacity(points.len());
-    for (i, p) in points.iter().enumerate() {
-        out.push(TempoPoint::new(p.time, p.value));
-        let Some(next) = points.get(i + 1).filter(|_| p.curve != 0.0) else {
-            continue;
-        };
-        for step in 1..CURVED_TEMPO_STEPS {
-            let x = step as f64 / CURVED_TEMPO_STEPS as f64;
-            let bpm = segment_value(p.value, next.value, x, p.curve);
-            out.push(TempoPoint::new(p.time + (next.time - p.time) * x, bpm));
-        }
-    }
-    out
+    points
+        .iter()
+        .map(|p| TempoPoint::curved(p.time, p.value, p.curve))
+        .collect()
 }
 
 /// How an envelope's time runs in its clip.
@@ -1231,7 +1218,7 @@ mod tests {
         start.curve = 1.0;
         p.arrangement.tempo.points = vec![start, Breakpoint::new(1920.0, 200.0)];
         let maps = time_maps(&p);
-        let want = segment_value(100.0, 200.0, 0.5, 1.0);
+        let want = rlive_core::envelope::segment_value(100.0, 200.0, 0.5, 1.0);
         assert!((maps.tempo.bpm_at(960.0) - want).abs() < 0.5);
         assert_eq!(maps.tempo.bpm_at(1920.0), 200.0);
     }

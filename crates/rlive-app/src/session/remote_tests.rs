@@ -768,14 +768,25 @@ fn a_mapped_scene_control_launches_through_the_engine_and_a_locator_seeks() {
 }
 
 #[test]
-fn sysex_goes_to_the_surfaces_and_clock_stays_for_the_sync_code() {
+fn sysex_goes_to_the_surfaces_and_clock_goes_to_the_engine() {
     let mut r = rig(Project::new_default());
     let on = Arc::new(PortSwitches::new(true, true, true));
     let mut p = r.s.remote.hub.open_port(1, r.routing.clone(), on);
     p.handle(&[0xf8]);
     p.handle(&[0xf0, 1, 2, 0xf7]);
     assert_eq!(r.routing.system.take_sysex(), vec![vec![0xf0, 1, 2, 0xf7]]);
-    assert_eq!(r.routing.system.drain(), vec![vec![0xf8]]);
+    assert!(
+        r.routing.system.drain().is_empty(),
+        "a Sync port's clock goes to the engine, not the queue"
+    );
+    assert!(r
+        .s
+        .remote
+        .hub
+        .shared
+        .lights
+        .sync_in
+        .swap(false, std::sync::atomic::Ordering::Relaxed));
     // Off, neither is kept.
     let off = Arc::new(PortSwitches::new(true, false, false));
     let mut q = r.s.remote.hub.open_port(2, r.routing.clone(), off);

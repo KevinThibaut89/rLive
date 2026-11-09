@@ -179,6 +179,27 @@ impl RliveApp {
             }
             C::StepForward if pressed => self.step_record(true),
             C::StepBack if pressed => self.step_record(false),
+            C::PhaseNudgeUp | C::PhaseNudgeDown => {
+                let held = match g {
+                    Gesture::Press(_) => true,
+                    Gesture::Absolute(v) => v > 0.5,
+                    _ => false,
+                };
+                let direction = i8::from(held) * if c == C::PhaseNudgeUp { 1 } else { -1 };
+                self.session.set_phase_nudge(direction);
+            }
+            C::ExternalSync => {
+                let on = self.session.external_sync();
+                if let Some(w) = Self::wants(g, on) {
+                    self.set_external_sync(w);
+                }
+            }
+            C::TempoFollower => {
+                let on = self.session.tempo_follower();
+                if let Some(w) = Self::wants(g, on) {
+                    self.set_tempo_follower(w);
+                }
+            }
             C::NudgeBack if pressed => self.nudge_selected(false, 1),
             C::NudgeForward if pressed => self.nudge_selected(true, 1),
             C::Scrub => {

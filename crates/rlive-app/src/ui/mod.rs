@@ -143,6 +143,8 @@ pub struct UiState {
     pub show_detail: bool,
     pub show_info: bool,
     pub computer_keys: bool,
+    /// Which way Phase Nudge is held: -1, 0 or 1.
+    phase_nudge: i8,
     pub octave: i32,
     /// Velocity the Computer MIDI Keyboard plays at, 0 to 1.
     pub key_velocity: f32,
@@ -178,7 +180,6 @@ pub struct UiState {
     pub mapping_row: Option<usize>,
     /// The time this frame started, in seconds.
     pub frame_time: f64,
-    tap_times: Vec<f64>,
     /// The hardware channels the In/Out choosers offer, from the Channel Configuration.
     pub hardware: AudioHardware,
 }
@@ -192,6 +193,8 @@ pub struct RliveApp {
     track_outs: midi_input::TrackOutputs,
     /// What it reads from.
     track_midi: midi_input::TrackMidiFeed,
+    /// What the engine's clock outputs read, swapped when audio restarts.
+    sync_out: midi_input::SyncFeed,
     settings: Settings,
     ui: UiState,
     last_frame: std::time::Instant,
@@ -327,6 +330,7 @@ impl UiState {
             show_detail: settings.show_detail.unwrap_or(true),
             show_info: settings.show_info,
             computer_keys: true,
+            phase_nudge: 0,
             octave: 3,
             key_velocity: 0.8,
             held: HashMap::new(),
@@ -352,7 +356,6 @@ impl UiState {
             midi_outputs: None,
             mapping_row: None,
             frame_time: 0.0,
-            tap_times: Vec::new(),
             hardware: AudioHardware::default(),
         }
     }
@@ -369,6 +372,7 @@ impl RliveApp {
             audio::start(settings.audio_device.as_deref(), &settings.audio_input);
         let sender = handle.take_midi_sender();
         let hw_midi = handle.take_hw_midi();
+        let hw_sync = handle.take_hw_sync();
         let plugins = PluginCache::load(&PluginCache::default_path());
         let skip_scan = rlive_plugin_host::alt_key_held();
         let request_scan = crate::settings::scan_at_launch(
@@ -399,6 +403,8 @@ impl RliveApp {
         let track_midi = midi_input::TrackMidiFeed::default();
         *track_midi.lock().unwrap() = hw_midi;
         midi_input::spawn_track_output(track_midi.clone(), track_outs.clone());
+        let sync_out = midi_input::SyncFeed::default();
+        *sync_out.lock().unwrap() = hw_sync;
         let repaint = cc.egui_ctx.clone();
         session
             .remote
@@ -435,6 +441,7 @@ impl RliveApp {
             routing,
             track_outs,
             track_midi,
+            sync_out,
             settings,
             ui,
             last_frame: std::time::Instant::now(),
@@ -531,7 +538,7 @@ impl RliveApp {
             } else {
                 None
             });
-            let connection = cfg.track.then(|| midi_input::connect_output(name).ok());
+            let connection = (cfg.track || cfg.sync).then(|| midi_input::connect_output(name).ok());
             track_outs.push(connection.flatten());
         }
         *self.track_outs.lock().unwrap() = track_outs;
@@ -544,6 +551,35 @@ impl RliveApp {
         });
         self.session.set_feedback_output(Some(Box::new(bank)));
         self.session.set_takeover(self.settings.remote.takeover);
+        self.apply_sync_settings();
+    }
+
+    /// The settings as what keeps time, for the session.
+    pub(crate) fn apply_sync_settings(&mut self) {
+        let legacy = self.settings.midi_input.clone();
+        let ports = self.settings.remote.sync_ports(
+            &midi_input::port_names(),
+            &midi_input::output_names(),
+            legacy.as_deref(),
+            self.settings.sync.follower_channel,
+        );
+        let sync = self.settings.sync.clone();
+        self.session.configure_sync(ports, &sync);
+        self.apply_link_setting();
+    }
+
+    /// Connects or disconnects the Link session the settings ask for.
+    fn apply_link_setting(&mut self) {
+        let want = self.settings.sync.link && crate::link_backend::available();
+        if want != self.session.link_enabled() {
+            let session = want.then(|| {
+                crate::link_backend::connect(
+                    self.session.project.tempo,
+                    self.settings.sync.start_stop_sync,
+                )
+            });
+            self.session.set_link(session.flatten());
+        }
     }
 
     fn restart_audio(&mut self) {
@@ -557,6 +593,9 @@ impl RliveApp {
         self.audio = audio;
         if let Some(rx) = handle.take_hw_midi() {
             *self.track_midi.lock().unwrap() = Some(rx);
+        }
+        if let Some(rx) = handle.take_hw_sync() {
+            *self.sync_out.lock().unwrap() = Some(rx);
         }
         self.session.replace_engine(handle);
         self.session.set_chase(self.settings.chase_notes);
@@ -923,20 +962,8 @@ impl RliveApp {
     }
 
     fn tap_tempo(&mut self, now: f64) {
-        let taps = &mut self.ui.tap_times;
-        if taps.last().is_some_and(|t| now - t > 2.0) {
-            taps.clear();
-        }
-        taps.push(now);
-        if taps.len() > 5 {
-            taps.remove(0);
-        }
-        if taps.len() >= 2 {
-            let avg = (taps[taps.len() - 1] - taps[0]) / (taps.len() - 1) as f64;
-            if avg > 0.0 {
-                self.session.set_tempo((60.0 / avg).clamp(20.0, 999.0));
-            }
-        }
+        let start = self.settings.sync.start_playback_with_tap;
+        self.session.tap_tempo(now, start);
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
@@ -1364,14 +1391,79 @@ impl RliveApp {
         };
     }
 
+    /// Hold-to-nudge: a change of state goes to the engine, and it's only worth saying once.
+    fn drive_phase_nudge(&mut self, down: bool, up: bool) {
+        let direction = i8::from(up) - i8::from(down);
+        if direction != self.ui.phase_nudge {
+            self.ui.phase_nudge = direction;
+            self.session.set_phase_nudge(direction);
+        }
+    }
+
+    /// EXT, Follow and Link, each only where it can do something.
+    fn sync_toggles(&mut self, lu: &mut egui::Ui, h: f32) {
+        if self.session.external_sync_available() {
+            let on = self.session.external_sync();
+            let r = widgets::state_button(lu, Vec2::new(30.0, h), on, pal().accent, "EXT");
+            remote_map::overlay(lu, r.rect, MapTarget::Control(RemoteControl::ExternalSync));
+            if info(r, "External Sync — follow MIDI Clock or timecode").clicked() {
+                self.set_external_sync(!on);
+            }
+        }
+        if self.settings.sync.show_follower_toggle {
+            let on = self.session.tempo_follower();
+            let available = self.session.follower_available();
+            let r = lu
+                .add_enabled_ui(available, |ui| {
+                    widgets::state_button(ui, Vec2::new(40.0, h), on, pal().accent, "Follow")
+                })
+                .inner;
+            remote_map::overlay(lu, r.rect, MapTarget::Control(RemoteControl::TempoFollower));
+            if info(r, "Tempo Follower — follow the tempo of an audio input").clicked() {
+                self.set_tempo_follower(!on);
+            }
+        }
+        if crate::link_backend::available() && self.settings.sync.show_link_toggle {
+            let on = self.session.link_enabled();
+            let label = match self.session.link_peers() {
+                0 => "Link".to_string(),
+                peers => format!("Link {peers}"),
+            };
+            let r = widgets::state_button(lu, Vec2::new(44.0, h), on, pal().accent, &label);
+            if info(r, "Ableton Link — keep in time with other apps").clicked() {
+                self.settings.sync.link = !self.settings.sync.link;
+                self.settings.save();
+                self.apply_link_setting();
+            }
+        }
+    }
+
+    pub(crate) fn set_external_sync(&mut self, on: bool) {
+        self.session.set_external_sync(on);
+        self.settings.sync.external = self.session.external_sync();
+        self.settings.save();
+    }
+
+    pub(crate) fn set_tempo_follower(&mut self, on: bool) {
+        self.session.set_tempo_follower(on);
+        self.settings.sync.follower = self.session.tempo_follower();
+        self.settings.sync.external = self.session.external_sync();
+        self.settings.save();
+    }
+
     /// The menu next to the metronome.
     fn metronome_menu(&mut self, ui: &mut egui::Ui) {
         let session = &mut self.session;
         let mut o = session.project.metronome_options;
-        let sig = session.project.time_signature;
+        let tick = session.engine.shared.tick.load();
+        let sig = session.project.bar_map().signature_at(tick);
         ui.label("Count-In");
+        // Link has its own launch point (manual p. 976).
+        let can_count_in = !session.link_enabled();
         for (bars, label) in [(0u8, "None"), (1, "1 Bar"), (2, "2 Bars"), (4, "4 Bars")] {
-            ui.selectable_value(&mut o.count_in, bars, label);
+            ui.add_enabled_ui(can_count_in || bars == 0, |ui| {
+                ui.selectable_value(&mut o.count_in, bars, label);
+            });
         }
         ui.separator();
         ui.label("Sound");
@@ -1423,24 +1515,71 @@ impl RliveApp {
             let now = lu.input(|i| i.time);
             self.tap_tempo(now);
         }
-        let mut tempo = self.session.project.tempo;
+        let nudge = |lu: &mut egui::Ui, label: &str, tip: &str| {
+            let r = widgets::state_button(lu, Vec2::new(14.0, h), false, pal().accent, label);
+            info(r, tip)
+        };
+        let down = nudge(&mut lu, "-", "Phase Nudge Down — slows playback while held");
+        let up = nudge(
+            &mut lu,
+            "+",
+            "Phase Nudge Up — speeds playback up while held",
+        );
+        remote_map::overlay(
+            &lu,
+            down.rect,
+            MapTarget::Control(RemoteControl::PhaseNudgeDown),
+        );
+        remote_map::overlay(
+            &lu,
+            up.rect,
+            MapTarget::Control(RemoteControl::PhaseNudgeUp),
+        );
+        self.drive_phase_nudge(
+            down.is_pointer_button_down_on(),
+            up.is_pointer_button_down_on(),
+        );
+        let timed = self.session.tempo_field_locked()
+            || self.session.tempo_overridden()
+            || self.session.link_enabled();
+        let shown = if timed && !self.session.tempo_is_led() {
+            self.session.engine.shared.tempo.load()
+        } else {
+            self.session.project.tempo
+        };
+        let mut coarse = shown.floor();
+        let mut fine = ((shown - coarse) * 100.0).round();
+        let locked = self.session.tempo_field_locked();
         let led = self.session.tempo_is_led();
-        let r = lu
-            .add_enabled_ui(!led, |ui| {
-                ui.add_sized(
-                    [70.0, h],
-                    egui::DragValue::new(&mut tempo)
+        let (r, f) = lu
+            .add_enabled_ui(!locked, |ui| {
+                let r = ui.add_sized(
+                    [46.0, h],
+                    egui::DragValue::new(&mut coarse)
                         .range(20.0..=999.0)
                         .speed(0.25)
-                        .fixed_decimals(2),
-                )
+                        .fixed_decimals(0),
+                );
+                let f = ui.add_sized(
+                    [28.0, h],
+                    egui::DragValue::new(&mut fine)
+                        .range(0.0..=99.0)
+                        .speed(0.5)
+                        .fixed_decimals(0),
+                );
+                (r, f)
             })
             .inner;
         remote_map::overlay(&lu, r.rect, MapTarget::Param(tempo_param()));
-        if r.changed() {
-            self.session.set_tempo(tempo);
+        remote_map::overlay(
+            &lu,
+            f.rect,
+            MapTarget::Param(crate::session::transport_fine()),
+        );
+        if r.changed() || f.changed() {
+            self.session.set_tempo(coarse + fine / 100.0);
         }
-        let field = r.rect;
+        let field = r.rect.union(f.rect);
         info(r, "Tempo (BPM) — drag or double-click to type");
         // A deactivated field takes no clicks, so the menu is on the place it sits.
         lu.interact(
@@ -1508,6 +1647,7 @@ impl RliveApp {
         );
         let r = info(r, "Metronome Settings — count-in, sound and beat division");
         egui::Popup::menu(&r).show(|ui| self.metronome_menu(ui));
+        self.sync_toggles(&mut lu, h);
         let draw = self.ui.arr.auto.draw;
         let r = widgets::state_button(&mut lu, Vec2::new(38.0, h), draw, pal().accent, "Draw");
         if info(
@@ -1519,7 +1659,8 @@ impl RliveApp {
             self.ui.arr.auto.draw = !draw;
         }
 
-        if !narrow {
+        // What's left of the left half: never over the transport buttons.
+        if !narrow && lu.available_width() > 170.0 {
             lu.add_space(6.0);
             self.follow_and_loop_fields(&mut lu, h);
         }
@@ -1731,6 +1872,15 @@ impl RliveApp {
                 pal().text
             },
         );
+        // With Link peers around, how far to the launch point everyone shares.
+        if self.session.link_peers() > 0 && !playing {
+            let phase = self.session.engine.shared.link_phase.load() as f32;
+            let bar = Rect::from_min_size(
+                Pos2::new(pr.left(), pr.bottom() - 2.0),
+                Vec2::new(pr.width() * phase.clamp(0.0, 1.0), 2.0),
+            );
+            cu.painter().rect_filled(bar, 0.0, pal().accent);
+        }
         info(r, "Song Position — the playhead, as bar . beat . sixteenth");
         cu.add_space(6.0);
         let r = widgets::state_button(

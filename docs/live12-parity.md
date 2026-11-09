@@ -36,7 +36,7 @@ Features that rLive already had when this list was created stay `[ ]` until thei
 - `[x]` Auto track colours, default colour, reduced palette; new clips random or track colour [S]
 - `[ ]` Audio: driver type, CoreAudio/ASIO, device I/O, sample rate, latency, calibration tests [M]; macOS follow-system output [S]
 - `[ ]` Link and Link Audio configuration [L PROP] → ch. 37
-- `[ ]` Tempo & MIDI: per-port roles for notes, sync, remote; resync hardware to clock [M] → chs. 34, 37
+- `[~]` Tempo & MIDI: per-port roles for notes, sync, remote; resync hardware to clock [M] → chs. 34, 37
 - `[ ]` File & Folder: analysis files toggle, external sample editor, temp folder, cache options [S each]; Max application choice [S MAX]
 - `[ ]` Library: install and User Library locations, collect-on-export policy, show/hide Cloud/Push/Splice [S]
 - `[ ]` Plug-Ins: folder locations, enabled folders, window behaviour [M]
@@ -310,11 +310,11 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** A7, A9, A10
 
-- `[ ]` Tempo field coarse and fine, separately mappable, automatable [M]
-- `[ ]` Tap Tempo, mappable; Start Playback with Tap Tempo, four taps in 4/4, Link-aligned [S]
-- `[ ]` Phase Nudge Up/Down [S]
+- `[x]` Tempo field coarse and fine, separately mappable, automatable [M]
+- `[~]` Tap Tempo, mappable; Start Playback with Tap Tempo, four taps in 4/4, Link-aligned [S]
+- `[x]` Phase Nudge Up/Down [S]
 - `[~]` Tempo Leader clips (Arrangement): Set follows markers, field disabled, bottom track wins [L]
-- `[ ]` Leader-generated non-editable automation; Unfollow Tempo Automation; overrides Tempo Follower; disabled under EXT [M]
+- `[x]` Leader-generated non-editable automation; Unfollow Tempo Automation; overrides Tempo Follower; disabled under EXT [M]
 - `[x]` Warp toggle; beat-synced follow [XL] → stretch engine, tempo map
 - `[~]` Short sample default: Unwarped One Shot, Warped One Shot, Warped Loop, Auto (default) [M]
 - `[~]` Auto-Warp Long Samples default on; marker on each bar [XL PROP] → tempo/beat tracking
@@ -1193,13 +1193,13 @@ Adds to Push 1:
 **Milestones:** A16
 
 
-- `[ ]` Link tempo, beat and phase over network; peers join and leave; last tempo change wins; overrides tempo automation; count-in disabled; progress bar while waiting [L] {SVC: Ableton technology; SDK licensing is outside this manual}
-- `[ ]` Start Stop Sync; peer count; hideable toggle [S] {SVC}
+- `[~]` Link tempo, beat and phase over network; peers join and leave; last tempo change wins; overrides tempo automation; count-in disabled; progress bar while waiting [L] {SVC: Ableton technology; SDK licensing is outside this manual}
+- `[~]` Start Stop Sync; peer count; hideable toggle [S] {SVC}
 - `[ ]` Link Audio streaming; peers as input types; name, latency, Sync to Incoming Audio for one peer [XL] {SVC}
-- `[ ]` Tempo Follower from an audio input; excludes External Sync but can still send clock [L] {ML?}
-- `[ ]` MIDI Clock send and receive, song position, loop wrapping [M]
-- `[ ]` MIDI Timecode receive only, frame rates, SMPTE All, offset [M]
-- `[ ]` Sync Delay per device [S]
+- `[~]` Tempo Follower from an audio input; excludes External Sync but can still send clock [L] {ML?}
+- `[~]` MIDI Clock send and receive, song position, loop wrapping [M]
+- `[~]` MIDI Timecode receive only, frame rates, SMPTE All, offset [M]
+- `[~]` Sync Delay per device [S]
 
 Dependencies: audio clock, launch quantisation; Link and Follower drive tempo.
 

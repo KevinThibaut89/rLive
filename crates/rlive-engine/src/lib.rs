@@ -22,6 +22,7 @@ pub mod modulation;
 pub mod params;
 pub mod rack;
 pub mod shared;
+pub mod sync;
 pub mod taps;
 pub mod track;
 
@@ -30,7 +31,7 @@ pub use automation::MacroRoute;
 pub use automation::{ClipEnvAction, ClipLane, ClipRoutes};
 pub use capture::{capture_pair, CaptureSink, CaptureTail, Chunk as CaptureChunk};
 use capture::{CaptureBlock, CaptureMode, InputSource};
-use clip::BlockTime;
+pub(crate) use clip::BlockTime;
 pub use clip::{
     velocity_gain, AudioClip, ClipCurve, ClipData, ClipEnvelopes, EnvCurve, EnvTiming,
     EnvelopedClip, ExprPoint, FrozenClip, MidiClip, Note, NoteExpression, PlayGroup, ProgramChange,
@@ -58,6 +59,7 @@ pub use params::{
 pub use rack::{
     ChainMix, ChainNode, DrumPad, PreviewNote, RackKind, RackNode, Zone, Zones, MAX_CHAINS,
 };
+use rlive_core::sync::SyncMessage;
 use rlive_core::{
     db_to_gain,
     time::{BarMap, TempoRun, TimeMaps},
@@ -67,6 +69,7 @@ use shared::EngineShared;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
+use sync::{HwSync, SyncStamp};
 use track::BlockCtx;
 pub use track::{DeviceBody, DeviceSlot, MixSettings, RackOuts, TrackNode, MAX_SCENES};
 
@@ -77,9 +80,12 @@ const COMMAND_CAPACITY: usize = 4096;
 const GARBAGE_CAPACITY: usize = 4096;
 const EVENT_CAPACITY: usize = 8192;
 const MIDI_CAPACITY: usize = 2048;
+/// Longest block on a curved tempo ramp.
+const CURVED_BLOCK_FRAMES: usize = 64;
 const PLAYED_CAPACITY: usize = 2048;
 const REMOTE_CAPACITY: usize = 2048;
 const HW_MIDI_CAPACITY: usize = 4096;
+const SYNC_IN_CAPACITY: usize = 4096;
 
 /// Mapped controller input, on its way from the MIDI thread straight to the audio thread.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -110,6 +116,7 @@ pub enum RemoteCmd {
 pub struct MidiSender {
     producer: rtrb::Producer<(TrackId, MidiMessage, Instant)>,
     remote: rtrb::Producer<RemoteCmd>,
+    sync: rtrb::Producer<(SyncMessage, SyncStamp)>,
 }
 
 impl MidiSender {
@@ -292,6 +299,7 @@ pub struct EngineHandle {
     garbage: rtrb::Consumer<Garbage>,
     /// What tracks send to hardware MIDI, until [`Self::take_hw_midi`].
     hw_midi: Option<rtrb::Consumer<HwMidi>>,
+    hw_sync: Option<rtrb::Consumer<HwSync>>,
     events: rtrb::Consumer<EngineEvent>,
     played: rtrb::Consumer<PlayedNote>,
     pub shared: Arc<EngineShared>,
@@ -332,6 +340,11 @@ impl EngineHandle {
     /// What tracks send to hardware MIDI, handed out once to whoever owns the ports.
     pub fn take_hw_midi(&mut self) -> Option<rtrb::Consumer<HwMidi>> {
         self.hw_midi.take()
+    }
+
+    /// The clock messages sync ports send, handed out once to whoever owns the ports.
+    pub fn take_hw_sync(&mut self) -> Option<rtrb::Consumer<HwSync>> {
+        self.hw_sync.take()
     }
 
     /// The next note played since the last call.
@@ -409,6 +422,8 @@ pub(crate) struct CountIn {
 struct Metronome {
     enabled: bool,
     config: MetronomeConfig,
+    /// The mixer's Preview Volume, which is the metronome's volume too.
+    gain: f32,
     phase: f32,
     remaining: usize,
     freq: f32,
@@ -427,7 +442,9 @@ impl Metronome {
         if step <= 0.0 || (bar_len / step).fract() != 0.0 {
             return bars.first_beat(tick);
         }
-        let n = ((tick.max(bar.start) - bar.start) / step - 1e-6)
+        // The tolerance is in ticks: dividing it by a long step would swallow the nudge that
+        // moves past a click, and the block would never get past that click.
+        let n = ((tick.max(bar.start) - bar.start - 1e-6) / step)
             .ceil()
             .max(0.0);
         let at = bar.start + n * step;
@@ -550,7 +567,7 @@ impl Metronome {
                 return;
             }
             let env = self.remaining as f32 / len.max(1) as f32;
-            let s = (self.phase * std::f32::consts::TAU).sin() * self.amp * env * env;
+            let s = (self.phase * std::f32::consts::TAU).sin() * self.amp * env * env * self.gain;
             self.phase = (self.phase + self.freq / sr).fract();
             left[i] += s;
             right[i] += s;
@@ -654,6 +671,8 @@ pub struct Engine {
     midi: rtrb::Consumer<(TrackId, MidiMessage, Instant)>,
     remote: rtrb::Consumer<RemoteCmd>,
     shared: Arc<EngineShared>,
+    /// MIDI Clock, timecode, Tempo Follower and Link.
+    sync: sync::SyncState,
 }
 
 /// Create an engine and its UI handle.
@@ -665,6 +684,8 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
     let (hw_tx, hw_rx) = rtrb::RingBuffer::new(HW_MIDI_CAPACITY);
     let (midi_tx, midi_rx) = rtrb::RingBuffer::new(MIDI_CAPACITY);
     let (remote_tx, remote_rx) = rtrb::RingBuffer::new(REMOTE_CAPACITY);
+    let (sync_tx, sync_rx) = rtrb::RingBuffer::new(SYNC_IN_CAPACITY);
+    let (hw_sync_tx, hw_sync_rx) = rtrb::RingBuffer::new(HW_MIDI_CAPACITY);
     let shared = Arc::new(EngineShared::default());
     shared.sample_rate.store(sample_rate);
     let engine = Engine {
@@ -719,6 +740,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         metronome: Metronome {
             enabled: false,
             config: MetronomeConfig::default(),
+            gain: 1.0,
             phase: 0.0,
             remaining: 0,
             freq: 880.0,
@@ -741,11 +763,13 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         midi: midi_rx,
         remote: remote_rx,
         shared: shared.clone(),
+        sync: sync::SyncState::new(sample_rate, sync_rx, hw_sync_tx),
     };
     let handle = EngineHandle {
         commands: cmd_tx,
         garbage: gb_rx,
         hw_midi: Some(hw_rx),
+        hw_sync: Some(hw_sync_rx),
         events: ev_rx,
         played: played_rx,
         shared,
@@ -754,6 +778,7 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         midi: Some(MidiSender {
             producer: midi_tx,
             remote: remote_tx,
+            sync: sync_tx,
         }),
     };
     (engine, handle)
@@ -903,6 +928,7 @@ impl Engine {
             }
         }
         let delta = to - self.tick;
+        self.sync.note_jump();
         self.tick = to;
         self.record_floor = to;
         self.reached_loop_end = false;
@@ -963,6 +989,7 @@ impl Engine {
         while let Ok(cmd) = self.commands.pop() {
             self.handle_command(cmd);
         }
+        self.drain_sync();
     }
 
     /// Mapped controller input that came straight from the MIDI thread.
@@ -1124,6 +1151,12 @@ impl Engine {
         if !self.playing || !run.until.is_finite() {
             return n;
         }
+        // Within a curve, blocks stay short so everything placed in them keeps the map's time.
+        let n = if self.maps.tempo.curved_at(self.tick) {
+            n.min(CURVED_BLOCK_FRAMES)
+        } else {
+            n
+        };
         let frames = self.frames_until(run.until, run);
         if frames > 0 {
             return n.min(frames);
@@ -1142,6 +1175,7 @@ impl Engine {
         let started = std::time::Instant::now();
         self.midi_sink.begin_buffer(started);
         let total = io.outputs.iter().map(|o| o.len()).min().unwrap_or(0);
+        self.run_follower(io.inputs, total);
         for (meter, input) in self.shared.input_meters.iter().zip(io.inputs) {
             meter.store_max(input.iter().fold(0f32, |m, s| m.max(s.abs())));
         }
@@ -1156,6 +1190,7 @@ impl Engine {
                 done += n;
                 continue;
             }
+            self.run_sync();
             let mut run = self.tempo_run();
             self.run_timed_events(&mut run);
             self.wrap_at_loop_end(&mut run);
@@ -1174,6 +1209,14 @@ impl Engine {
                 .and_then(|(_, end)| (self.frames_until(end, &run) <= n).then_some(end));
             if let Some(end) = loop_end {
                 n = self.frames_until(end, &run).max(1);
+            }
+            if self.playing && self.maps.tempo.curved_at(self.tick) {
+                run = self.maps.tempo.exact_run(self.tick, n, self.sample_rate);
+            }
+            let rate = self.sync.rate();
+            if rate != 1.0 && self.playing {
+                run.ticks_per_sample *= rate;
+                run.ramp *= rate;
             }
             self.process_block(io.inputs, io.outputs, done, n, run, loop_end);
             done += n;
@@ -1301,6 +1344,7 @@ impl Engine {
         self.run_captures(plan, inputs, start, time);
         self.write_outputs(plan, outputs, start, frames, &time);
         self.send_hw_midi();
+        self.emit_clock(time);
         self.plans = plans;
         self.mods.end_block();
         self.clock += frames as u64;
@@ -1538,6 +1582,7 @@ impl Engine {
         let to = step.track as usize;
         if to == self.tracks.len() {
             let click_from = self.click_from();
+            self.metronome.gain = db_to_gain(self.master.mix.cue_db);
             let t = &mut *self.master;
             let (l, r) = (&mut t.left[..frames], &mut t.right[..frames]);
             for input in &step.inputs {

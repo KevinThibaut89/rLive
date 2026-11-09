@@ -40,6 +40,7 @@ mod render;
 mod routing;
 mod samples;
 mod sampling;
+pub mod sync;
 mod takes;
 mod timing;
 mod tracks;
@@ -85,6 +86,8 @@ mod routing_tests;
 #[cfg(test)]
 mod sample_tests;
 #[cfg(test)]
+mod sync_tests;
+#[cfg(test)]
 mod takes_tests;
 #[cfg(test)]
 mod tests;
@@ -106,6 +109,7 @@ pub use launch::{set_follow_on, signature_is_valid, LaunchDefaults};
 pub use presets::{SwapItem, SwapTarget};
 pub use rack_edit::PadDrop;
 pub use racks::{ExtractNotes, MacroDisplay, ZoneKind};
+pub(crate) use remote::transport_fine;
 pub use remote::{MapMode, MappingRow, RemotePorts, RemoteState};
 pub use render::JobStatus;
 pub use rlive_audio_io::SampleCache;
@@ -168,6 +172,8 @@ pub struct Session {
     clip_jobs: clip_files::ClipJobs,
     /// A held scrub on a timeline clip: the song tick to go back to and every how many ticks.
     arr_scrub: Option<(f64, f64)>,
+    /// Who is keeping time: the tempo override, recording, MIDI sync and Link.
+    sync: sync::SyncRuntime,
     /// The tempo automation the Arrangement's leader clips generate, if there are any.
     leader_points: Vec<rlive_project::Breakpoint>,
     /// Long samples whose new clips are waiting for beat tracking to finish.
@@ -261,6 +267,7 @@ impl Session {
             samples: SampleCache::default(),
             midi_targets: Arc::new(Mutex::new(Vec::new())),
             midi_out_ports: Vec::new(),
+            sync: Default::default(),
             mpe_ports: std::collections::HashSet::new(),
             messages: Vec::new(),
             dirty: false,
@@ -417,6 +424,7 @@ impl Session {
             master,
         }]);
         self.leader_points = self.project.leader_tempo_points();
+        self.resend_sync();
         let p = &self.project;
         let rate = self.clip_defaults.update_rate;
         let cmds = [
@@ -462,6 +470,7 @@ impl Session {
     pub fn new_project(&mut self) {
         self.render_job = None;
         self.delete_discarded_files();
+        self.forget_tempo_override();
         self.project = Project::new_default();
         self.samples.forget_failed();
         self.history = History::new(&self.project);
@@ -475,6 +484,7 @@ impl Session {
         let p = Project::load(path).map_err(|e| e.to_string())?;
         self.render_job = None;
         self.delete_discarded_files();
+        self.forget_tempo_override();
         self.project = p;
         self.find_relative_paths(path);
         self.samples.forget_failed();
@@ -550,6 +560,7 @@ impl Session {
             self.sync_device_outputs();
         }
         self.poll_remote();
+        self.poll_looper_tempo();
         self.engine.collect_garbage();
         self.poll_samples();
         self.poll_preview();
@@ -612,6 +623,7 @@ impl Session {
                     self.slot_record_ended(track, slot, tick)
                 }
                 EngineEvent::Jumped { from, to } => {
+                    self.finish_tempo_stroke(from);
                     self.launch_log_jumped(from, to);
                     if let Some(r) = self.recording.as_mut() {
                         r.jumped(from, to);
@@ -620,6 +632,7 @@ impl Session {
                     self.automation_jumped(from, to);
                 }
                 EngineEvent::RecordingStopped { tick } => {
+                    self.finish_tempo_stroke(tick);
                     self.close_launch_log(tick);
                     self.recording_stopped(tick);
                     self.finish_automation_pass(tick);

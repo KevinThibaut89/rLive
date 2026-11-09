@@ -3,6 +3,7 @@
 //! told afterwards so the project can catch up.
 
 use rlive_core::param::ParamRef;
+use rlive_core::sync::parse_sync;
 use rlive_core::{MidiMessage, MpeDecoder, TrackId};
 use rlive_engine::{CellIx, MidiSender, RemoteCmd, TrackRef};
 use rlive_project::MapTarget;
@@ -31,8 +32,7 @@ impl SystemMessages {
         queue.push_back(bytes.to_vec());
     }
 
-    /// Takes the System Exclusive messages, for the control surfaces. Clock and the rest stay
-    /// where they are for the sync code (A16).
+    /// Takes the System Exclusive messages, for the control surfaces. Sync goes elsewhere.
     pub fn take_sysex(&self) -> Vec<Vec<u8>> {
         let mut queue = self.0.lock().unwrap();
         let mut taken = Vec::new();
@@ -317,10 +317,17 @@ impl RemotePort {
             let is_sysex = bytes.first() == Some(&0xf0);
             let remote = self.switches.remote.load(Ordering::Relaxed);
             let sync = self.switches.sync.load(Ordering::Relaxed);
-            if (is_sysex && remote) || (!is_sysex && sync) {
-                if !is_sysex {
+            if sync {
+                if let Some(message) = parse_sync(bytes) {
                     shared.lights.sync_in.store(true, Ordering::Relaxed);
+                    if let Some(sender) = self.routing.sender.lock().unwrap().as_mut() {
+                        sender.send_sync(message);
+                    }
+                    shared.wake();
+                    return;
                 }
+            }
+            if is_sysex && remote {
                 self.routing.system.push(bytes);
                 shared.wake();
             }
@@ -500,6 +507,36 @@ pub fn spawn_track_output(feed: TrackMidiFeed, outputs: TrackOutputs) {
         .spawn(run)
     {
         log::warn!("track MIDI output: {e}");
+    }
+}
+
+/// Where the sync output thread reads clock from.
+pub type SyncFeed = Arc<Mutex<Option<rtrb::Consumer<rlive_engine::sync::HwSync>>>>;
+
+/// Plays what the engine sends to sync ports, when it is due. Never touched by the audio thread.
+pub fn spawn_sync_output(feed: SyncFeed, outputs: TrackOutputs, lights: Arc<RemoteShared>) {
+    let run = move || loop {
+        let next = feed.lock().unwrap().as_mut().and_then(|c| c.pop().ok());
+        let Some(m) = next else {
+            std::thread::sleep(OUTPUT_POLL);
+            continue;
+        };
+        let due = m.block + std::time::Duration::from_secs_f64(m.offset);
+        let now = std::time::Instant::now();
+        if due > now {
+            std::thread::sleep((due - now).min(MAX_OUTPUT_WAIT));
+        }
+        if let Some(Some(c)) = outputs.lock().unwrap().get_mut(m.port as usize) {
+            if c.send(&m.bytes[..m.len as usize]).is_ok() {
+                lights.lights.sync_out.store(true, Ordering::Relaxed);
+            }
+        }
+    };
+    if let Err(e) = std::thread::Builder::new()
+        .name("rlive-sync-midi".into())
+        .spawn(run)
+    {
+        log::warn!("sync MIDI output: {e}");
     }
 }
 

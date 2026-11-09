@@ -1582,7 +1582,8 @@ fn clip_context_menu(ui: &mut egui::Ui, session: &mut Session, state: &mut UiSta
             ui.close();
         }
         let leading = session.arr_is_leading(&state.arr.selection);
-        let can_lead = leading || session.arr_can_lead(&state.arr.selection);
+        let can_lead =
+            !session.externally_timed() && (leading || session.arr_can_lead(&state.arr.selection));
         let label = if leading {
             "Follow Tempo"
         } else {

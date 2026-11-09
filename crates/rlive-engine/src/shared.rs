@@ -141,6 +141,16 @@ pub struct EngineShared {
     pub input_meters: [AtomicF32; 64],
     /// How far through its file the browser preview is, 0..1, or negative when it isn't sounding.
     pub preview_position: AtomicF32,
+    /// What MIDI Clock says the tempo is, or 0 with no clock.
+    pub external_tempo: AtomicF64,
+    /// What Tempo Follower last heard, in BPM, or 0.
+    pub follower_tempo: AtomicF64,
+    /// Tempo Follower has the input it was told to listen to.
+    pub follower_connected: AtomicBool,
+    /// Other peers in the Link session.
+    pub link_peers: AtomicU32,
+    /// How far through the Link quantum the session is, `0..1`.
+    pub link_phase: AtomicF64,
 }
 
 impl Default for EngineShared {
@@ -158,6 +168,11 @@ impl Default for EngineShared {
             output_latency: AtomicU32::new(0),
             input_meters: std::array::from_fn(|_| AtomicF32::new(0.0)),
             preview_position: AtomicF32::new(-1.0),
+            external_tempo: AtomicF64::new(0.0),
+            follower_tempo: AtomicF64::new(0.0),
+            follower_connected: AtomicBool::new(false),
+            link_peers: AtomicU32::new(0),
+            link_phase: AtomicF64::new(0.0),
         }
     }
 }

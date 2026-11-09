@@ -1,5 +1,6 @@
 //! Playback position and global timing.
 
+use crate::sync::{LinkHolder, SyncConfig};
 use crate::CountIn;
 use crate::{retire, Engine, Garbage, JumpKind, MetronomeConfig};
 use rlive_core::{time::TimeMaps, Quantize, TimeSignature};
@@ -10,9 +11,20 @@ pub enum TransportCmd {
     Stop,
     SetTempo(f64),
     SetTimeSignature(TimeSignature),
+    /// One tempo for the whole song over whatever the map says: the user or something outside
+    /// overriding it. `None` gives the map back, which the session follows with the map itself.
+    OverrideTempo(Option<f64>),
+    /// Phase Nudge: how much faster or slower time runs while it is held, as a ratio.
+    SetNudge(f64),
     /// Replace the song's tempo and meter together. The old maps go back as garbage. Keep no
     /// other reference to them: `SetTempo` and `SetTimeSignature` edit the engine's copy in place.
     SetTimeMaps(Arc<TimeMaps>),
+    /// MIDI sync, Tempo Follower and clock outputs.
+    SetSync(Box<SyncConfig>),
+    /// Connect a Link session, or disconnect one. The old one goes back as garbage.
+    SetLink(Option<Box<LinkHolder>>),
+    /// The user changed the tempo with Link on, which the Link session hears about.
+    TellLinkTempo(f64),
     SetMetronome(bool),
     /// The metronome's sound, rhythm and whether it only sounds while recording.
     SetMetronomeConfig(MetronomeConfig),
@@ -66,7 +78,36 @@ impl Engine {
             C::SetTimeMaps(maps) => {
                 let old = std::mem::replace(&mut self.maps, maps);
                 retire(&mut self.garbage, Garbage::Shared(old));
-                self.mark_tempo_change();
+                // A tempo fixed from outside goes on holding over the fresh map.
+                match self.sync.tempo_override {
+                    Some(bpm) => {
+                        if let Some(m) = Arc::get_mut(&mut self.maps) {
+                            m.tempo.flatten(bpm);
+                        }
+                    }
+                    None => self.mark_tempo_change(),
+                }
+            }
+            C::OverrideTempo(Some(bpm)) => self.apply_tempo_override(bpm),
+            C::OverrideTempo(None) => self.clear_tempo_override(),
+            C::SetNudge(ratio) => self.sync.nudge = ratio.clamp(0.5, 1.5),
+            C::SetSync(config) => {
+                self.set_sync_config(*config);
+                retire(&mut self.garbage, Garbage::Boxed(config));
+            }
+            C::SetLink(link) => {
+                let old = std::mem::replace(&mut self.sync.link, link);
+                self.sync.link_waiting = false;
+                self.sync.link_tempo = 0.0;
+                if let Some(old) = old {
+                    retire(&mut self.garbage, Garbage::Boxed(old));
+                }
+            }
+            C::TellLinkTempo(bpm) => {
+                self.tempo_from_link(bpm);
+                if let Some(link) = self.sync.link.as_mut() {
+                    link.0.set_tempo(bpm);
+                }
             }
             C::SetMetronome(on) => self.metronome.enabled = on,
             C::SetMetronomeConfig(config) => self.metronome.config = config,
@@ -90,8 +131,12 @@ impl Engine {
         if self.playing || self.count_in.is_some() {
             return;
         }
+        if self.link_holds_start() {
+            return;
+        }
         let recording = self.recording || self.tracks.iter().any(|t| t.slot_rec.is_some());
-        if recording && self.count_in_bars > 0 {
+        // Link has its own launch point, so there's no count-in under it.
+        if recording && self.count_in_bars > 0 && !self.sync.link_enabled() {
             let sig = self.maps.bars.signature_at(self.tick);
             let ticks = self.count_in_bars as f64 * sig.ticks_per_bar() as f64;
             let run = self.tempo_run();
@@ -120,6 +165,7 @@ impl Engine {
                 sink.restart();
             }
         }
+        self.tell_link_playing(true);
     }
 
     /// A change of tempo while recording becomes a Warp Marker on every take.
@@ -167,6 +213,10 @@ impl Engine {
         } else {
             self.insert_marker = 0.0;
         }
+        if self.playing {
+            self.tell_link_playing(false);
+        }
+        self.sync.link_waiting = false;
         self.count_in = None;
         self.shared.count_in_left.store(0.0);
         self.pending_jump = None;

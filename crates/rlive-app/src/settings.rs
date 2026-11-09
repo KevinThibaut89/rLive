@@ -1,9 +1,11 @@
 //! Persistent user preferences, as set in the Settings window.
 
 use crate::session::plugins::PluginWindowPrefs;
+use crate::session::sync::SyncPorts;
 use crate::session::WarpDefaults;
 use crate::ui::theme::ThemeSettings;
 use rlive_audio_io::{BitDepth, CacheConfig, FileType, LoaderConfig};
+use rlive_engine::sync::{ClockPort, ExternalSync};
 use rlive_plugin_host::scanner::ScanSources;
 use rlive_project::clip_envelope::SessionAutomationIn;
 use rlive_project::{ExternalRoute, Project, PALETTE};
@@ -381,6 +383,59 @@ pub struct MidiPortConfig {
     /// MPE Mode: the controller's per-note channels are per-note expression.
     #[serde(default)]
     pub mpe: bool,
+    /// What this port sends or expects for sync.
+    #[serde(default)]
+    pub sync_kind: SyncKind,
+    /// Timecode only: the rate to read, or `None` for SMPTE All.
+    #[serde(default)]
+    pub mtc_rate: Option<rlive_core::sync::FrameRate>,
+    /// Timecode only: what the Arrangement's start is, in seconds.
+    #[serde(default)]
+    pub mtc_offset: f64,
+    /// Sync Delay in milliseconds: how far Live runs behind the signal.
+    #[serde(default)]
+    pub sync_delay_ms: f64,
+}
+
+/// The kind of sync a port carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SyncKind {
+    #[default]
+    Clock,
+    Timecode,
+}
+
+/// Sync switches and the options that go with them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyncSettings {
+    /// The EXT switch.
+    pub external: bool,
+    /// The Follow switch.
+    pub follower: bool,
+    /// The input channel Tempo Follower listens to.
+    pub follower_channel: Option<u16>,
+    pub show_follower_toggle: bool,
+    pub link: bool,
+    pub show_link_toggle: bool,
+    pub start_stop_sync: bool,
+    /// Tapping out a bar starts the transport (Record, Warp & Launch).
+    pub start_playback_with_tap: bool,
+}
+
+impl Default for SyncSettings {
+    fn default() -> Self {
+        Self {
+            external: false,
+            follower: false,
+            follower_channel: None,
+            show_follower_toggle: false,
+            link: false,
+            show_link_toggle: true,
+            start_stop_sync: false,
+            start_playback_with_tap: false,
+        }
+    }
 }
 
 /// One row of the Control Surface table.
@@ -418,6 +473,10 @@ impl RemoteSettings {
                 sync: false,
                 remote: true,
                 mpe: false,
+                sync_kind: SyncKind::default(),
+                mtc_rate: None,
+                mtc_offset: 0.0,
+                sync_delay_ms: 0.0,
             })
     }
 
@@ -433,6 +492,10 @@ impl RemoteSettings {
                 sync: false,
                 remote: false,
                 mpe: false,
+                sync_kind: SyncKind::default(),
+                mtc_rate: None,
+                mtc_offset: 0.0,
+                sync_delay_ms: 0.0,
             })
     }
 
@@ -440,6 +503,48 @@ impl RemoteSettings {
         match list.iter_mut().find(|p| p.name == cfg.name) {
             Some(p) => *p = cfg,
             None => list.push(cfg),
+        }
+    }
+
+    /// What the switches amount to, for these ports in this order: the first input with its
+    /// Sync switch on is the source, and every output with one on sends clock.
+    pub fn sync_ports(
+        &self,
+        inputs: &[String],
+        outputs: &[String],
+        legacy: Option<&str>,
+        follower_channel: Option<u16>,
+    ) -> SyncPorts {
+        let source = inputs
+            .iter()
+            .map(|name| self.input(name, legacy))
+            .find(|p| p.sync)
+            .map(|p| {
+                let delay = p.sync_delay_ms / 1000.0;
+                match p.sync_kind {
+                    SyncKind::Clock => ExternalSync::Clock { delay },
+                    SyncKind::Timecode => ExternalSync::Timecode {
+                        rate: p.mtc_rate,
+                        offset: p.mtc_offset,
+                        delay,
+                    },
+                }
+            });
+        let outputs = outputs
+            .iter()
+            .enumerate()
+            .filter_map(|(port, name)| {
+                let p = self.output(name);
+                p.sync.then_some(ClockPort {
+                    port: port as u16,
+                    delay: p.sync_delay_ms / 1000.0,
+                })
+            })
+            .collect();
+        SyncPorts {
+            source,
+            outputs,
+            follower_channel,
         }
     }
 
@@ -572,6 +677,8 @@ pub struct Settings {
     pub user_library: Option<PathBuf>,
     /// The browser runs the full height of the window (manual p. 63).
     pub full_height_browser: bool,
+    /// EXT, Follow, Link and their options.
+    pub sync: SyncSettings,
 }
 
 impl Default for Settings {
@@ -610,6 +717,7 @@ impl Default for Settings {
             remote: RemoteSettings::default(),
             user_library: None,
             full_height_browser: true,
+            sync: SyncSettings::default(),
         }
     }
 }
@@ -777,6 +885,13 @@ mod tests {
             chase_notes: false,
             retune_on_load: false,
             remote: RemoteSettings::default(),
+            sync: SyncSettings {
+                external: true,
+                follower_channel: Some(1),
+                show_follower_toggle: true,
+                start_playback_with_tap: true,
+                ..Default::default()
+            },
         };
         let path = temp_file("round-trip.json");
         settings.save_to(&path);

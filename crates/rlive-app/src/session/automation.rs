@@ -294,11 +294,12 @@ impl Session {
 
     /// Whether the Re-Enable Automation button has something to do.
     pub fn any_overridden(&self) -> bool {
-        self.layouts.values().any(|l| l.any_overridden())
+        self.tempo_overridden() || self.layouts.values().any(|l| l.any_overridden())
     }
 
     /// Hand every overridden parameter back to its automation.
     pub fn re_enable_all(&mut self) {
+        self.re_enable_tempo();
         let owners: Vec<ChainRef> = self.layouts.keys().copied().collect();
         for owner in owners {
             self.send(EngineCommand::Param(ParamCmd::ReEnable {
@@ -470,6 +471,9 @@ impl Session {
             }
             if self.project.arrangement.tempo.points != points {
                 self.project.arrangement.tempo.points = points;
+                if self.project.arrangement.tempo.points.is_empty() {
+                    self.re_enable_tempo();
+                }
                 self.sync_time_maps();
                 self.mark_edit("Edit Automation");
             }
@@ -494,6 +498,8 @@ impl Session {
     /// Give the engine the song's tempo and meter as the project has them now.
     pub(super) fn sync_time_maps(&mut self) {
         self.leader_points = self.project.leader_tempo_points();
+        // First, so a Tempo Follower that a new leader silences has let go of the tempo.
+        self.send_sync_config();
         let maps = Arc::new(build::time_maps(&self.project));
         self.send(EngineCommand::Transport(TransportCmd::SetTimeMaps(maps)));
     }

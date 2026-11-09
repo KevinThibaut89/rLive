@@ -509,6 +509,10 @@ impl Session {
 
     /// Lead/Follow for these Arrangement clips.
     pub fn arr_set_tempo_leader(&mut self, items: &[(TrackId, ArrClipId)], on: bool) {
+        // EXT decides the tempo, and Lead/Follow is deactivated while it does (manual p. 238).
+        if self.externally_timed() {
+            return;
+        }
         let mut changed = false;
         for (track, id) in items {
             let Some(clip) = self

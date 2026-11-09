@@ -181,6 +181,9 @@ pub mod transport {
 
     pub const TEMPO: ParamId = ParamId(0);
 
+    /// Hundredths of a BPM, mappable on its own. Appended; the ids are saved.
+    pub const TEMPO_FINE: ParamId = ParamId(1);
+
     /// What an automation lane showing the tempo has as its target.
     pub const fn tempo_target() -> EnvTarget {
         EnvTarget::Param(ParamRef {

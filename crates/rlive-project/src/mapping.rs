@@ -77,6 +77,10 @@ pub enum RemoteControl {
     ClipLoop,
     ClipLoopPosition,
     ClipLoopLength,
+    PhaseNudgeUp,
+    PhaseNudgeDown,
+    ExternalSync,
+    TempoFollower,
 }
 
 /// How a control answers to messages (manual pp. 870-872).
@@ -105,7 +109,9 @@ impl RemoteControl {
             | C::PunchOut
             | C::Follow
             | C::FollowActions
-            | C::ClipLoop => ControlKind::Switch,
+            | C::ClipLoop
+            | C::ExternalSync
+            | C::TempoFollower => ControlKind::Switch,
             C::SceneScroll | C::Scrub | C::ClipLoopPosition | C::ClipLoopLength => {
                 ControlKind::Scroll
             }
@@ -148,6 +154,10 @@ impl RemoteControl {
             C::StepBack => "Step Record Back",
             C::NudgeBack => "Nudge Backward",
             C::NudgeForward => "Nudge Forward",
+            C::PhaseNudgeUp => "Phase Nudge Up",
+            C::PhaseNudgeDown => "Phase Nudge Down",
+            C::ExternalSync => "External Sync",
+            C::TempoFollower => "Tempo Follower",
             C::Scrub => "Scrub",
             C::ClipLoop => "Clip Loop",
             C::ClipLoopPosition => "Clip Loop Position",
