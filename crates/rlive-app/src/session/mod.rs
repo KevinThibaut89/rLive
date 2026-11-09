@@ -30,6 +30,7 @@ mod io;
 mod launch;
 mod launch_log;
 mod modulators;
+pub mod plugins;
 mod presets;
 mod rack_edit;
 mod racks;
@@ -71,6 +72,8 @@ mod io_tests;
 mod launch_tests;
 #[cfg(test)]
 mod modulator_tests;
+#[cfg(test)]
+mod plugin_tests;
 #[cfg(test)]
 mod preset_tests;
 #[cfg(test)]
@@ -220,6 +223,7 @@ pub struct Session {
     sent_device_outputs: HashMap<DeviceId, external::DeviceOutput>,
     /// The Map button waiting for a parameter to be clicked: the modulator and its output.
     armed_mod_map: Option<(DeviceId, usize)>,
+    plugin_ui: plugins::PluginUi,
     /// Keys held on the crossfader's left, centre and right positions.
     crossfader_keys: io::CrossfaderKeys,
     /// A file waiting to be previewed once it has loaded.
@@ -297,6 +301,7 @@ impl Session {
             mods_dirty: true,
             sent_device_outputs: HashMap::new(),
             armed_mod_map: None,
+            plugin_ui: plugins::PluginUi::default(),
             crossfader_keys: io::CrossfaderKeys::default(),
             pending_preview: None,
             library: None,
@@ -565,6 +570,13 @@ impl Session {
                     };
                     let chain = self.chain_of_device(device).unwrap_or(chain);
                     self.report_device_param(chain, device, param, value);
+                    if self
+                        .runtimes
+                        .get(&device)
+                        .is_some_and(|r| r.plugin.is_some())
+                    {
+                        self.note_editor_touch(chain, device, param);
+                    }
                 }
                 EngineEvent::RecordedMidi {
                     track,
@@ -664,6 +676,10 @@ impl Session {
                 for n in h.idle() {
                     if n == HostNotification::ParamsRescanned {
                         rt.params = h.params();
+                        if rt.sidechain_input {
+                            rt.params
+                                .extend(rlive_plugin_host::keyed::sidechain_params());
+                        }
                     }
                     todo.push((*id, n));
                 }
@@ -680,6 +696,7 @@ impl Session {
                     if let Some(cell) = self.device_cell(chain, id, param) {
                         self.set_cell(chain, cell, value, true);
                     }
+                    self.note_editor_touch(chain, id, param);
                     self.touch();
                 }
                 HostNotification::ParamsRescanned => self.refit_device_cells(chain, id),
@@ -694,6 +711,8 @@ impl Session {
                 HostNotification::EditorClosed => {}
             }
         }
+        self.settle_plugin_panels();
+        self.apply_window_visibility();
         self.step_render(render::SLICE);
         self.poll_disk();
         self.poll_clip_jobs();

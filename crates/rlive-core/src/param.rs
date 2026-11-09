@@ -9,6 +9,21 @@ pub struct ParamId(pub u32);
 /// Every device's on/off switch. 1 means on.
 pub const ACTIVATOR: ParamId = ParamId(u32::MAX);
 
+/// The controls of a hosted plug-in's sidechain block. They are the host's own, so they sit at
+/// the top of the id space, where a plug-in's parameters don't go.
+pub mod plugin_sidechain {
+    use super::ParamId;
+
+    pub const GAIN: ParamId = ParamId(u32::MAX - 1);
+    pub const MIX: ParamId = ParamId(u32::MAX - 2);
+    pub const MUTE: ParamId = ParamId(u32::MAX - 3);
+
+    /// Whether a parameter is one of these.
+    pub fn contains(id: u32) -> bool {
+        [GAIN.0, MIX.0, MUTE.0].contains(&id)
+    }
+}
+
 /// What a parameter belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ParamOwner {

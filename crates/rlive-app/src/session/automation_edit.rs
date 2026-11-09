@@ -153,7 +153,16 @@ impl Session {
             let mut params =
                 vec![self.with_range(owner, param_target(device_owner, ACTIVATOR), on)];
             if let Some(rt) = self.runtimes.get(&d.id) {
+                // A plug-in offers only what's on its panel, and what its window moved last.
+                let offered = super::plugins::plugin_chooser_params(d, rt);
                 for info in &rt.params {
+                    // What's already automated stays reachable, on the panel or not.
+                    let target = param_target(device_owner, ParamId(info.id));
+                    if offered.as_ref().is_some_and(|ids| !ids.contains(&info.id))
+                        && !self.is_automated(owner, target)
+                    {
+                        continue;
+                    }
                     let blocked = ParamFlags::HIDDEN.0 | ParamFlags::READ_ONLY.0;
                     if info.flags.contains(ParamFlags::AUTOMATABLE) && info.flags.0 & blocked == 0 {
                         let target = param_target(device_owner, ParamId(info.id));

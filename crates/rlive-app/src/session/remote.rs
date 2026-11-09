@@ -1059,7 +1059,7 @@ impl Session {
         }
     }
 
-    fn publish_remote_table(&mut self) {
+    pub(super) fn publish_remote_table(&mut self) {
         let empty =
             self.project.midi_mappings.is_empty() && self.remote.surfaces.in_use().next().is_none();
         if empty && self.remote.last.is_empty() {

@@ -103,19 +103,14 @@ impl Session {
         else {
             return;
         };
-        let defaults: Vec<(u32, f64)> = self.runtimes.get(&id).map_or(Vec::new(), |rt| {
-            rt.params
-                .iter()
-                .filter(|p| config.params.contains(&p.id))
-                .map(|p| (p.id, p.default))
-                .collect()
-        });
-        if let Some(d) = self
+        // Which parameters show and in what order: no values come with it (manual p. 468).
+        if let Some(DeviceKind::Plugin { panel, .. }) = self
             .chain_mut(chain)
             .and_then(|v| v.iter_mut().find(|d| d.id == id))
+            .map(|d| &mut d.kind)
         {
-            // Listed but untouched: only which parameters show is kept, not their values.
-            d.params.extend(defaults);
+            panel.params = Some(config.params);
+            panel.xy = config.xy;
         }
     }
 
@@ -280,8 +275,7 @@ impl Session {
             return Err("That device is gone".to_string());
         };
         let new_role = match item {
-            SwapItem::Plugin(p) if p.is_instrument => DeviceRole::Instrument,
-            SwapItem::Plugin(_) => DeviceRole::AudioEffect,
+            SwapItem::Plugin(p) => super::build::plugin_role(p),
             _ => self.role_of_device(&new),
         };
         let old_role = self.runtimes.get(&id).map_or(new_role, |rt| rt.role);
@@ -458,7 +452,8 @@ impl Session {
         let config = PluginConfig {
             format: *format,
             plugin_id: plugin_id.clone(),
-            params: device.params.keys().copied().collect(),
+            params: self.shown_params(chain, id),
+            xy: self.xy_params(chain, id),
         };
         let path = library.plugin_config_path(*format, plugin_id);
         Preset::of_plugin_config(config, "Default")

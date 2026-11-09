@@ -216,11 +216,7 @@ impl Session {
 
     pub fn add_plugin(&mut self, chain: ChainRef, desc: &PluginDescriptor) {
         let d = Device::plugin(desc.format, &desc.id, desc.path.clone(), &desc.name);
-        let role = if desc.is_instrument {
-            DeviceRole::Instrument
-        } else {
-            DeviceRole::AudioEffect
-        };
+        let role = build::plugin_role(desc);
         if !self.accepts_role(chain, role, &desc.name) {
             return;
         }
@@ -228,6 +224,11 @@ impl Session {
         let id = d.id;
         self.add_device(chain, index, d);
         self.apply_plugin_config(chain, desc, id);
+        if self.plugin_ui.prefs.auto_open {
+            if let Err(e) = self.open_plugin_window(id, false) {
+                log::info!("{}: no window to open: {e}", desc.name);
+            }
+        }
     }
 
     /// MIDI effects go to the front of the chain, instruments after them (and after any other
@@ -418,7 +419,9 @@ impl Session {
             }
         }
         if let Some(h) = self.runtimes.get_mut(&id).and_then(|r| r.plugin.as_mut()) {
-            h.on_param_set(param, value);
+            if !rlive_core::param::plugin_sidechain::contains(param) {
+                h.on_param_set(param, value);
+            }
         }
         if let Some(cell) = cell {
             self.set_cell(chain, cell, value, gesture);

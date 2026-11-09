@@ -40,7 +40,8 @@ pub use clip::{
 pub use device::{
     grow_macros, Chain, ChainMix, ChainSend, CompareSlot, Device, DeviceCompare, DeviceKind,
     DeviceState, DrumPad, ExternalIo, ExternalMidi, ExternalReturn, Macro, MacroMapping,
-    ModMapping, RackKind, SidechainSource, Variation, Zone, Zones,
+    ModMapping, PluginBank, PluginPanel, PluginPreset, RackKind, SidechainSource, Variation, Zone,
+    Zones, PLUGIN_BANK_SIZE,
 };
 pub use envelope::{Breakpoint, ClipEnvelope, EnvLoop, EnvMode, Envelope};
 pub use file_ref::FileRef;

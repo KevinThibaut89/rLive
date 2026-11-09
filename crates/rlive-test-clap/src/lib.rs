@@ -2,6 +2,9 @@
 //!
 //! * `rs.rlive.test-gain` — stereo effect with one "Gain" parameter (0..2) and state save/load.
 //! * `rs.rlive.test-sine` — instrument that plays a sine for each held note.
+//! * `rs.rlive.test-midi` — note effect that sends each note on an octave up.
+//!
+//! A bundle named with `crash-on-scan` or `hang-on-scan` does just that when it is loaded.
 
 #![allow(clippy::missing_safety_doc)]
 
@@ -32,6 +35,8 @@ static GAIN_FEATURES: Sync<[*const c_char; 3]> =
 static SINE_FEATURES: Sync<[*const c_char; 3]> =
     Sync([c"instrument".as_ptr(), c"synthesizer".as_ptr(), null()]);
 
+static MIDI_FEATURES: Sync<[*const c_char; 2]> = Sync([c"note-effect".as_ptr(), null()]);
+
 static GAIN_DESC: Sync<clap_plugin_descriptor> = Sync(clap_plugin_descriptor {
     clap_version: CLAP_VERSION,
     id: c"rs.rlive.test-gain".as_ptr(),
@@ -58,9 +63,24 @@ static SINE_DESC: Sync<clap_plugin_descriptor> = Sync(clap_plugin_descriptor {
     features: SINE_FEATURES.0.as_ptr(),
 });
 
+static MIDI_DESC: Sync<clap_plugin_descriptor> = Sync(clap_plugin_descriptor {
+    clap_version: CLAP_VERSION,
+    id: c"rs.rlive.test-midi".as_ptr(),
+    name: c"rLive Test MIDI".as_ptr(),
+    vendor: c"rLive".as_ptr(),
+    url: c"".as_ptr(),
+    manual_url: c"".as_ptr(),
+    support_url: c"".as_ptr(),
+    version: c"1.0.0".as_ptr(),
+    description: c"Test note effect".as_ptr(),
+    features: MIDI_FEATURES.0.as_ptr(),
+});
+
 struct Plugin {
     clap: clap_plugin,
     instrument: bool,
+    /// The note effect, which makes no sound of its own.
+    midi: bool,
     /// Gain (effect) or volume (instrument).
     param: f64,
     sample_rate: f64,
@@ -99,6 +119,44 @@ const REPORT_NOTE_ON: u32 = 1000;
 const REPORT_NOTE_OFF: u32 = 1001;
 const REPORT_EXPR_NOTE: u32 = 1002;
 const REPORT_EXPR_BASE: u32 = 1100;
+/// Plus the channel: the key of a raw MIDI note-on.
+const REPORT_MIDI_NOTE: u32 = 1200;
+/// Plus the channel: the value of a raw MIDI CC 74.
+const REPORT_MIDI_CC74: u32 = 1300;
+
+/// Sends a note on, or off, an octave above the one that came in.
+unsafe fn echo_note(out: *const clap_output_events, type_: u16, note: &clap_event_note) {
+    if out.is_null() {
+        return;
+    }
+    let mut echo = *note;
+    echo.header.type_ = type_;
+    echo.key = note.key + 12;
+    if let Some(push) = (*out).try_push {
+        push(out, &echo.header);
+    }
+}
+
+/// Sends a raw MIDI message.
+unsafe fn send_midi(out: *const clap_output_events, time: u32, data: [u8; 3]) {
+    if out.is_null() {
+        return;
+    }
+    let event = clap_event_midi {
+        header: clap_event_header {
+            size: std::mem::size_of::<clap_event_midi>() as u32,
+            time,
+            space_id: CLAP_CORE_EVENT_SPACE_ID,
+            type_: CLAP_EVENT_MIDI,
+            flags: 0,
+        },
+        port_index: 0,
+        data,
+    };
+    if let Some(push) = (*out).try_push {
+        push(out, &event.header);
+    }
+}
 
 /// Sends a value back as a parameter event, the one channel a test can read from outside.
 unsafe fn report(out: *const clap_output_events, id: u32, value: f64) {
@@ -151,15 +209,36 @@ unsafe fn handle_event(
         }
         CLAP_EVENT_NOTE_ON => {
             let note = &*(e as *const clap_event_note);
+            if plugin.midi {
+                echo_note(out, CLAP_EVENT_NOTE_ON, note);
+                send_midi(out, (*e).time, [0xb0, 11, note.key as u8]);
+                return;
+            }
             plugin.note = Some(note.key);
             report(out, REPORT_NOTE_ON, note.note_id as f64);
         }
         CLAP_EVENT_NOTE_OFF => {
             let note = &*(e as *const clap_event_note);
+            if plugin.midi {
+                echo_note(out, CLAP_EVENT_NOTE_OFF, note);
+                return;
+            }
             if plugin.note == Some(note.key) {
                 plugin.note = None;
             }
             report(out, REPORT_NOTE_OFF, note.note_id as f64);
+        }
+        CLAP_EVENT_MIDI => {
+            let m = &*(e as *const clap_event_midi);
+            let channel = (m.data[0] & 15) as u32;
+            match (m.data[0] & 0xf0, m.data[1]) {
+                (0x90, key) => {
+                    report(out, REPORT_MIDI_NOTE + channel, key as f64);
+                    send_midi(out, (*e).time, [m.data[0], key + 12, m.data[2]]);
+                }
+                (0xb0, 74) => report(out, REPORT_MIDI_CC74 + channel, m.data[2] as f64),
+                _ => {}
+            }
         }
         CLAP_EVENT_NOTE_EXPRESSION => {
             let expr = &*(e as *const clap_event_note_expression);
@@ -184,6 +263,12 @@ unsafe extern "C" fn process(
     let in_ev = proc_.in_events;
     let count = (*in_ev).size.map_or(0, |s| s(in_ev));
     let mut next_ev = 0;
+    if plugin.midi {
+        for i in 0..count {
+            handle_event(plugin, (*in_ev).get.unwrap()(in_ev, i), proc_.out_events);
+        }
+        return CLAP_PROCESS_CONTINUE;
+    }
     let out_buf: &clap_audio_buffer = &*proc_.audio_outputs;
     let out_l = std::slice::from_raw_parts_mut(*out_buf.data32, n);
     let out_r = std::slice::from_raw_parts_mut(*out_buf.data32.add(1), n);
@@ -345,6 +430,9 @@ static STATE: clap_plugin_state = clap_plugin_state {
 // --- ports
 
 unsafe extern "C" fn audio_ports_count(p: *const clap_plugin, is_input: bool) -> u32 {
+    if this(p).midi {
+        return 0;
+    }
     match (this(p).instrument, is_input) {
         (true, true) => 0,
         (true, false) => 1,
@@ -365,6 +453,12 @@ unsafe extern "C" fn audio_ports_get(
     let info = &mut *info;
     info.id = index;
     info.name[0] = 0;
+    if index == 1 {
+        let name: &CStr = if is_input { c"Key" } else { c"Aux" };
+        for (d, s) in info.name.iter_mut().zip(name.to_bytes_with_nul()) {
+            *d = *s as c_char;
+        }
+    }
     info.flags = if index == 0 {
         CLAP_AUDIO_PORT_IS_MAIN
     } else {
@@ -398,21 +492,28 @@ static TAIL: clap_plugin_tail = clap_plugin_tail {
 };
 
 unsafe extern "C" fn note_ports_count(p: *const clap_plugin, is_input: bool) -> u32 {
+    if this(p).midi {
+        return 1;
+    }
     (is_input && this(p).instrument) as u32
 }
 
 unsafe extern "C" fn note_ports_get(
-    _p: *const clap_plugin,
+    p: *const clap_plugin,
     index: u32,
     is_input: bool,
     info: *mut clap_note_port_info,
 ) -> bool {
-    if index != 0 || !is_input {
+    if index != 0 || !(is_input || this(p).midi) {
         return false;
     }
     let info = &mut *info;
     info.id = 0;
-    info.supported_dialects = CLAP_NOTE_DIALECT_CLAP;
+    info.supported_dialects = if this(p).midi {
+        CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI | CLAP_NOTE_DIALECT_MIDI_MPE
+    } else {
+        CLAP_NOTE_DIALECT_CLAP
+    };
     info.preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
     info.name[0] = 0;
     true
@@ -447,7 +548,7 @@ unsafe extern "C" fn on_main_thread(_p: *const clap_plugin) {}
 // --- factory & entry
 
 unsafe extern "C" fn factory_count(_f: *const clap_plugin_factory) -> u32 {
-    2
+    3
 }
 
 unsafe extern "C" fn factory_descriptor(
@@ -457,6 +558,7 @@ unsafe extern "C" fn factory_descriptor(
     match index {
         0 => &GAIN_DESC.0,
         1 => &SINE_DESC.0,
+        2 => &MIDI_DESC.0,
         _ => null(),
     }
 }
@@ -467,10 +569,13 @@ unsafe extern "C" fn factory_create(
     id: *const c_char,
 ) -> *const clap_plugin {
     let id = CStr::from_ptr(id);
+    let midi = id == CStr::from_ptr(MIDI_DESC.0.id);
     let (desc, instrument) = if id == CStr::from_ptr(GAIN_DESC.0.id) {
         (&GAIN_DESC.0 as *const _, false)
     } else if id == CStr::from_ptr(SINE_DESC.0.id) {
         (&SINE_DESC.0 as *const _, true)
+    } else if midi {
+        (&MIDI_DESC.0 as *const _, false)
     } else {
         return null();
     };
@@ -490,6 +595,7 @@ unsafe extern "C" fn factory_create(
             on_main_thread: Some(on_main_thread),
         },
         instrument,
+        midi,
         param: 1.0,
         sample_rate: 48_000.0,
         phase: 0.0,
@@ -505,7 +611,16 @@ static FACTORY: clap_plugin_factory = clap_plugin_factory {
     create_plugin: Some(factory_create),
 };
 
-unsafe extern "C" fn entry_init(_path: *const c_char) -> bool {
+unsafe extern "C" fn entry_init(path: *const c_char) -> bool {
+    let path = CStr::from_ptr(path).to_string_lossy();
+    if path.contains("crash-on-scan") {
+        std::process::abort();
+    }
+    if path.contains("hang-on-scan") {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
     true
 }
 unsafe extern "C" fn entry_deinit() {}

@@ -93,7 +93,7 @@ pub enum BrowserItem {
 
 enum ScanMsg {
     Progress(String),
-    Done(PluginCache),
+    Done(PluginCache, rlive_plugin_host::scanner::ScanReport),
 }
 
 pub struct UiState {
@@ -166,6 +166,8 @@ pub struct UiState {
     /// Tracks waiting their turn in a Freeze of several at once.
     pub pending_freezes: Vec<TrackId>,
     pub request_scan: bool,
+    /// What the last scan found wrong, until the user has dealt with it.
+    scan_report: Option<rlive_plugin_host::scanner::ScanReport>,
     /// Device lists are slow to enumerate; refreshed only when Preferences opens.
     audio_devices: Option<Vec<String>>,
     audio_inputs: Option<Vec<String>>,
@@ -343,6 +345,7 @@ impl UiState {
             pending_freezes: Vec::new(),
             status,
             request_scan: false,
+            scan_report: None,
             audio_devices: None,
             audio_inputs: None,
             midi_ports: None,
@@ -367,6 +370,15 @@ impl RliveApp {
         let sender = handle.take_midi_sender();
         let hw_midi = handle.take_hw_midi();
         let plugins = PluginCache::load(&PluginCache::default_path());
+        let skip_scan = rlive_plugin_host::alt_key_held();
+        let request_scan = crate::settings::scan_at_launch(
+            settings.plugins.activated,
+            !plugins.plugins.is_empty(),
+            skip_scan,
+        );
+        if skip_scan {
+            log::info!("plug-in scan skipped: modifier held at launch");
+        }
         let mut session = Session::new(handle, Project::new_default(), plugins);
         session
             .samples
@@ -407,6 +419,7 @@ impl RliveApp {
         session.backups = true;
         ui.browser.open(&cc.egui_ctx, &settings);
         // The old Choose Folder setting carries over as a folder in Places.
+        ui.request_scan = request_scan;
         if let Some(dir) = &settings.sample_dir {
             ui.browser.op(rlive_browser::Op::AddFolder(dir.clone()));
         }
@@ -556,19 +569,33 @@ impl RliveApp {
         };
     }
 
+    /// Scan for plug-ins in the background. The modifier makes it a clean rebuild.
     fn start_plugin_scan(&mut self) {
+        let clean = rlive_plugin_host::alt_key_held();
+        if !self.settings.plugins.activated {
+            self.settings.plugins.activated = true;
+            self.settings.save();
+        }
         let (tx, rx) = mpsc::channel();
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("rlive"));
         let mut cache = self.session.plugins.clone();
-        let extra = self.settings.plugin_dirs.clone();
+        let sources = self.settings.plugins.sources(&self.settings.plugin_dirs);
         std::thread::spawn(move || {
-            cache.rescan(&exe, &extra, |p| {
-                let _ = tx.send(ScanMsg::Progress(p.display().to_string()));
-            });
+            if clean {
+                cache.clear();
+            }
+            let report = cache.rescan_sources(
+                &exe,
+                &sources,
+                rlive_plugin_host::scanner::SCAN_TIMEOUT,
+                |p| {
+                    let _ = tx.send(ScanMsg::Progress(p.display().to_string()));
+                },
+            );
             if let Err(e) = cache.save(&PluginCache::default_path()) {
                 log::warn!("could not save plugin cache: {e}");
             }
-            let _ = tx.send(ScanMsg::Done(cache));
+            let _ = tx.send(ScanMsg::Done(cache, report));
         });
         self.ui.scan_rx = Some(rx);
         self.ui.scan_status = "Scanning plugins…".into();
@@ -579,7 +606,7 @@ impl RliveApp {
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 ScanMsg::Progress(p) => self.ui.scan_status = format!("Scanning {p}"),
-                ScanMsg::Done(cache) => {
+                ScanMsg::Done(cache, report) => {
                     let n = cache.plugins.len();
                     let failed = cache.files.iter().filter(|f| !f.ok).count();
                     self.session.plugins = cache;
@@ -588,10 +615,65 @@ impl RliveApp {
                     } else {
                         format!("{n} plugins found")
                     };
+                    if !report.is_clean() {
+                        self.ui.scan_report = Some(report);
+                    }
                     self.ui.scan_rx = None;
                     return;
                 }
             }
+        }
+    }
+
+    /// Says which plug-in brought the scanner down, and offers what can be done about it.
+    fn scan_report_dialog(&mut self, ctx: &egui::Context) {
+        let Some(report) = self.ui.scan_report.clone() else {
+            return;
+        };
+        let mut rescan = false;
+        let mut disable = false;
+        let mut dismiss = false;
+        egui::Window::new("Plug-In Scan")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                if !report.crashed.is_empty() {
+                    ui.label("These plug-ins crashed the scan:");
+                    for p in &report.crashed {
+                        ui.label(RichText::new(p.display().to_string()).color(pal().arm_red));
+                    }
+                    ui.label(
+                        "Rescan to try them again, or disable them until they are reinstalled.",
+                    );
+                }
+                if !report.disabled.is_empty() {
+                    ui.label("These crashed again and have been disabled:");
+                    for p in &report.disabled {
+                        ui.label(RichText::new(p.display().to_string()).color(pal().text_dim));
+                    }
+                }
+                ui.horizontal(|ui| {
+                    if !report.crashed.is_empty() {
+                        rescan = ui.button("Rescan").clicked();
+                        disable = ui.button("Disable").clicked();
+                    }
+                    dismiss = ui.button("Close").clicked();
+                });
+            });
+        if disable {
+            for p in &report.crashed {
+                self.session.plugins.set_disabled(p, true);
+            }
+            if let Err(e) = self.session.plugins.save(&PluginCache::default_path()) {
+                log::warn!("could not save plugin cache: {e}");
+            }
+        }
+        if rescan || disable || dismiss {
+            self.ui.scan_report = None;
+        }
+        if rescan && self.ui.scan_rx.is_none() {
+            self.start_plugin_scan();
         }
     }
 
@@ -2017,6 +2099,7 @@ impl RliveApp {
     fn dialogs(&mut self, ctx: &egui::Context) {
         self.confirm_default_overwrite(ctx);
         self.settings_window(ctx);
+        self.scan_report_dialog(ctx);
         if let Some(t) = self.ui.devices.ui.mpe_settings.take() {
             self.ui.mpe_dialog = Some(t);
         }
@@ -2125,6 +2208,9 @@ impl eframe::App for RliveApp {
         self.session.set_edge_fades(self.settings.create_fades);
         self.ui.frame_time = ctx.input(|i| i.time);
         self.session.remote.selected_device = self.selected_device();
+        self.session
+            .set_window_prefs(self.settings.plugins.window_prefs());
+        self.session.set_selected_chain(self.ui.selected);
         self.session.idle();
         for sysex in self.routing.system.take_sysex() {
             self.session.surface_sysex(&sysex);
@@ -2150,7 +2236,9 @@ impl eframe::App for RliveApp {
         for c in std::mem::take(&mut self.pending) {
             self.dispatch(ctx, c);
         }
-        self.handle_shortcuts(ctx);
+        if !devices::configure_delete_key(ctx, &mut self.ui, &mut self.session) {
+            self.handle_shortcuts(ctx);
+        }
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {

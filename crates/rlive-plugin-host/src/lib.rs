@@ -15,14 +15,17 @@
 #[cfg(target_os = "macos")]
 pub mod au;
 pub mod clap;
+pub mod keyed;
 #[cfg(target_os = "macos")]
 mod mac;
+mod midi_out;
 pub mod scanner;
 pub mod vst3;
 
 pub use rlive_core::PluginFormat;
 use rlive_core::{ParamInfo, Processor};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// A plugin found by the scanner.
@@ -40,6 +43,9 @@ pub struct PluginDescriptor {
     /// VST3's `|`-separated subcategories, as declared; empty for other formats.
     #[serde(default)]
     pub subcategories: String,
+    /// It works on MIDI rather than making sound: it goes before the instrument in a chain.
+    #[serde(default)]
+    pub is_midi_effect: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -62,6 +68,9 @@ pub enum HostError {
     Unsupported(&'static str),
     #[error("scan failed: {0}")]
     Scan(String),
+    /// The scanner process died or was killed. Whatever it was loading is the culprit.
+    #[error("scan crashed: {0}")]
+    ScanCrashed(String),
 }
 
 pub type Result<T> = std::result::Result<T, HostError>;
@@ -102,6 +111,22 @@ pub trait PluginHandle {
     fn latency(&self) -> u32 {
         0
     }
+    /// Hide the open editor window, or show it again, without closing it.
+    fn set_editor_visible(&mut self, _visible: bool) {}
+    /// The title of the editor window, when it has one of the host's.
+    fn set_editor_title(&mut self, _title: &str) {}
+    /// Whether the plugin can send MIDI to the devices after it.
+    fn midi_output(&self) -> bool {
+        false
+    }
+    /// The presets it can load, for formats that have their own (Audio Units).
+    fn presets(&self) -> Vec<PluginPreset> {
+        Vec::new()
+    }
+    /// Switch to one of [`presets`](Self::presets).
+    fn load_preset(&mut self, _preset: &PluginPreset) -> bool {
+        false
+    }
     /// Whether the plugin has an input for a sidechain signal.
     fn sidechain_input(&self) -> bool {
         false
@@ -109,6 +134,31 @@ pub trait PluginHandle {
     /// The names of its extra audio outputs, beyond the main pair.
     fn aux_outputs(&self) -> Vec<String> {
         Vec::new()
+    }
+}
+
+/// A preset of a plugin that keeps its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginPreset {
+    pub name: String,
+    pub source: PresetSource,
+}
+
+/// Where a [`PluginPreset`] comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PresetSource {
+    /// Built into the plugin, and read-only.
+    Factory(i32),
+    /// A file in the system's preset folders.
+    File { path: PathBuf, read_only: bool },
+}
+
+impl PluginPreset {
+    pub fn read_only(&self) -> bool {
+        match &self.source {
+            PresetSource::Factory(_) => true,
+            PresetSource::File { read_only, .. } => *read_only,
+        }
     }
 }
 
@@ -161,28 +211,63 @@ pub fn find_plugin_files(format: PluginFormat, dirs: &[PathBuf]) -> Vec<PathBuf>
         PluginFormat::AudioUnit => return Vec::new(),
     };
     let mut out = Vec::new();
-    fn walk(dir: &Path, ext: &str, depth: usize, out: &mut Vec<PathBuf>) {
-        if depth > 6 {
+    /// `seen` holds every folder walked, so a link back up the tree can't send this in circles.
+    fn walk(
+        dir: &Path,
+        ext: &str,
+        depth: usize,
+        seen: &mut HashSet<PathBuf>,
+        out: &mut Vec<PathBuf>,
+    ) {
+        if depth > 6 || !seen.insert(dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf())) {
             return;
         }
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for e in entries.flatten() {
-            let p = e.path();
+            // Symbolic links resolve by themselves, Finder aliases only when asked.
+            let p = resolve_alias(&e.path()).unwrap_or_else(|| e.path());
             if p.extension().is_some_and(|x| x.eq_ignore_ascii_case(ext)) {
                 out.push(p);
             } else if p.is_dir() {
-                walk(&p, ext, depth + 1, out);
+                walk(&p, ext, depth + 1, seen, out);
             }
         }
     }
+    let mut seen = HashSet::new();
     for d in dirs {
-        walk(d, ext, 0, &mut out);
+        walk(d, ext, 0, &mut seen, &mut out);
     }
     out.sort();
     out.dedup();
     out
+}
+
+/// Where a Finder alias points, if `path` is one.
+fn resolve_alias(path: &Path) -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        mac::resolve_alias(path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// Whether Option is held down at this moment, which skips the scan at launch and makes a
+/// rescan start clean.
+pub fn alt_key_held() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        mac::option_key_down()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
 }
 
 /// Scan a single plugin file in this process. Prefer [`scanner::scan_out_of_process`].
@@ -375,5 +460,60 @@ pub(crate) fn wire_note_id(id: rlive_core::NoteId) -> i32 {
         -1
     } else {
         id as i32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn folder(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_link_back_up_the_tree_does_not_loop() {
+        let root = folder("rlive-walk-loop");
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        std::fs::write(root.join("a/x.clap"), b"").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&root, root.join("a/back")).unwrap();
+        assert_eq!(
+            find_plugin_files(PluginFormat::Clap, std::slice::from_ref(&root)),
+            vec![root.join("a/x.clap")]
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_folder_is_followed() {
+        let root = folder("rlive-walk-link");
+        let elsewhere = folder("rlive-walk-elsewhere");
+        std::fs::write(elsewhere.join("y.vst3"), b"").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, root.join("alias")).unwrap();
+        assert_eq!(
+            find_plugin_files(PluginFormat::Vst3, std::slice::from_ref(&root)),
+            vec![root.join("alias/y.vst3")]
+        );
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&elsewhere).ok();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_finder_alias_to_a_folder_is_followed() {
+        let root = folder("rlive-walk-alias");
+        let elsewhere = folder("rlive-walk-alias-target");
+        std::fs::write(elsewhere.join("z.clap"), b"").unwrap();
+        assert!(mac::write_alias(&elsewhere, &root.join("Alias")));
+        let found = find_plugin_files(PluginFormat::Clap, std::slice::from_ref(&root));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].file_name().unwrap(), "z.clap");
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&elsewhere).ok();
     }
 }

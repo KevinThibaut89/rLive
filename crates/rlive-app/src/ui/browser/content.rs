@@ -546,6 +546,20 @@ fn content_pane(
             theme::font(11.0),
             pal().text_dim,
         );
+        // Plug-ins aren't looked for until asked (manual p. 480).
+        if matches!(
+            state.browser.model.nav.scope,
+            Scope::Label(rlive_browser::item::Label::Plugins)
+        ) && session.plugins.plugins.is_empty()
+        {
+            let r = Rect::from_center_size(
+                list.center_top() + Vec2::new(0.0, 48.0),
+                Vec2::new(80.0, 20.0),
+            );
+            if ui.put(r, egui::Button::new("Activate")).clicked() {
+                state.request_scan = true;
+            }
+        }
     }
     if matches!(state.browser.model.nav.scope, Scope::Place(_)) {
         receive_drop_into_place(ui, list, session, state);

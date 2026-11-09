@@ -2081,3 +2081,80 @@ fn a_chain_tap_is_compensated_at_its_own_point_in_the_rack() {
     );
     assert!(close(out[at as usize + 400], 2.0));
 }
+
+fn hosted_gain(prefix: &str) -> (std::path::PathBuf, rlive_plugin_host::PluginInstance) {
+    let (path, found) = super::plugin_tests::clap_fixture(prefix);
+    let desc = found.iter().find(|d| d.id == "rs.rlive.test-gain").unwrap();
+    let inst = rlive_plugin_host::instantiate(desc, SR, BLOCK).unwrap();
+    (path, inst)
+}
+
+/// A real plug-in, in the signal path the Session compiles: A plays into its sidechain input.
+#[test]
+fn a_track_routed_to_a_hosted_plugins_sidechain_reaches_it() {
+    use rlive_plugin_host::keyed::KeyedProcessor;
+    let (path, inst) = hosted_gain("rlive-io-keyed");
+    let mut rigged = Rigged::default();
+    let mut p = Project::empty();
+    let mut a = audio(&p, "a");
+    let mut b = audio(&p, "b");
+    a.devices
+        .push(device("one", &mut rigged, Box::new(Dc(0.5))));
+    let key = device(
+        "key",
+        &mut rigged,
+        Box::new(KeyedProcessor::new(inst.processor, BLOCK)),
+    );
+    let key_id = key.id;
+    b.devices.push(key);
+    a.routing.output = Route::Track {
+        track: b.id,
+        device: Some(key_id),
+    };
+    p.tracks = vec![a, b];
+    assert_eq!(plan_of(&p).sidechains.len(), 1);
+    let mut r = rig(&p, &mut rigged);
+    // The fixture adds its key to its output; its own input is silent.
+    assert!(close(r.settled(), 0.5), "{}", r.settled());
+    drop(inst.handle);
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+}
+
+/// A real plug-in's second output, picked up by another track as an audio source.
+#[test]
+fn a_hosted_plugins_aux_output_feeds_another_track() {
+    let (path, inst) = hosted_gain("rlive-io-aux");
+    let mut rigged = Rigged::default();
+    let mut p = Project::empty();
+    let mut a = audio(&p, "a");
+    let mut b = audio(&p, "b");
+    let mut c = audio(&p, "c");
+    a.devices
+        .push(device("one", &mut rigged, Box::new(Dc(0.8))));
+    let plugin = device("plug", &mut rigged, inst.processor);
+    let plugin_id = plugin.id;
+    rigged.aux.insert(plugin_id);
+    b.devices.push(plugin);
+    a.routing.output = Route::Track {
+        track: b.id,
+        device: Some(plugin_id),
+    };
+    b.routing.output = Route::SendsOnly;
+    c.routing.input = Route::Track {
+        track: b.id,
+        device: None,
+    };
+    c.routing.tap = Tap::Aux {
+        device: plugin_id,
+        output: 0,
+    };
+    c.routing.monitor = Monitor::In;
+    p.tracks = vec![a, b, c];
+    let wiring = PluginWiring::of(&plan_of(&p));
+    assert!(wiring.aux.contains(&plugin_id));
+    let mut r = rig(&p, &mut rigged);
+    // Half the key comes out of the aux, and that is all the Main output has.
+    assert!(close(r.settled(), 0.4), "{}", r.settled());
+    drop(inst.handle);
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+}

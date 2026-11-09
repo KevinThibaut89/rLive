@@ -47,6 +47,9 @@ pub struct DeviceSlot {
     pub cells: Range<u32>,
     pub ports: Ports,
     pub bypass: bool,
+    /// An instrument that also writes MIDI: it still plays what's in the tuning, unlike a true
+    /// MIDI effect, which works on notes.
+    pub instrument_midi_out: bool,
     /// The device replaces the MIDI stream with its `events_out`, for the devices after it.
     pub midi_effect: bool,
     /// The device's latency in frames, shared with the UI.
@@ -84,6 +87,7 @@ impl DeviceSlot {
             ports: Ports::default(),
             bypass: false,
             midi_effect: false,
+            instrument_midi_out: false,
             latency: Arc::new(AtomicU32::new(0)),
             mod_out: Box::default(),
             mod_base: NO_MOD_BASE,
@@ -886,7 +890,8 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
                     heard
                 };
                 // After the MIDI effects, which work in notes of the tuning, not frequencies.
-                let heard = match at.tuning.filter(|_| !dev.midi_effect && !flush) {
+                let works_on_notes = dev.midi_effect && !dev.instrument_midi_out;
+                let heard = match at.tuning.filter(|_| !works_on_notes && !flush) {
                     Some(table) => {
                         at.tuned.clear();
                         for e in heard {

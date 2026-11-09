@@ -15,6 +15,7 @@ use rlive_audio_io::{BitDepth, FileType};
 use rlive_project::clip_envelope::SessionAutomationIn;
 use rlive_project::WarpMode;
 use rlive_remote::TakeoverMode;
+use std::path::PathBuf;
 
 /// A page of the Settings window.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -788,10 +789,25 @@ impl RliveApp {
 
     fn plugins_tab(&mut self, ui: &mut egui::Ui) {
         widgets::section_label(ui, "PLUG-IN SOURCES");
-        ui.label(
-            RichText::new("System CLAP/VST3 folders and Audio Units are searched, plus:")
-                .color(pal().text_dim),
-        );
+        let mut changed = false;
+        grid(ui, "plugin_sources", |ui| {
+            let plugins = &mut self.settings.plugins;
+            let mut row = |ui: &mut egui::Ui, label: &str, value: &mut bool| {
+                ui.label(label);
+                changed |= ui.checkbox(value, "").changed();
+                ui.end_row();
+            };
+            row(
+                ui,
+                "Use CLAP and VST3 System Folders",
+                &mut plugins.use_system_folders,
+            );
+            row(ui, "Use Custom Folders", &mut plugins.use_custom_folders);
+            if cfg!(target_os = "macos") {
+                row(ui, "Use Audio Units", &mut plugins.use_audio_units);
+            }
+        });
+        ui.label(RichText::new("Custom folders, searched for every format:").color(pal().text_dim));
         let mut remove = None;
         for (i, d) in self.settings.plugin_dirs.iter().enumerate() {
             ui.horizontal(|ui| {
@@ -803,27 +819,59 @@ impl RliveApp {
         }
         if let Some(i) = remove {
             self.settings.plugin_dirs.remove(i);
+            changed = true;
         }
         ui.horizontal(|ui| {
             if ui.button("Add Folder…").clicked() {
                 if let Some(d) = rfd::FileDialog::new().pick_folder() {
                     self.settings.plugin_dirs.push(d);
+                    changed = true;
                 }
             }
-            if ui
-                .add_enabled(self.ui.scan_rx.is_none(), egui::Button::new("Rescan"))
-                .clicked()
-            {
+            let label = if self.settings.plugins.activated {
+                "Rescan"
+            } else {
+                "Activate"
+            };
+            let rescan = ui
+                .add_enabled(self.ui.scan_rx.is_none(), egui::Button::new(label))
+                .on_hover_text("Hold Option to delete the plug-in database and start clean");
+            if rescan.clicked() {
                 self.start_plugin_scan();
             }
         });
         ui.label(RichText::new(&self.ui.scan_status).color(pal().text_dim));
+        let disabled: Vec<PathBuf> = self
+            .session
+            .plugins
+            .files
+            .iter()
+            .filter(|f| f.disabled)
+            .map(|f| f.path.clone())
+            .collect();
+        if !disabled.is_empty() {
+            let mut enable = None;
+            ui.collapsing(format!("{} disabled plug-ins", disabled.len()), |ui| {
+                for p in &disabled {
+                    ui.horizontal(|ui| {
+                        ui.label(p.display().to_string());
+                        if ui.small_button("Enable").clicked() {
+                            enable = Some(p.clone());
+                        }
+                    });
+                }
+            });
+            if let Some(path) = enable {
+                self.session.plugins.set_disabled(&path, false);
+                changed = true;
+            }
+        }
         let failed: Vec<_> = self
             .session
             .plugins
             .files
             .iter()
-            .filter(|f| !f.ok)
+            .filter(|f| !f.ok && !f.disabled)
             .collect();
         if !failed.is_empty() {
             ui.collapsing(
@@ -842,10 +890,31 @@ impl RliveApp {
         ui.add_space(10.0);
         widgets::section_label(ui, "PLUG-IN WINDOWS");
         grid(ui, "plugin_windows", |ui| {
-            soon_check(ui, "Auto-Open Plug-In Windows", true, "A17");
-            soon_check(ui, "Multiple Plug-In Windows", true, "A17");
-            soon_check(ui, "Auto-Hide Plug-In Windows", true, "A17");
+            let plugins = &mut self.settings.plugins;
+            let mut row = |ui: &mut egui::Ui, label: &str, value: &mut bool| {
+                ui.label(label);
+                changed |= ui.checkbox(value, "").changed();
+                ui.end_row();
+            };
+            row(
+                ui,
+                "Auto-Open Plug-In Windows",
+                &mut plugins.auto_open_windows,
+            );
+            row(
+                ui,
+                "Multiple Plug-In Windows",
+                &mut plugins.multiple_windows,
+            );
+            row(
+                ui,
+                "Auto-Hide Plug-In Windows",
+                &mut plugins.auto_hide_windows,
+            );
         });
+        if changed {
+            self.settings.save();
+        }
     }
 }
 

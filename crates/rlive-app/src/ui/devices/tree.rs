@@ -3,8 +3,9 @@
 
 use super::layout::{self, SectionPlan};
 use super::rack::{RackView, RackWidths};
+use crate::session::plugins::panel_params;
 use crate::session::{ChainRef, DeviceRuntime};
-use rlive_core::{ChainId, DeviceId, ParamId, ParamOwner, ParamRef, Section};
+use rlive_core::{ChainId, DeviceId, Item, ParamId, ParamKind, ParamOwner, ParamRef, Section};
 use rlive_project::{Chain, Device, DeviceKind};
 use std::collections::{HashMap, HashSet};
 
@@ -37,7 +38,7 @@ pub struct PlanInput<'a> {
 /// Whether a built-in device gets the sidechain chooser. The External devices use their sidechain
 /// input for what comes back from the hardware, and choose it in their own panel.
 pub fn has_sidechain_chooser(dev: &Device, rt: &DeviceRuntime) -> bool {
-    rt.sidechain_input && rt.plugin.is_none() && !is_external(dev)
+    rt.sidechain_input && !is_external(dev)
 }
 
 fn is_external(dev: &Device) -> bool {
@@ -172,10 +173,16 @@ fn plan_device<'a>(
     let is_plugin = matches!(dev.kind, DeviceKind::Plugin { .. });
     let declared: &[Section] = rt.map_or(&[][..], |r| r.layout.as_slice());
     let (auto, truncated) = layout::auto_section(params, input.show_all.contains(&dev.id));
-    let auto_truncated = declared.is_empty() && truncated;
+    let auto_truncated = !is_plugin && declared.is_empty() && truncated;
     let extra_h = extra_rows_h(rt, auto_truncated, is_external(dev));
     let body_h = layout::body_height(height, extra_h);
-    let sections = if declared.is_empty() {
+    let plugin = is_plugin.then(|| plugin_sections(dev, params, rt));
+    let sections = if let Some(sections) = &plugin {
+        sections
+            .iter()
+            .map(|s| layout::plan_section(s, body_h, &index))
+            .collect()
+    } else if declared.is_empty() {
         vec![layout::plan_section(&auto, body_h, &index)]
     } else {
         declared
@@ -199,7 +206,11 @@ fn plan_device<'a>(
         body: NodeBody::Controls(ControlPlan {
             sections,
             truncated: auto_truncated,
-            visible: index.len(),
+            visible: if is_plugin {
+                shown_on_panel(dev, params)
+            } else {
+                index.len()
+            },
             macro_owned,
         }),
     }
@@ -263,6 +274,54 @@ fn plan_rack<'a>(
     }
 }
 
+/// How many parameters are on a plug-in's panel.
+fn shown_on_panel(dev: &Device, params: &[rlive_core::ParamInfo]) -> usize {
+    match &dev.kind {
+        DeviceKind::Plugin { panel, .. } => panel_params(panel, params).len(),
+        _ => 0,
+    }
+}
+
+/// A plug-in's panel: its sidechain block, X-Y field, and parameters as sliders (pp. 481-485).
+fn plugin_sections(
+    dev: &Device,
+    params: &[rlive_core::ParamInfo],
+    rt: Option<&DeviceRuntime>,
+) -> Vec<Section> {
+    use rlive_core::param::plugin_sidechain as sc;
+    let DeviceKind::Plugin { panel, .. } = &dev.kind else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if rt.is_some_and(|r| r.sidechain_input) {
+        out.push(Section {
+            title: "Sidechain",
+            items: vec![
+                Item::Knob(sc::GAIN),
+                Item::Knob(sc::MIX),
+                Item::Toggle(sc::MUTE),
+            ],
+        });
+    }
+    if params.iter().any(|p| !sc::contains(p.id)) {
+        out.push(Section {
+            title: "",
+            items: vec![Item::Panel("plugin_xy")],
+        });
+    }
+    let by_id: std::collections::HashMap<u32, &rlive_core::ParamInfo> =
+        params.iter().map(|p| (p.id, p)).collect();
+    let items = panel_params(panel, params)
+        .into_iter()
+        .map(|id| match by_id.get(&id).map(|p| &p.kind) {
+            Some(ParamKind::Toggle) => Item::Toggle(ParamId(id)),
+            _ => Item::Slider(ParamId(id)),
+        })
+        .collect();
+    out.push(Section { title: "", items });
+    out
+}
+
 /// Rows drawn over a device's sections: an error, its sample slots, the "show all" switch.
 fn extra_rows_h(rt: Option<&DeviceRuntime>, truncated: bool, external: bool) -> f32 {
     let mut h = 0.0;
@@ -270,7 +329,10 @@ fn extra_rows_h(rt: Option<&DeviceRuntime>, truncated: bool, external: bool) -> 
         h += 34.0;
     }
     h += rt.map_or(0, |r| r.sample_slots) as f32 * 24.0;
-    if rt.is_some_and(|r| r.sidechain_input && r.plugin.is_none()) && !external {
+    if rt.is_some_and(|r| r.sidechain_input) && !external {
+        h += 22.0;
+    }
+    if rt.is_some_and(|r| r.has_preset_row()) {
         h += 22.0;
     }
     if truncated {

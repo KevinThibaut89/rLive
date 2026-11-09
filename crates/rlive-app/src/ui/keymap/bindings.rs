@@ -192,8 +192,8 @@ pub static BINDINGS: &[Binding] = &[
     a("42.4", Dev, "Reset parameter", g1("Delete or double-click"), W),
     a("42.4", Brw, "Load selected device", k(NO, Key::Enter), L(M::Browser(Br::Load))),
     a("42.4", Dev, "Hot-swap selected device", k(NO, Key::Q), L(M::Browser(Br::ToggleHotSwap))),
-    a("42.4", All, "Hide/show plug-in windows", k(CMD_ALT, Key::P), p!("A17")),
-    a("42.4", Dev, "Keep several plug-in windows open", g("Cmd", "Ctrl"), p!("A17")),
+    a("42.4", All, "Hide/show plug-in windows", k(CMD_ALT, Key::P), L(M::View(View::TogglePluginWindows))),
+    a("42.4", Dev, "Keep several plug-in windows open", g("Cmd", "Ctrl"), W),
     a("42.4", Dev, "Compare A/B", k(NO, Key::P), L(M::Browser(Br::CompareSwitch))),
 
     // 42.5 Editing

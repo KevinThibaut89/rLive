@@ -88,17 +88,19 @@ impl ParkedTrack {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParkedDevice {
     pub plugin_state: Option<Vec<u8>>,
+    pub plugin_bank: crate::PluginBank,
     pub expanded: bool,
 }
 
 impl ParkedDevice {
     pub fn of(d: &Device) -> Self {
-        let plugin_state = match &d.kind {
-            DeviceKind::Plugin { state, .. } => state.clone(),
-            _ => None,
+        let (plugin_state, plugin_bank) = match &d.kind {
+            DeviceKind::Plugin { state, bank, .. } => (state.clone(), bank.clone()),
+            _ => (None, Default::default()),
         };
         Self {
             plugin_state,
+            plugin_bank,
             expanded: d.expanded,
         }
     }
@@ -154,12 +156,15 @@ fn device_shell(d: &Device) -> Device {
             format,
             plugin_id,
             path,
+            panel,
             ..
         } => DeviceKind::Plugin {
             format: *format,
             plugin_id: plugin_id.clone(),
             path: path.clone(),
             state: None,
+            panel: panel.clone(),
+            bank: Default::default(),
         },
         DeviceKind::Rack {
             kind,
@@ -427,7 +432,12 @@ impl DeviceSnap {
             d.expanded = p.expanded;
         }
         match &mut d.kind {
-            DeviceKind::Plugin { state, .. } => *state = parked.and_then(|p| p.plugin_state),
+            DeviceKind::Plugin { state, bank, .. } => {
+                if let Some(p) = parked {
+                    *state = p.plugin_state;
+                    *bank = p.plugin_bank;
+                }
+            }
             DeviceKind::Rack {
                 chains, returns, ..
             } => {

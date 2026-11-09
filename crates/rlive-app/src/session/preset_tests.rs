@@ -792,6 +792,7 @@ fn a_plugin_default_configuration_keeps_only_the_list() {
         format: rlive_core::PluginFormat::Clap,
         plugin_id: "com.example.synth".into(),
         params: vec![3, 7],
+        xy: [Some(7), None],
     };
     let path = lib.plugin_config_path(config.format, &config.plugin_id);
     Preset::of_plugin_config(config.clone(), "Default")

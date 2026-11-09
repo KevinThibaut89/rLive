@@ -1,5 +1,6 @@
 //! CLAP plugin hosting.
 
+use crate::midi_out::MidiOutput;
 use crate::{
     bundle_binary, cbuf_to_string, cptr_to_string, wire_note_id, HostError, HostNotification,
     PluginDescriptor, PluginHandle, PluginInstance, PortBuffers, Result,
@@ -24,9 +25,9 @@ use clap_sys::process::clap_process;
 use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::version::CLAP_VERSION;
 use rlive_core::{
-    ExprKind, MidiEvent, MidiMessage, MpeEncoder, MpeOutput, MpeZone, NoteId, ParamFlags,
-    ParamInfo, ParamKind, ParamOutQueue, PluginFormat, ProcessContext, Processor, Resource, Tail,
-    MPE_SLOT,
+    EventQueue, ExprKind, MidiEvent, MidiMessage, MpeEncoder, MpeOutput, MpeZone, NoteId,
+    ParamFlags, ParamInfo, ParamKind, ParamOutQueue, PluginFormat, ProcessContext, Processor,
+    Resource, Tail, MPE_SLOT,
 };
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
@@ -151,6 +152,10 @@ pub fn scan(path: &Path) -> Result<Vec<PluginDescriptor>> {
                     clap_sys::plugin_features::CLAP_PLUGIN_FEATURE_INSTRUMENT,
                 ),
                 subcategories: String::new(),
+                is_midi_effect: has_feature(
+                    d.features,
+                    clap_sys::plugin_features::CLAP_PLUGIN_FEATURE_NOTE_EFFECT,
+                ),
             });
         }
     }
@@ -438,24 +443,51 @@ fn port_channels(plugin: *const clap_plugin, is_input: bool) -> Vec<usize> {
     }
 }
 
-/// Whether the plugin wants notes as raw MIDI rather than CLAP note events.
-fn prefers_midi(plugin: *const clap_plugin) -> bool {
+/// What the plugin's first note port takes, if it has one.
+fn input_dialects(plugin: *const clap_plugin) -> clap_note_dialect {
     unsafe {
         let ext: *const clap_plugin_note_ports = ClapInstance::ext(plugin, CLAP_EXT_NOTE_PORTS);
-        if ext.is_null() {
-            return false;
-        }
-        let count = (*ext).count.map_or(0, |c| c(plugin, true));
-        if count == 0 {
-            return false;
+        if ext.is_null() || (*ext).count.map_or(0, |c| c(plugin, true)) == 0 {
+            return 0;
         }
         let mut info: clap_note_port_info = std::mem::zeroed();
         match (*ext).get {
-            Some(get) if get(plugin, 0, true, &mut info) => {
-                info.supported_dialects & CLAP_NOTE_DIALECT_CLAP == 0
-            }
-            _ => false,
+            Some(get) if get(plugin, 0, true, &mut info) => info.supported_dialects,
+            _ => 0,
         }
+    }
+}
+
+/// The name of each audio port after the main one.
+fn port_names(plugin: *const clap_plugin, is_input: bool) -> Vec<String> {
+    unsafe {
+        let ext: *const clap_plugin_audio_ports = ClapInstance::ext(plugin, CLAP_EXT_AUDIO_PORTS);
+        if ext.is_null() {
+            return Vec::new();
+        }
+        let count = (*ext).count.map_or(0, |c| c(plugin, is_input));
+        (1..count)
+            .map(|i| {
+                let mut info: clap_audio_port_info = std::mem::zeroed();
+                let named = match (*ext).get {
+                    Some(get) if get(plugin, i, is_input, &mut info) => cbuf_to_string(&info.name),
+                    _ => String::new(),
+                };
+                if named.is_empty() {
+                    format!("Output {}", i + 1)
+                } else {
+                    named
+                }
+            })
+            .collect()
+    }
+}
+
+/// Whether the plugin has a note port that sends notes on.
+fn has_note_output(plugin: *const clap_plugin) -> bool {
+    unsafe {
+        let ext: *const clap_plugin_note_ports = ClapInstance::ext(plugin, CLAP_EXT_NOTE_PORTS);
+        !ext.is_null() && (*ext).count.map_or(0, |c| c(plugin, false)) > 0
     }
 }
 
@@ -528,7 +560,11 @@ pub fn instantiate(
 
     let inputs = port_channels(plugin, true);
     let outputs = port_channels(plugin, false);
-    let midi_notes = prefers_midi(plugin);
+    let aux_names = port_names(plugin, false);
+    let dialects = input_dialects(plugin);
+    let midi_notes = dialects != 0 && dialects & CLAP_NOTE_DIALECT_CLAP == 0;
+    let takes_mpe = dialects & (CLAP_NOTE_DIALECT_MIDI | CLAP_NOTE_DIALECT_MIDI_MPE) != 0;
+    let midi_output = has_note_output(plugin);
 
     let activated = unsafe {
         (*plugin)
@@ -548,14 +584,17 @@ pub fn instantiate(
         max_block,
         sample_rate,
         midi_notes,
+        takes_mpe,
     );
     let mut handle = ClapHandle {
         inst,
         has_sidechain: inputs.len() > 1,
-        aux_count: outputs.len().saturating_sub(1),
+        aux_names,
+        midi_output,
         desc: desc.clone(),
         params: Vec::new(),
         editor: None,
+        title: None,
     };
     handle.rescan_params();
     Ok(PluginInstance {
@@ -575,10 +614,13 @@ enum Editor {
 pub struct ClapHandle {
     inst: Arc<ClapInstance>,
     has_sidechain: bool,
-    aux_count: usize,
+    aux_names: Vec<String>,
+    midi_output: bool,
     desc: PluginDescriptor,
     params: Vec<ParamInfo>,
     editor: Option<Editor>,
+    /// What the window should say, once it is open.
+    title: Option<String>,
 }
 
 impl ClapHandle {
@@ -694,9 +736,11 @@ impl PluginHandle for ClapHandle {
     }
 
     fn aux_outputs(&self) -> Vec<String> {
-        (0..self.aux_count)
-            .map(|n| format!("Output {}", n + 2))
-            .collect()
+        self.aux_names.clone()
+    }
+
+    fn midi_output(&self) -> bool {
+        self.midi_output
     }
 
     fn params(&self) -> Vec<ParamInfo> {
@@ -792,9 +836,9 @@ impl PluginHandle for ClapHandle {
                     get_size(plugin, &mut w, &mut h);
                 }
                 let resizable = (*gui).can_resize.is_some_and(|c| c(plugin));
-                let window =
-                    crate::mac::EditorWindow::new(&self.desc.name, w as f64, h as f64, resizable)
-                        .ok_or_else(|| HostError::Editor("could not create window".into()))?;
+                let title = self.title.as_deref().unwrap_or(&self.desc.name);
+                let window = crate::mac::EditorWindow::new(title, w as f64, h as f64, resizable)
+                    .ok_or_else(|| HostError::Editor("could not create window".into()))?;
                 let cw = clap_window {
                     api: api.as_ptr(),
                     specific: clap_window_handle {
@@ -821,7 +865,8 @@ impl PluginHandle for ClapHandle {
             if !(*gui).create.is_some_and(|c| c(plugin, api.as_ptr(), true)) {
                 return Err(HostError::Editor("gui.create (floating) failed".into()));
             }
-            let title = CString::new(self.desc.name.as_bytes()).unwrap_or_default();
+            let title = self.title.as_deref().unwrap_or(&self.desc.name);
+            let title = CString::new(title.as_bytes()).unwrap_or_default();
             if let Some(suggest) = (*gui).suggest_title {
                 suggest(plugin, title.as_ptr());
             }
@@ -841,6 +886,43 @@ impl PluginHandle for ClapHandle {
                 Editor::Embedded(w) => w.close(),
                 Editor::Floating => {}
             }
+        }
+    }
+
+    fn set_editor_visible(&mut self, visible: bool) {
+        if self.editor.is_none() {
+            return;
+        }
+        let gui = self.inst.gui;
+        if !gui.is_null() {
+            unsafe {
+                let change = if visible { (*gui).show } else { (*gui).hide };
+                if let Some(change) = change {
+                    change(self.inst.plugin);
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(Editor::Embedded(w)) = &self.editor {
+            w.set_visible(visible);
+        }
+    }
+
+    fn set_editor_title(&mut self, title: &str) {
+        self.title = Some(title.to_string());
+        match &self.editor {
+            #[cfg(target_os = "macos")]
+            Some(Editor::Embedded(w)) => w.set_title(title),
+            Some(Editor::Floating) => {
+                let gui = self.inst.gui;
+                let title = CString::new(title.as_bytes()).unwrap_or_default();
+                unsafe {
+                    if let Some(suggest) = (*gui).suggest_title {
+                        suggest(self.inst.plugin, title.as_ptr());
+                    }
+                }
+            }
+            None => {}
         }
     }
 
@@ -954,8 +1036,12 @@ pub struct ClapProcessor {
     steady_time: i64,
     is_instrument: bool,
     midi_notes: bool,
+    /// It can take MPE when MPE Mode asks for it, whatever it would take by default.
+    takes_mpe: bool,
+    mpe_mode: bool,
     /// Carries note expression to plugins that take notes as MIDI.
     mpe: MpeEncoder,
+    midi_out: MidiOutput,
     /// Reused each block for what `mpe` produces.
     encoded: Vec<MidiEvent>,
     max_block: usize,
@@ -973,6 +1059,7 @@ impl ClapProcessor {
         max_block: usize,
         sample_rate: f64,
         midi_notes: bool,
+        takes_mpe: bool,
     ) -> Self {
         let mut inputs: Vec<PortBuffers> = inputs
             .iter()
@@ -1004,7 +1091,10 @@ impl ClapProcessor {
             transport: unsafe { std::mem::zeroed() },
             steady_time: 0,
             midi_notes,
+            takes_mpe,
+            mpe_mode: false,
             mpe: MpeEncoder::new(MpeZone::Lower, 15),
+            midi_out: MidiOutput::default(),
             encoded: Vec::with_capacity(MAX_EVENTS),
             max_block,
             sample_rate,
@@ -1056,6 +1146,11 @@ impl ClapProcessor {
         }
     }
 
+    /// Whether this block's notes go out as MIDI rather than as CLAP note events.
+    fn sends_midi(&self) -> bool {
+        self.midi_notes || self.mpe_mode
+    }
+
     fn push_note(&mut self, time: u32, event: &MidiEvent) {
         match event.message {
             MidiMessage::NoteOn {
@@ -1064,7 +1159,7 @@ impl ClapProcessor {
                 velocity,
                 note_id,
                 tuning,
-            } if !self.midi_notes => {
+            } if !self.sends_midi() => {
                 self.push(ClapEvent {
                     note: clap_event_note {
                         header: Self::header::<clap_event_note>(time, CLAP_EVENT_NOTE_ON),
@@ -1091,7 +1186,7 @@ impl ClapProcessor {
                 key,
                 velocity,
                 note_id,
-            } if !self.midi_notes => self.push(ClapEvent {
+            } if !self.sends_midi() => self.push(ClapEvent {
                 note: clap_event_note {
                     header: Self::header::<clap_event_note>(time, CLAP_EVENT_NOTE_OFF),
                     note_id: wire_note_id(note_id),
@@ -1107,7 +1202,7 @@ impl ClapProcessor {
                 note_id,
                 kind,
                 value,
-            } if !self.midi_notes => {
+            } if !self.sends_midi() => {
                 let expression = match kind {
                     ExprKind::Pitch => CLAP_NOTE_EXPRESSION_TUNING,
                     ExprKind::Slide => CLAP_NOTE_EXPRESSION_BRIGHTNESS,
@@ -1171,14 +1266,80 @@ unsafe extern "C" fn in_events_get(
     }
 }
 
+/// Where a plugin's output events go during one `process` call.
+struct OutSinks<'a> {
+    params: &'a mut ParamOutQueue,
+    midi: &'a mut EventQueue,
+    output: &'a mut MidiOutput,
+}
+
 unsafe extern "C" fn out_events_try_push(
     list: *const clap_output_events,
     event: *const clap_event_header,
 ) -> bool {
-    let q = &mut *((*list).ctx as *mut ParamOutQueue);
-    if (*event).space_id == CLAP_CORE_EVENT_SPACE_ID && (*event).type_ == CLAP_EVENT_PARAM_VALUE {
-        let e = &*(event as *const clap_event_param_value);
-        q.push(e.param_id, e.value);
+    let sinks = &mut *((*list).ctx as *mut OutSinks);
+    if (*event).space_id != CLAP_CORE_EVENT_SPACE_ID {
+        return true;
+    }
+    let offset = (*event).time;
+    match (*event).type_ {
+        CLAP_EVENT_PARAM_VALUE => {
+            let e = &*(event as *const clap_event_param_value);
+            sinks.params.push(e.param_id, e.value);
+        }
+        CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE => {
+            let e = &*(event as *const clap_event_note);
+            if e.key < 0 {
+                return true;
+            }
+            let (channel, key) = (e.channel.max(0) as u8 & 15, e.key as u8 & 127);
+            let note_id = e.note_id.max(0) as NoteId;
+            let velocity = e.velocity as f32;
+            let message = if (*event).type_ == CLAP_EVENT_NOTE_ON {
+                MidiMessage::NoteOn {
+                    channel,
+                    key,
+                    velocity,
+                    note_id,
+                    tuning: 0.0,
+                }
+            } else {
+                MidiMessage::NoteOff {
+                    channel,
+                    key,
+                    velocity,
+                    note_id,
+                }
+            };
+            sinks.output.push(sinks.midi, offset, message);
+        }
+        CLAP_EVENT_NOTE_EXPRESSION => {
+            let e = &*(event as *const clap_event_note_expression);
+            let kind = match e.expression_id {
+                CLAP_NOTE_EXPRESSION_TUNING => ExprKind::Pitch,
+                CLAP_NOTE_EXPRESSION_BRIGHTNESS => ExprKind::Slide,
+                CLAP_NOTE_EXPRESSION_PRESSURE => ExprKind::Pressure,
+                _ => return true,
+            };
+            if e.key < 0 {
+                return true;
+            }
+            let message = MidiMessage::NoteExpr {
+                channel: e.channel.max(0) as u8 & 15,
+                key: e.key as u8 & 127,
+                note_id: e.note_id.max(0) as NoteId,
+                kind,
+                value: e.value as f32,
+            };
+            sinks.output.push(sinks.midi, offset, message);
+        }
+        CLAP_EVENT_MIDI => {
+            let e = &*(event as *const clap_event_midi);
+            if let Some(message) = MidiMessage::from_bytes(&e.data) {
+                sinks.output.push(sinks.midi, offset, message);
+            }
+        }
+        _ => {}
     }
     true
 }
@@ -1209,18 +1370,15 @@ impl Processor for ClapProcessor {
         let last = frames.saturating_sub(1) as u32;
         // Plugins that take MIDI can't receive CLAP note expression, so it becomes MPE.
         let mut encoded = std::mem::take(&mut self.encoded);
-        if self.midi_notes {
+        let midi_notes = self.midi_notes || self.mpe_mode;
+        if midi_notes {
             self.mpe.encode(ctx.events, &mut |e| {
                 if encoded.len() < encoded.capacity() {
                     encoded.push(e);
                 }
             });
         }
-        let source = if self.midi_notes {
-            &encoded
-        } else {
-            ctx.events
-        };
+        let source = if midi_notes { &encoded } else { ctx.events };
         let (mut next_param, mut next_event) = (0, 0);
         // CLAP needs events in time order, so merge the parameter and MIDI streams.
         loop {
@@ -1298,8 +1456,13 @@ impl Processor for ClapProcessor {
             size: Some(in_events_size),
             get: Some(in_events_get),
         };
+        let mut sinks = OutSinks {
+            params: &mut *ctx.param_out,
+            midi: &mut *ctx.events_out,
+            output: &mut self.midi_out,
+        };
         let out_list = clap_output_events {
-            ctx: &mut *ctx.param_out as *mut ParamOutQueue as *mut c_void,
+            ctx: &mut sinks as *mut OutSinks as *mut c_void,
             try_push: Some(out_events_try_push),
         };
         let process = clap_process {
@@ -1341,6 +1504,9 @@ impl Processor for ClapProcessor {
                 Some(o) => MpeEncoder::configured(*o),
                 None => MpeEncoder::new(MpeZone::Lower, 15),
             };
+            self.midi_out = MidiOutput::new_for(*output);
+            // A plugin that only knows CLAP's own expression keeps getting that.
+            self.mpe_mode = output.is_some() && self.takes_mpe;
         }
         Some(resource)
     }

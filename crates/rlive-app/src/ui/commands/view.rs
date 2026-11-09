@@ -35,6 +35,7 @@ super::domain! {
         FocusBrowser,
         FocusGroovePool,
         CloseDialog,
+        TogglePluginWindows,
     }
 }
 
@@ -61,6 +62,10 @@ pub const MENU: &[Entry] = &[
     Item(
         "Undo History",
         M::Browser(crate::ui::commands::browser::Browser::ToggleUndoHistory),
+    ),
+    Item(
+        "Hide/Show Plug-In Windows",
+        M::View(View::TogglePluginWindows),
     ),
     Separator,
     Item("Zoom In", M::View(View::ZoomIn)),
@@ -144,6 +149,7 @@ impl RliveApp {
     pub(super) fn view_command(&mut self, ctx: &egui::Context, c: View) {
         let zoom = ctx.zoom_factor();
         match c {
+            View::TogglePluginWindows => self.session.toggle_plugin_windows(),
             View::ToggleMainView => {
                 self.ui.main_view = match self.ui.main_view {
                     MainView::Session => MainView::Arrangement,

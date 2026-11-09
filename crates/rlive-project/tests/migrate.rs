@@ -583,3 +583,62 @@ fn the_v2_schema_round_trips_when_it_is_used() {
     assert_eq!(p, loaded);
     assert_eq!(text, loaded.to_ron().unwrap());
 }
+
+#[test]
+fn a_plugin_saved_before_configure_mode_loads_with_a_default_panel() {
+    let mut p = rlive_project::Project::empty();
+    let mut track = rlive_project::Track::new("t", rlive_project::TrackKind::Midi, [1, 2, 3], 0);
+    track.devices.push(rlive_project::Device::plugin(
+        rlive_core::PluginFormat::Clap,
+        "com.example",
+        "/p.clap".into(),
+        "P",
+    ));
+    p.tracks.push(track);
+    let text = p.to_ron().unwrap();
+    assert!(!text.contains("panel"), "a default panel isn't written");
+    assert!(!text.contains("bank"), "and neither is a default bank");
+    let back = rlive_project::Project::from_ron(&text).unwrap();
+    let DeviceKind::Plugin { panel, bank, .. } = &back.tracks[0].devices[0].kind else {
+        panic!("not a plug-in");
+    };
+    assert_eq!(*panel, rlive_project::PluginPanel::default());
+    assert_eq!(*bank, rlive_project::PluginBank::default());
+}
+
+#[test]
+fn a_configured_plugin_round_trips_through_a_project_file() {
+    let mut p = rlive_project::Project::empty();
+    let mut track = rlive_project::Track::new("t", rlive_project::TrackKind::Midi, [1, 2, 3], 0);
+    let mut device = rlive_project::Device::plugin(
+        rlive_core::PluginFormat::Vst3,
+        "com.example",
+        "/p.vst3".into(),
+        "P",
+    );
+    if let DeviceKind::Plugin { panel, bank, .. } = &mut device.kind {
+        panel.params = Some(vec![9, 2, 77]);
+        panel.xy = [Some(2), None];
+        bank.current = 1;
+        bank.slot(1).name = "Lead".into();
+        bank.slot(1).state = Some(vec![1, 2, 3]);
+    }
+    let expected = device.kind.clone();
+    track.devices.push(device);
+    p.tracks.push(track);
+    let back = rlive_project::Project::from_ron(&p.to_ron().unwrap()).unwrap();
+    assert_eq!(back.tracks[0].devices[0].kind, expected);
+}
+
+#[test]
+fn a_bank_file_round_trips() {
+    let mut bank = rlive_project::PluginBank::default();
+    bank.slot(3).name = "Pad".into();
+    bank.slot(3).state = Some(vec![5, 6]);
+    bank.current = 3;
+    assert_eq!(
+        rlive_project::PluginBank::from_text(&bank.to_text()),
+        Ok(bank)
+    );
+    assert!(rlive_project::PluginBank::from_text("not a bank").is_err());
+}

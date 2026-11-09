@@ -18,8 +18,28 @@ pub(crate) enum Action {
     Param(DeviceId, u32, f64),
     /// Hand one overridden parameter back to its automation.
     ReEnable(DeviceId, u32),
-    OpenEditor(DeviceId),
+    /// Open a plug-in's window; `true` keeps the others open whatever the setting says.
+    OpenEditor(DeviceId, bool),
     CloseEditor(DeviceId),
+    /// Enter or leave Configure Mode.
+    ToggleConfigure(DeviceId),
+    /// Select a parameter on a panel in Configure Mode.
+    SelectPanelParam(DeviceId, u32),
+    /// Take a parameter off a panel, asking first if that would lose anything.
+    RemovePanelParam(DeviceId, u32),
+    /// Move a parameter on a panel from one position to another.
+    MovePanelParam(DeviceId, usize, usize),
+    /// Choose an axis of a plug-in's X-Y field.
+    SetXy(DeviceId, usize, Option<u32>),
+    /// Go to one of a plug-in's own presets.
+    SelectBankPreset(DeviceId, usize),
+    /// Name one of them.
+    EditPresetName(DeviceId, usize, String),
+    /// Load a preset or bank, or save one, through a file dialog.
+    LoadPresetFile(DeviceId),
+    SavePresetFile(DeviceId),
+    /// Load one of the presets an Audio Unit brought with it.
+    LoadUnitPreset(DeviceId, usize),
     LoadSample(DeviceId, usize),
     Reload(DeviceId),
     /// A plug-in's MPE Mode and channels.
@@ -121,24 +141,71 @@ fn apply(
                 session.re_enable_cell(chain, cell);
             }
         }
-        Action::OpenEditor(id) => {
-            if let Some(h) = session
-                .runtimes
-                .get_mut(&id)
-                .and_then(|r| r.plugin.as_mut())
+        Action::OpenEditor(id, keep_others) => {
+            if let Err(e) = session.open_plugin_window(id, keep_others) {
+                *status = format!("Editor: {e}");
+            }
+        }
+        Action::CloseEditor(id) => session.close_plugin_window(id),
+        Action::ToggleConfigure(id) => {
+            session.toggle_configure(id);
+            view.configure_selected = None;
+        }
+        Action::SelectPanelParam(id, param) => {
+            view.configure_selected = Some((chain, id, param));
+        }
+        Action::RemovePanelParam(id, param) => {
+            if !session.can_remove_from_panel(id) {
+                *status = "This plug-in has no window, so its panel can only be reordered".into();
+            } else if session.param_usage(chain, id, param).any() {
+                view.confirm_panel_remove = Some((chain, id, param));
+            } else {
+                session.remove_from_panel(chain, id, param);
+                view.configure_selected = None;
+            }
+        }
+        Action::MovePanelParam(id, from, to) => session.move_in_panel(chain, id, from, to),
+        Action::SetXy(id, axis, param) => session.set_xy_param(chain, id, axis, param),
+        Action::SelectBankPreset(id, index) => session.select_plugin_preset(chain, id, index),
+        Action::EditPresetName(id, index, name) => {
+            view.rename_preset = Some((chain, id, index, name));
+        }
+        Action::LoadPresetFile(id) => {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("VST3 Preset or Bank", &["vstpreset", "rlbank"])
+                .pick_file()
             {
-                if let Err(e) = h.open_editor() {
-                    *status = format!("Editor: {e}");
+                let bank = path.extension().is_some_and(|e| e == "rlbank");
+                let result = if bank {
+                    session.load_plugin_bank(chain, id, &path)
+                } else {
+                    session.load_plugin_preset(chain, id, &path)
+                };
+                if let Err(e) = result {
+                    *status = format!("Preset: {e}");
                 }
             }
         }
-        Action::CloseEditor(id) => {
-            if let Some(h) = session
-                .runtimes
-                .get_mut(&id)
-                .and_then(|r| r.plugin.as_mut())
+        Action::SavePresetFile(id) => {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("VST3 Preset", &["vstpreset"])
+                .add_filter("Preset Bank", &["rlbank"])
+                .save_file()
             {
-                h.close_editor();
+                let bank = path.extension().is_some_and(|e| e == "rlbank");
+                let result = if bank {
+                    session.save_plugin_bank(chain, id, &path)
+                } else {
+                    session.save_plugin_preset(chain, id, &path)
+                };
+                if let Err(e) = result {
+                    *status = format!("Preset: {e}");
+                }
+            }
+        }
+        Action::LoadUnitPreset(id, index) => {
+            if !session.load_unit_preset(chain, id, index) {
+                *status = "That preset could not be loaded".to_string();
             }
         }
         Action::LoadSample(id, slot) => {

@@ -1,8 +1,10 @@
 //! Persistent user preferences, as set in the Settings window.
 
+use crate::session::plugins::PluginWindowPrefs;
 use crate::session::WarpDefaults;
 use crate::ui::theme::ThemeSettings;
 use rlive_audio_io::{BitDepth, CacheConfig, FileType, LoaderConfig};
+use rlive_plugin_host::scanner::ScanSources;
 use rlive_project::clip_envelope::SessionAutomationIn;
 use rlive_project::{ExternalRoute, Project, PALETTE};
 use serde::{Deserialize, Serialize};
@@ -457,6 +459,66 @@ impl RemoteSettings {
     }
 }
 
+/// Where plug-ins come from and how their windows behave (manual pp. 482, 485-490).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PluginSettings {
+    /// Plug-in sources have been switched on, so they are scanned at launch.
+    pub activated: bool,
+    pub use_system_folders: bool,
+    pub use_custom_folders: bool,
+    pub use_audio_units: bool,
+    pub auto_open_windows: bool,
+    pub multiple_windows: bool,
+    pub auto_hide_windows: bool,
+}
+
+impl Default for PluginSettings {
+    fn default() -> Self {
+        Self {
+            activated: false,
+            use_system_folders: true,
+            use_custom_folders: true,
+            use_audio_units: true,
+            auto_open_windows: true,
+            multiple_windows: true,
+            auto_hide_windows: true,
+        }
+    }
+}
+
+impl PluginSettings {
+    /// What a scan should look at, given the custom folders in `dirs`.
+    pub fn sources(&self, dirs: &[PathBuf]) -> ScanSources {
+        let custom: &[PathBuf] = if self.use_custom_folders { dirs } else { &[] };
+        let mut sources = if self.use_system_folders {
+            ScanSources::standard(custom)
+        } else {
+            ScanSources {
+                clap_dirs: custom.to_vec(),
+                vst3_dirs: custom.to_vec(),
+                audio_units: false,
+            }
+        };
+        sources.audio_units = self.use_audio_units;
+        sources
+    }
+
+    pub fn window_prefs(&self) -> PluginWindowPrefs {
+        PluginWindowPrefs {
+            auto_open: self.auto_open_windows,
+            multiple: self.multiple_windows,
+            auto_hide: self.auto_hide_windows,
+        }
+    }
+}
+
+/// Whether plug-ins should be scanned as the app starts: only once they've been activated, and
+/// never with the modifier held, the way out of a crash at startup (manual p. 479).
+pub fn scan_at_launch(activated: bool, known_plugins: bool, modifier_held: bool) -> bool {
+    (activated || known_plugins) && !modifier_held
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -468,6 +530,8 @@ pub struct Settings {
     pub midi_input: Option<String>,
     pub sample_dir: Option<PathBuf>,
     pub plugin_dirs: Vec<PathBuf>,
+    /// The Plug-Ins tab.
+    pub plugins: PluginSettings,
     /// UI zoom factor (like Live's "Zoom Display").
     pub zoom: Option<f32>,
     pub show_browser: Option<bool>,
@@ -519,6 +583,7 @@ impl Default for Settings {
             midi_input: None,
             sample_dir: None,
             plugin_dirs: Vec::new(),
+            plugins: PluginSettings::default(),
             zoom: None,
             show_browser: None,
             show_detail: None,
@@ -661,6 +726,11 @@ mod tests {
             full_height_browser: false,
             sample_dir: Some(PathBuf::from("/samples")),
             plugin_dirs: vec![PathBuf::from("/plugins")],
+            plugins: PluginSettings {
+                activated: true,
+                use_audio_units: false,
+                ..Default::default()
+            },
             zoom: Some(1.3),
             show_browser: Some(false),
             show_detail: Some(false),
@@ -769,5 +839,41 @@ mod tests {
             ..auto
         };
         assert!(PALETTE[..REDUCED_COLORS].contains(&reduced.track_color(&p)));
+    }
+
+    #[test]
+    fn plugins_are_only_scanned_at_launch_once_activated_and_the_modifier_skips_it() {
+        assert!(!scan_at_launch(false, false, false), "first run");
+        assert!(scan_at_launch(true, false, false));
+        assert!(
+            scan_at_launch(false, true, false),
+            "a cache from before the setting"
+        );
+        assert!(!scan_at_launch(true, true, true), "held down");
+    }
+
+    #[test]
+    fn plugin_sources_can_be_switched_off_one_by_one() {
+        let custom = [PathBuf::from("/custom")];
+        let all = PluginSettings::default().sources(&custom);
+        assert!(all.audio_units);
+        assert!(all.vst3_dirs.contains(&custom[0]) && all.vst3_dirs.len() > 1);
+
+        let none = PluginSettings {
+            use_system_folders: false,
+            use_custom_folders: false,
+            use_audio_units: false,
+            ..Default::default()
+        }
+        .sources(&custom);
+        assert!(none.clap_dirs.is_empty() && none.vst3_dirs.is_empty() && !none.audio_units);
+
+        let only_custom = PluginSettings {
+            use_system_folders: false,
+            ..Default::default()
+        }
+        .sources(&custom);
+        assert_eq!(only_custom.vst3_dirs, custom.to_vec());
+        assert!(only_custom.audio_units, "that one has its own switch");
     }
 }

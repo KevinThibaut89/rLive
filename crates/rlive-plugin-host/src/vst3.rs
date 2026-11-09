@@ -1,12 +1,13 @@
 //! VST3 plugin hosting (via the MIT-licensed `vst3` bindings).
 
+use crate::midi_out::MidiOutput;
 use crate::{
     bundle_binary, cbuf_to_string, wire_note_id, HostError, HostNotification, PluginDescriptor,
     PluginHandle, PluginInstance, PortBuffers, Result,
 };
 use rlive_core::{
-    ExprKind, MidiMessage, ParamFlags, ParamInfo, ParamKind, PluginFormat, ProcessContext,
-    Processor, Tail,
+    EventQueue, ExprKind, MidiEvent, MidiMessage, MpeEncoder, MpeOutput, NoteId, ParamFlags,
+    ParamInfo, ParamKind, PluginFormat, ProcessContext, Processor, Resource, Tail, MPE_SLOT,
 };
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::HashMap;
@@ -220,6 +221,7 @@ pub fn scan(path: &Path) -> Result<Vec<PluginDescriptor>> {
                 path: path.to_path_buf(),
                 is_instrument: sub.split('|').any(|s| s == "Instrument"),
                 subcategories: sub,
+                is_midi_effect: false,
             });
         }
     }
@@ -715,10 +717,80 @@ impl IEventListTrait for EventList {
 
 // ------------------------------------------------------------------ instance
 
+/// IMidiMapping as a table, so the audio thread can read it: one parameter per channel and
+/// controller, or [`NO_MAPPING`].
+struct MidiMap {
+    params: Vec<AtomicU32>,
+}
+
+const NO_MAPPING: u32 = u32::MAX;
+const MIDI_CHANNELS: usize = 16;
+/// Controllers 0 to 127, then VST3's aftertouch and pitch bend.
+const MIDI_CONTROLLERS: usize = ControllerNumbers_::kPitchBend as usize + 1;
+
+impl MidiMap {
+    fn new() -> Self {
+        Self {
+            params: (0..MIDI_CHANNELS * MIDI_CONTROLLERS)
+                .map(|_| AtomicU32::new(NO_MAPPING))
+                .collect(),
+        }
+    }
+
+    fn slot(channel: u8, controller: usize) -> usize {
+        (channel as usize & 15) * MIDI_CONTROLLERS + controller
+    }
+
+    fn get(&self, channel: u8, controller: usize) -> Option<ParamID> {
+        match self.params[Self::slot(channel, controller)].load(Ordering::Relaxed) {
+            NO_MAPPING => None,
+            id => Some(id),
+        }
+    }
+
+    /// Ask the plugin for its assignments. Main thread only.
+    fn read(&self, controller: Option<&ComPtr<IEditController>>) {
+        let mapping = controller.and_then(|c| c.cast::<IMidiMapping>());
+        for channel in 0..MIDI_CHANNELS {
+            for cc in 0..MIDI_CONTROLLERS {
+                let mut id: ParamID = 0;
+                let found = mapping.as_ref().is_some_and(|m| unsafe {
+                    m.getMidiControllerAssignment(0, channel as i16, cc as CtrlNumber, &mut id)
+                        == kResultTrue
+                });
+                self.params[Self::slot(channel as u8, cc)]
+                    .store(if found { id } else { NO_MAPPING }, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// The parameter a controller message moves, and to what, if the plugin maps it.
+    fn change(&self, message: MidiMessage) -> Option<(ParamID, f64)> {
+        let (channel, controller, value) = match message {
+            MidiMessage::ControlChange { channel, cc, value } if cc < 128 => {
+                (channel, cc as usize, value as f64 / 127.0)
+            }
+            MidiMessage::PitchBend { channel, value } => (
+                channel,
+                ControllerNumbers_::kPitchBend as usize,
+                (value as f64 + 1.0) * 0.5,
+            ),
+            MidiMessage::ChannelPressure { channel, value } => (
+                channel,
+                ControllerNumbers_::kAfterTouch as usize,
+                value as f64,
+            ),
+            _ => return None,
+        };
+        Some((self.get(channel, controller)?, value.clamp(0.0, 1.0)))
+    }
+}
+
 struct Vst3Instance {
     component: ComPtr<IComponent>,
     processor: ComPtr<IAudioProcessor>,
     controller: Option<ComPtr<IEditController>>,
+    midi_map: MidiMap,
     separate_controller: bool,
     connections: Option<(ComPtr<IConnectionPoint>, ComPtr<IConnectionPoint>)>,
     /// Latency and tail in frames, as last read on the main thread.
@@ -967,6 +1039,18 @@ pub fn instantiate(
                 1,
             );
         }
+        let midi_output = component.getBusCount(
+            MediaTypes_::kEvent as MediaType,
+            BusDirections_::kOutput as BusDirection,
+        ) > 0;
+        if midi_output {
+            component.activateBus(
+                MediaTypes_::kEvent as MediaType,
+                BusDirections_::kOutput as BusDirection,
+                0,
+                1,
+            );
+        }
 
         let mut setup = ProcessSetup {
             processMode: ProcessModes_::kRealtime as int32,
@@ -985,10 +1069,13 @@ pub fn instantiate(
         let outputs = bus_channels(&component, BusDirections_::kOutput as BusDirection);
         let aux_names = bus_names(&component, BusDirections_::kOutput as BusDirection);
         let has_sidechain = n_in > 1;
+        let midi_map = MidiMap::new();
+        midi_map.read(controller.as_ref());
         let inst = Arc::new(Vst3Instance {
             component,
             processor,
             controller,
+            midi_map,
             separate_controller: separate,
             connections,
             latency_frames: AtomicU32::new(0),
@@ -998,15 +1085,24 @@ pub fn instantiate(
             _lib: lib,
         });
         inst.read_audio_props();
-        let proc_ = Vst3Processor::new(inst.clone(), &inputs, &outputs, max_block, sample_rate);
+        let proc_ = Vst3Processor::new(
+            inst.clone(),
+            &inputs,
+            &outputs,
+            max_block,
+            sample_rate,
+            midi_output,
+        );
         let mut handle = Vst3Handle {
             inst,
             has_sidechain,
             aux_names,
+            midi_output,
             desc: desc.clone(),
             params: Vec::new(),
             handler: handler_state,
             editor: None,
+            title: None,
         };
         handle.rescan_params();
         Ok(PluginInstance {
@@ -1030,6 +1126,7 @@ pub struct Vst3Handle {
     inst: Arc<Vst3Instance>,
     has_sidechain: bool,
     aux_names: Vec<String>,
+    midi_output: bool,
     desc: PluginDescriptor,
     params: Vec<ParamInfo>,
     handler: Arc<HandlerState>,
@@ -1037,9 +1134,94 @@ pub struct Vst3Handle {
     editor: Option<Editor>,
     #[cfg(not(target_os = "macos"))]
     editor: Option<()>,
+    /// What the window should say, once it is open.
+    title: Option<String>,
 }
 
 const STATE_MAGIC: &[u8; 4] = b"RLV3";
+
+const PRESET_MAGIC: &[u8; 4] = b"VST3";
+const PRESET_HEADER: usize = 48;
+const COMPONENT_CHUNK: &[u8; 4] = b"Comp";
+const CONTROLLER_CHUNK: &[u8; 4] = b"Cont";
+
+/// The component and controller halves of one of [`Vst3Handle`]'s state blobs.
+fn split_state(data: &[u8]) -> Option<(&[u8], &[u8])> {
+    if data.len() < 8 || &data[..4] != STATE_MAGIC {
+        return None;
+    }
+    let chunk = |at: usize| -> Option<(&[u8], usize)> {
+        let len = u32::from_le_bytes(data.get(at..at + 4)?.try_into().ok()?) as usize;
+        Some((data.get(at + 4..at + 4 + len)?, at + 4 + len))
+    };
+    let (comp, next) = chunk(4)?;
+    Some((comp, chunk(next).map_or(&[][..], |c| c.0)))
+}
+
+fn join_state(comp: &[u8], ctrl: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(12 + comp.len() + ctrl.len());
+    out.extend_from_slice(STATE_MAGIC);
+    out.extend_from_slice(&(comp.len() as u32).to_le_bytes());
+    out.extend_from_slice(comp);
+    out.extend_from_slice(&(ctrl.len() as u32).to_le_bytes());
+    out.extend_from_slice(ctrl);
+    out
+}
+
+/// A plug-in's state as a `.vstpreset` file: the header, the chunks, and a list of where they are.
+pub fn encode_preset(class_id: &str, state: &[u8]) -> Option<Vec<u8>> {
+    if class_id.len() != 32 || !class_id.is_ascii() {
+        return None;
+    }
+    let (comp, ctrl) = split_state(state)?;
+    let mut out = Vec::with_capacity(PRESET_HEADER + comp.len() + ctrl.len() + 64);
+    out.extend_from_slice(PRESET_MAGIC);
+    out.extend_from_slice(&1i32.to_le_bytes());
+    out.extend_from_slice(class_id.as_bytes());
+    out.extend_from_slice(&0i64.to_le_bytes());
+    let mut chunks: Vec<(&[u8; 4], i64, i64)> = Vec::new();
+    for (id, body) in [(COMPONENT_CHUNK, comp), (CONTROLLER_CHUNK, ctrl)] {
+        chunks.push((id, out.len() as i64, body.len() as i64));
+        out.extend_from_slice(body);
+    }
+    let list = out.len() as i64;
+    out[40..48].copy_from_slice(&list.to_le_bytes());
+    out.extend_from_slice(b"List");
+    out.extend_from_slice(&(chunks.len() as i32).to_le_bytes());
+    for (id, offset, size) in chunks {
+        out.extend_from_slice(id);
+        out.extend_from_slice(&offset.to_le_bytes());
+        out.extend_from_slice(&size.to_le_bytes());
+    }
+    Some(out)
+}
+
+/// The class it is for and the state in a `.vstpreset` file.
+pub fn decode_preset(file: &[u8]) -> Option<(String, Vec<u8>)> {
+    if file.len() < PRESET_HEADER || &file[..4] != PRESET_MAGIC {
+        return None;
+    }
+    let class_id = std::str::from_utf8(file.get(8..40)?).ok()?.to_string();
+    let list = i64::from_le_bytes(file.get(40..48)?.try_into().ok()?) as usize;
+    if file.get(list..list + 4)? != b"List" {
+        return None;
+    }
+    let count = i32::from_le_bytes(file.get(list + 4..list + 8)?.try_into().ok()?).max(0) as usize;
+    let (mut comp, mut ctrl) = (None, &[][..]);
+    for i in 0..count {
+        let at = list + 8 + i * 20;
+        let id = file.get(at..at + 4)?;
+        let offset = i64::from_le_bytes(file.get(at + 4..at + 12)?.try_into().ok()?) as usize;
+        let size = i64::from_le_bytes(file.get(at + 12..at + 20)?.try_into().ok()?) as usize;
+        let body = file.get(offset..offset.checked_add(size)?)?;
+        if id == COMPONENT_CHUNK {
+            comp = Some(body);
+        } else if id == CONTROLLER_CHUNK {
+            ctrl = body;
+        }
+    }
+    Some((class_id, join_state(comp?, ctrl)))
+}
 
 impl Vst3Handle {
     fn rescan_params(&mut self) {
@@ -1093,6 +1275,10 @@ impl PluginHandle for Vst3Handle {
 
     fn aux_outputs(&self) -> Vec<String> {
         self.aux_names.clone()
+    }
+
+    fn midi_output(&self) -> bool {
+        self.midi_output
     }
 
     fn params(&self) -> Vec<ParamInfo> {
@@ -1198,7 +1384,8 @@ impl PluginHandle for Vst3Handle {
                 (rect.bottom - rect.top).max(100) as f64,
             );
             let resizable = view.canResize() == kResultTrue;
-            let window = crate::mac::EditorWindow::new(&self.desc.name, w, h, resizable)
+            let title = self.title.as_deref().unwrap_or(&self.desc.name);
+            let window = crate::mac::EditorWindow::new(title, w, h, resizable)
                 .ok_or_else(|| HostError::Editor("could not create window".into()))?;
             let resize = Arc::new(Mutex::new(None));
             let frame = ComWrapper::new(PlugFrame {
@@ -1241,6 +1428,23 @@ impl PluginHandle for Vst3Handle {
         }
     }
 
+    fn set_editor_visible(&mut self, visible: bool) {
+        #[cfg(target_os = "macos")]
+        if let Some(e) = &self.editor {
+            e.window.set_visible(visible);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = visible;
+    }
+
+    fn set_editor_title(&mut self, title: &str) {
+        self.title = Some(title.to_string());
+        #[cfg(target_os = "macos")]
+        if let Some(e) = &self.editor {
+            e.window.set_title(title);
+        }
+    }
+
     fn idle(&mut self) -> Vec<HostNotification> {
         let mut out: Vec<HostNotification> = self
             .handler
@@ -1254,6 +1458,9 @@ impl PluginHandle for Vst3Handle {
         if flags & (RestartFlags_::kParamTitlesChanged | RestartFlags_::kParamValuesChanged) != 0 {
             self.rescan_params();
             out.push(HostNotification::ParamsRescanned);
+        }
+        if flags & RestartFlags_::kMidiCCAssignmentChanged != 0 {
+            self.inst.midi_map.read(self.inst.controller.as_ref());
         }
         if flags & RestartFlags_::kLatencyChanged != 0 {
             self.inst.read_audio_props();
@@ -1305,13 +1512,19 @@ pub struct Vst3Processor {
     in_changes: ComWrapper<ParamChanges>,
     out_changes: ComWrapper<ParamChanges>,
     events: ComWrapper<EventList>,
+    out_events: ComWrapper<EventList>,
     in_changes_ptr: *mut IParameterChanges,
     out_changes_ptr: *mut IParameterChanges,
     events_ptr: *mut IEventList,
+    /// Null when the plugin has no MIDI output.
+    out_events_ptr: *mut IEventList,
     context: vst3::Steinberg::Vst::ProcessContext,
     is_instrument: bool,
     max_block: usize,
     sample_rate: f64,
+    /// Set with MPE Mode on: notes go out per channel, and expression as mapped controllers.
+    mpe: Option<MpeEncoder>,
+    midi_out: MidiOutput,
 }
 
 unsafe impl Send for Vst3Processor {}
@@ -1323,6 +1536,7 @@ impl Vst3Processor {
         outputs: &[usize],
         max_block: usize,
         sample_rate: f64,
+        midi_output: bool,
     ) -> Self {
         let mut inputs: Vec<PortBuffers> = inputs
             .iter()
@@ -1357,6 +1571,14 @@ impl Vst3Processor {
             .unwrap()
             .as_ptr();
         let events_ptr = events.as_com_ref::<IEventList>().unwrap().as_ptr();
+        let out_events = ComWrapper::new(EventList {
+            events: UnsafeCell::new(Vec::with_capacity(1024)),
+        });
+        let out_events_ptr = if midi_output {
+            out_events.as_com_ref::<IEventList>().unwrap().as_ptr()
+        } else {
+            std::ptr::null_mut()
+        };
         Self {
             is_instrument: inputs.is_empty(),
             inst,
@@ -1368,18 +1590,112 @@ impl Vst3Processor {
             in_changes,
             out_changes,
             events,
+            out_events,
             in_changes_ptr,
             out_changes_ptr,
             events_ptr,
+            out_events_ptr,
             context: unsafe { std::mem::zeroed() },
             max_block,
             sample_rate,
+            mpe: None,
+            midi_out: MidiOutput::default(),
+        }
+    }
+
+    /// One event of the block, in the place VST3 wants it: as an event, or as a mapped parameter.
+    fn add_event(&self, message: MidiMessage, offset: int32) {
+        if let Some((id, value)) = self.inst.midi_map.change(message) {
+            self.in_changes.add_or_merge(id, offset, value);
+        } else if let Some(ev) = to_vst3_event(message, offset) {
+            let events = unsafe { &mut *self.events.events.get() };
+            if events.len() < events.capacity() {
+                events.push(ev);
+            }
+        }
+    }
+
+    /// Hand what the plugin sent out during this block to the next device.
+    fn collect_events(&mut self, out: &mut EventQueue, frames: usize) {
+        let events = unsafe { &mut *self.out_events.events.get() };
+        for e in events.iter() {
+            let offset = (e.sampleOffset.max(0) as u32).min(frames.saturating_sub(1) as u32);
+            if let Some(message) = from_vst3_event(e) {
+                self.midi_out.push(out, offset, message);
+            }
+        }
+        events.clear();
+    }
+}
+
+/// An event from a plugin as a MIDI message. `None` for what has no MIDI form.
+fn from_vst3_event(e: &Event) -> Option<MidiMessage> {
+    use Event_::EventTypes_ as T;
+    let id = |raw: int32| raw.max(0) as NoteId;
+    let wire = |v: i16| (v.max(0) as u8) & 127;
+    unsafe {
+        match e.r#type as u32 {
+            T::kNoteOnEvent => {
+                let n = e.__field0.noteOn;
+                Some(MidiMessage::NoteOn {
+                    channel: n.channel.max(0) as u8 & 15,
+                    key: wire(n.pitch),
+                    velocity: n.velocity,
+                    note_id: id(n.noteId),
+                    tuning: n.tuning / 100.0,
+                })
+            }
+            T::kNoteOffEvent => {
+                let n = e.__field0.noteOff;
+                Some(MidiMessage::NoteOff {
+                    channel: n.channel.max(0) as u8 & 15,
+                    key: wire(n.pitch),
+                    velocity: n.velocity,
+                    note_id: id(n.noteId),
+                })
+            }
+            T::kPolyPressureEvent => {
+                let n = e.__field0.polyPressure;
+                Some(MidiMessage::NoteExpr {
+                    channel: n.channel.max(0) as u8 & 15,
+                    key: wire(n.pitch),
+                    note_id: id(n.noteId),
+                    kind: ExprKind::Pressure,
+                    value: n.pressure,
+                })
+            }
+            T::kLegacyMIDICCOutEvent => {
+                let c = e.__field0.midiCCOut;
+                let channel = c.channel.max(0) as u8 & 15;
+                match c.controlNumber as u32 {
+                    n if n < 128 => Some(MidiMessage::ControlChange {
+                        channel,
+                        cc: n as u8,
+                        value: c.value as u8 & 127,
+                    }),
+                    ControllerNumbers_::kAfterTouch => Some(MidiMessage::ChannelPressure {
+                        channel,
+                        value: (c.value as u8 & 127) as f32 / 127.0,
+                    }),
+                    ControllerNumbers_::kPitchBend => {
+                        let lsb = (c.value as u16) & 127;
+                        let msb = (c.value2 as u16) & 127;
+                        let raw = (msb << 7 | lsb) as f32;
+                        Some(MidiMessage::PitchBend {
+                            channel,
+                            value: ((raw - 8192.0) / 8191.0).clamp(-1.0, 1.0),
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 }
 
-/// A MIDI message as a VST3 event. `None` for what VST3 has no event for: CC and pitch bend
-/// go through IMidiMapping parameters in VST3 and are not mapped yet.
+/// A MIDI message as a VST3 event. `None` for what VST3 has no event for: controllers and
+/// pitch bend go through IMidiMapping parameters in VST3, which [`MidiMap`] takes care of.
 fn to_vst3_event(message: MidiMessage, offset: int32) -> Option<Event> {
     let mut ev: Event = unsafe { std::mem::zeroed() };
     ev.busIndex = 0;
@@ -1588,13 +1904,21 @@ impl Processor for Vst3Processor {
             self.in_changes
                 .add_or_merge(e.id.0, e.offset.min(last) as int32, e.value);
         }
-        let events = unsafe { &mut *self.events.events.get() };
-        events.clear();
-        for e in ctx.events {
-            let offset = e.offset.min(frames.saturating_sub(1) as u32) as int32;
-            if let Some(ev) = to_vst3_event(e.message, offset) {
-                if events.len() < events.capacity() {
-                    events.push(ev);
+        unsafe {
+            (*self.events.events.get()).clear();
+            (*self.out_events.events.get()).clear();
+        }
+        match self.mpe.take() {
+            Some(mut mpe) => {
+                let mut pass = |e: MidiEvent| {
+                    self.add_event(e.message, e.offset.min(last) as int32);
+                };
+                mpe.encode(ctx.events, &mut pass);
+                self.mpe = Some(mpe);
+            }
+            None => {
+                for e in ctx.events {
+                    self.add_event(e.message, e.offset.min(last) as int32);
                 }
             }
         }
@@ -1649,11 +1973,12 @@ impl Processor for Vst3Processor {
             inputParameterChanges: self.in_changes_ptr,
             outputParameterChanges: self.out_changes_ptr,
             inputEvents: self.events_ptr,
-            outputEvents: std::ptr::null_mut(),
+            outputEvents: self.out_events_ptr,
             processContext: &mut self.context,
         };
         unsafe { self.inst.processor.process(&mut data) };
         self.in_changes.clear();
+        self.collect_events(&mut *ctx.events_out, frames);
 
         for i in 0..self.out_changes.used.get() {
             let q = &self.out_changes.queues[i];
@@ -1672,6 +1997,23 @@ impl Processor for Vst3Processor {
 
     fn set_param(&mut self, id: u32, value: f64) {
         self.in_changes.add_or_merge(id, 0, value);
+    }
+
+    fn set_resource(&mut self, slot: u32, resource: Resource) -> Option<Resource> {
+        if slot != MPE_SLOT {
+            return Some(resource);
+        }
+        if let Some(output) = resource.downcast_ref::<Option<MpeOutput>>() {
+            self.mpe = (*output).map(MpeEncoder::configured);
+            self.midi_out = MidiOutput::new_for(*output);
+        }
+        Some(resource)
+    }
+
+    fn reset(&mut self) {
+        if let Some(mpe) = self.mpe.as_mut() {
+            mpe.reset();
+        }
     }
 
     fn stop_processing(&mut self) {
@@ -1699,6 +2041,28 @@ impl Drop for Vst3Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_preset_file_round_trips_and_is_laid_out_as_vst3_says() {
+        let state = join_state(b"component", b"ctrl");
+        let id = "0123456789ABCDEF0123456789ABCDEF";
+        let file = encode_preset(id, &state).unwrap();
+        assert_eq!(&file[..4], b"VST3");
+        assert_eq!(&file[8..40], id.as_bytes());
+        assert_eq!(&file[48..57], b"component");
+        let list = i64::from_le_bytes(file[40..48].try_into().unwrap()) as usize;
+        assert_eq!(&file[list..list + 4], b"List");
+        assert_eq!(decode_preset(&file), Some((id.to_string(), state)));
+    }
+
+    #[test]
+    fn a_damaged_preset_file_is_refused() {
+        assert_eq!(decode_preset(b"not a preset"), None);
+        let file = encode_preset(&"A".repeat(32), &join_state(b"x", b"y")).unwrap();
+        assert_eq!(decode_preset(&file[..file.len() - 3]), None);
+        assert_eq!(encode_preset("short", &join_state(b"x", b"y")), None);
+        assert_eq!(encode_preset(&"A".repeat(32), b"not our state"), None);
+    }
 
     #[test]
     fn tuid_hex_roundtrip() {

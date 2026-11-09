@@ -189,6 +189,8 @@ fn upgrade_device(d: Device) -> crate::Device {
             plugin_id,
             path,
             state,
+            panel: Default::default(),
+            bank: Default::default(),
         },
     };
     crate::Device {

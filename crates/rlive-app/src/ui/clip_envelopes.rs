@@ -277,6 +277,7 @@ fn choosers(
 ) {
     ui.spacing_mut().item_spacing.y = 3.0;
     let env = &mut state.env;
+    let chosen_before = env.target;
     if env.adjusted_only {
         let adjusted: Vec<&Control> = controls
             .iter()
@@ -344,6 +345,9 @@ fn choosers(
                     }
                 }
             });
+    }
+    if env.target != chosen_before {
+        session.envelope_chooser_picked(env.target);
     }
     if cref.as_slot().is_some() && matches!(control.target, EnvTarget::Param(_)) {
         ui.horizontal(|ui| {

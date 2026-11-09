@@ -57,6 +57,12 @@ pub struct DeviceViewState {
     pub(crate) selected_devices: Vec<(ChainRef, DeviceId)>,
     /// A device to bring into view.
     scroll_to: Option<DeviceId>,
+    /// The parameter selected on a panel in Configure Mode.
+    pub(crate) configure_selected: Option<(ChainRef, DeviceId, u32)>,
+    /// A panel parameter waiting for a yes, since removing it would lose something.
+    confirm_panel_remove: Option<(ChainRef, DeviceId, u32)>,
+    /// A plug-in preset being renamed.
+    rename_preset: Option<(ChainRef, DeviceId, usize, String)>,
     /// Which rack mixers are unfolded in the Session View.
     pub(crate) mixer_open: HashSet<crate::ui::rack_mixer::MixFold>,
     /// The chains selected in the Session View's mixer.
@@ -102,9 +108,18 @@ pub(crate) struct DrawCx<'a> {
     zones: Vec<(Rect, ChainRef, rlive_core::param::EnvTarget)>,
     /// What Hot-Swap is pointed at, to light its button.
     swap_target: Option<crate::session::SwapTarget>,
+    /// The parameter selected on a panel in Configure Mode.
+    configure_selected: Option<(ChainRef, DeviceId, u32)>,
 }
 
 pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
+    // In Macro Map Mode a move in a plug-in's window puts it on the panel, ready to map (p. 484).
+    if let Some((chain, target)) = session.take_last_editor_touch() {
+        if let (Some(map), ParamOwner::Device(id)) = (state.devices.ui.map.as_mut(), target.owner) {
+            session.add_to_panel(chain, id, target.id.0);
+            map.selected = Some(target);
+        }
+    }
     let full = ui.max_rect();
     // Claim the whole panel so egui keeps its size (children don't advance the cursor).
     ui.expand_to_include_rect(full);
@@ -197,6 +212,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
             scroll_to: state.devices.scroll_to,
             zones: Vec::new(),
             swap_target: state.browser.hot_swap.map(|s| s.target),
+            configure_selected: state.devices.configure_selected,
         };
         egui::ScrollArea::horizontal()
             .id_salt("device_chain")
@@ -214,6 +230,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     }
     state.devices.scroll_to = None;
     queue.apply(session, &mut state.devices, &mut state.status);
+    plugin_dialogs(ui.ctx(), session, &mut state.devices);
     if let Some(target) = state.devices.edit_info.take() {
         state.edit_info_text(session, target);
     }
@@ -465,7 +482,7 @@ fn expanded_title(
         return;
     }
     let reserved = match (is_plugin, is_rack) {
-        (true, _) => 46.0,
+        (true, _) => 112.0,
         (_, true) => 44.0,
         _ => 6.0,
     };
@@ -537,16 +554,39 @@ fn expanded_title(
         }
     }
     if let Some(h) = node.rt.and_then(|r| r.plugin.as_ref()) {
+        let configuring = cx.session.is_configuring(dev.id);
+        let r = widgets::state_button(
+            tu,
+            Vec2::new(60.0, 15.0),
+            configuring,
+            pal().accent,
+            "Configure",
+        );
+        if info(
+            r,
+            "Configure — move a control in the plug-in's window to add it to this panel; drag to \
+             reorder, Delete to remove",
+        )
+        .clicked()
+        {
+            cx.queue.push(chain, Action::ToggleConfigure(dev.id));
+        }
         if h.has_editor() {
             let open = h.is_editor_open();
             let r = widgets::state_button(tu, Vec2::new(40.0, 15.0), open, pal().accent, "Edit");
-            if info(r, "Plug-In Editor — show or hide the plug-in's own window").clicked() {
+            if info(
+                r,
+                "Plug-In Editor — show or hide the plug-in's own window; Cmd keeps others open",
+            )
+            .clicked()
+            {
+                let keep = tu.input(|i| i.modifiers.command);
                 cx.queue.push(
                     chain,
                     if open {
                         Action::CloseEditor(dev.id)
                     } else {
-                        Action::OpenEditor(dev.id)
+                        Action::OpenEditor(dev.id, keep)
                     },
                 );
             }
@@ -810,7 +850,10 @@ fn controls(
     for slot in 0..rt.sample_slots {
         sample_row(&mut bu, cx, chain, dev, slot, body.width());
     }
-    if tree::has_sidechain_chooser(dev, rt) && !is_plugin {
+    if is_plugin {
+        preset_row(&mut bu, cx, chain, dev, rt, body.width());
+    }
+    if tree::has_sidechain_chooser(dev, rt) {
         let mut picked = None;
         let current = super::in_out::sidechain_label(cx.session, dev.id);
         let response = egui::ComboBox::from_id_salt(("sidechain", dev.id))
@@ -856,6 +899,9 @@ fn controls(
             let mut iu = bu.new_child(UiBuilder::new().max_rect(r));
             item(&mut iu, cx, chain, dev, rt, placed, plan, on);
         }
+        if is_plugin && cx.session.is_configuring(dev.id) {
+            configure_overlay(&mut bu, cx, chain, dev, section, origin);
+        }
         x += section.size.x + layout::SECTION_GAP;
     }
     let show_all_label = if plan.truncated {
@@ -876,7 +922,12 @@ fn controls(
         }
     }
     if plan.visible == 0 && rt.error.is_none() && !declared {
-        bu.label(RichText::new("No parameters").color(pal().text_dim));
+        let empty = if is_plugin && !rt.params.is_empty() {
+            "Press Configure, then move a control in the plug-in's window to add it here"
+        } else {
+            "No parameters"
+        };
+        bu.label(RichText::new(empty).color(pal().text_dim).size(10.5));
     }
 }
 
@@ -1073,6 +1124,247 @@ fn param_value(dev: &Device, rt: &DeviceRuntime, param: &ParamInfo) -> f64 {
     dev.params
         .get(&param.id)
         .copied()
-        .or_else(|| rt.plugin.as_ref().and_then(|h| h.param_value(param.id)))
+        .or_else(|| rt.plugin_param(param.id))
         .unwrap_or(param.default)
+}
+
+/// The row for a plug-in's own presets: a VST's bank, or the list an Audio Unit brought.
+fn preset_row(
+    ui: &mut egui::Ui,
+    cx: &mut DrawCx,
+    chain: ChainRef,
+    dev: &Device,
+    rt: &DeviceRuntime,
+    width: f32,
+) {
+    let DeviceKind::Plugin { bank, .. } = &dev.kind else {
+        return;
+    };
+    if !rt.has_preset_row() {
+        return;
+    }
+    let vst = rt.presets.is_empty();
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let current = if vst {
+            bank.name_of(bank.current)
+        } else {
+            "Preset".to_string()
+        };
+        let buttons = if vst { 92.0 } else { 0.0 };
+        let response = egui::ComboBox::from_id_salt(("plugin_preset", dev.id))
+            .width((width - buttons - 8.0).max(60.0))
+            .selected_text(RichText::new(current).size(10.0))
+            .show_ui(ui, |ui| {
+                ui.set_min_width(170.0);
+                if vst {
+                    for i in 0..rlive_project::PLUGIN_BANK_SIZE {
+                        let selected = i == bank.current;
+                        if ui.selectable_label(selected, bank.name_of(i)).clicked() {
+                            cx.queue.push(chain, Action::SelectBankPreset(dev.id, i));
+                        }
+                    }
+                } else {
+                    for (i, p) in rt.presets.iter().enumerate() {
+                        let name = if p.read_only() {
+                            format!("{} (read-only)", p.name)
+                        } else {
+                            p.name.clone()
+                        };
+                        if ui.selectable_label(false, name).clicked() {
+                            cx.queue.push(chain, Action::LoadUnitPreset(dev.id, i));
+                        }
+                    }
+                }
+            })
+            .response;
+        info(response, "Presets — this plug-in's own");
+        if vst {
+            let row = Vec2::new(28.0, 18.0);
+            let r = widgets::state_button(ui, row, false, pal().accent, "Ren");
+            if info(r, "Rename Plug-In Preset").clicked() {
+                let name = bank.name_of(bank.current);
+                cx.queue
+                    .push(chain, Action::EditPresetName(dev.id, bank.current, name));
+            }
+            let r = widgets::state_button(ui, row, false, pal().accent, "Load");
+            if info(r, "Load Preset or Bank").clicked() {
+                cx.queue.push(chain, Action::LoadPresetFile(dev.id));
+            }
+            let r = widgets::state_button(ui, row, false, pal().accent, "Save");
+            if info(r, "Save Preset or Bank").clicked() {
+                cx.queue.push(chain, Action::SavePresetFile(dev.id));
+            }
+        }
+    });
+}
+
+/// In Configure Mode a panel's controls are for selecting and dragging, not for changing.
+fn configure_overlay(
+    ui: &mut egui::Ui,
+    cx: &mut DrawCx,
+    chain: ChainRef,
+    dev: &Device,
+    section: &layout::SectionPlan,
+    origin: Vec2,
+) {
+    let shown = cx.session.shown_params(chain, dev.id);
+    let rects: Vec<(usize, u32, Rect)> = section
+        .items
+        .iter()
+        .filter_map(|placed| {
+            let param = placed.param?;
+            let index = shown.iter().position(|p| *p == param.id)?;
+            Some((index, param.id, placed.rect.translate(origin)))
+        })
+        .collect();
+    let selected = cx
+        .configure_selected
+        .filter(|(_, d, _)| *d == dev.id)
+        .map(|(_, _, p)| p);
+    for &(index, id, rect) in &rects {
+        let resp = ui.interact(
+            rect,
+            ui.scope_id().with(("configure", dev.id, id)),
+            Sense::click_and_drag(),
+        );
+        let on = selected == Some(id);
+        ui.painter().rect_filled(
+            rect,
+            1.0,
+            if on {
+                pal().accent.gamma_multiply(0.35)
+            } else if resp.hovered() {
+                pal().accent.gamma_multiply(0.12)
+            } else {
+                pal().accent.gamma_multiply(0.05)
+            },
+        );
+        ui.painter().rect_stroke(
+            rect,
+            1.0,
+            Stroke::new(1.0, pal().accent.gamma_multiply(if on { 1.0 } else { 0.4 })),
+            StrokeKind::Inside,
+        );
+        if resp.clicked() || resp.drag_started() {
+            cx.queue.push(chain, Action::SelectPanelParam(dev.id, id));
+        }
+        if resp.drag_stopped() {
+            let dropped = resp.interact_pointer_pos().and_then(|pos| {
+                rects
+                    .iter()
+                    .find(|(_, _, r)| r.contains(pos))
+                    .map(|(i, _, _)| *i)
+            });
+            if let Some(to) = dropped.filter(|to| *to != index) {
+                cx.queue
+                    .push(chain, Action::MovePanelParam(dev.id, index, to));
+            }
+        }
+    }
+}
+
+/// The dialogs a plug-in's panel can raise.
+fn plugin_dialogs(ctx: &egui::Context, session: &mut Session, state: &mut DeviceViewState) {
+    if let Some((chain, id, param)) = state.confirm_panel_remove {
+        let usage = session.param_usage(chain, id, param);
+        let mut uses = Vec::new();
+        if usage.automation {
+            uses.push("automation");
+        }
+        if usage.clip_envelope {
+            uses.push("clip envelopes");
+        }
+        if usage.midi_or_key {
+            uses.push("MIDI or key mappings");
+        }
+        if usage.macro_mapped {
+            uses.push("Macro mappings");
+        }
+        let mut close = None;
+        egui::Window::new("Remove Parameter")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "This parameter has {}, which will be deleted with it.",
+                    uses.join(", ")
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button("Delete").clicked() {
+                        close = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = Some(false);
+                    }
+                });
+            });
+        match close {
+            Some(true) => {
+                session.remove_from_panel(chain, id, param);
+                state.configure_selected = None;
+                state.confirm_panel_remove = None;
+            }
+            Some(false) => state.confirm_panel_remove = None,
+            None => {}
+        }
+    }
+    if let Some((chain, id, index, name)) = &mut state.rename_preset {
+        let (chain, id, index) = (*chain, *id, *index);
+        let mut close = None;
+        egui::Window::new("Rename Plug-In Preset")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                let edit = ui.text_edit_singleline(name);
+                edit.request_focus();
+                let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() || enter {
+                        close = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = Some(false);
+                    }
+                });
+            });
+        match close {
+            Some(true) => {
+                let text = name.clone();
+                session.rename_plugin_preset(chain, id, index, text);
+                state.rename_preset = None;
+            }
+            Some(false) => state.rename_preset = None,
+            None => {}
+        }
+    }
+}
+
+/// With Configure Mode on and a parameter selected, Delete takes it off the panel instead of
+/// doing what it otherwise would. Returns whether it did.
+pub fn configure_delete_key(
+    ctx: &egui::Context,
+    state: &mut UiState,
+    session: &mut Session,
+) -> bool {
+    let Some((chain, id, param)) = state.devices.configure_selected else {
+        return false;
+    };
+    if !session.is_configuring(id) {
+        state.devices.configure_selected = None;
+        return false;
+    }
+    let pressed = ctx.input_mut(|i| {
+        i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+            || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
+    });
+    if !pressed {
+        return false;
+    }
+    let mut queue = ActionQueue::default();
+    queue.push(chain, Action::RemovePanelParam(id, param));
+    queue.apply(session, &mut state.devices, &mut state.status);
+    true
 }

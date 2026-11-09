@@ -121,6 +121,10 @@ mod tests {
             layout: Vec::new(),
             view,
             sidechain_input: false,
+            touched: None,
+            window_title: String::new(),
+            window_visible: false,
+            presets: Vec::new(),
             aux_names: Vec::new(),
         }
     }

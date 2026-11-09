@@ -26,6 +26,12 @@ pub enum DeviceKind {
         /// Opaque plugin state blob.
         #[serde(default, with = "base64_opt")]
         state: Option<Vec<u8>>,
+        /// What the device view shows of it, set up in Configure Mode.
+        #[serde(default, skip_serializing_if = "is_default")]
+        panel: PluginPanel,
+        /// The instance's preset bank.
+        #[serde(default, skip_serializing_if = "is_default")]
+        bank: PluginBank,
     },
     /// Parallel chains of devices, which may hold racks in turn.
     Rack {
@@ -51,6 +57,68 @@ pub enum DeviceKind {
         #[serde(default, skip_serializing_if = "is_default")]
         variations: Vec<Variation>,
     },
+}
+
+/// What a plug-in's device panel shows (manual pp. 481-484). Parameters are by the plug-in's id.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PluginPanel {
+    /// The parameters on the panel, in order. `None` until it has been configured, which is
+    /// every parameter of a plug-in with up to 64 of them, and none of one with more.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub params: Option<Vec<u32>>,
+    /// The X and Y parameters of the X-Y field.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub xy: [Option<u32>; 2],
+}
+
+/// How many presets a plug-in instance's bank holds.
+pub const PLUGIN_BANK_SIZE: usize = 16;
+
+/// The presets belonging to one plug-in instance (manual p. 488).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PluginBank {
+    /// Which preset is being worked in.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub current: usize,
+    /// Those that have been stored or named; the rest are still blank.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub presets: Vec<PluginPreset>,
+}
+
+/// One preset of a [`PluginBank`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PluginPreset {
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub name: String,
+    #[serde(default, with = "base64_opt")]
+    pub state: Option<Vec<u8>>,
+}
+
+impl PluginBank {
+    /// The bank as a file's text.
+    pub fn to_text(&self) -> String {
+        ron::to_string(self).unwrap_or_default()
+    }
+
+    pub fn from_text(text: &str) -> Result<Self, String> {
+        ron::from_str(text).map_err(|e| e.to_string())
+    }
+
+    /// The name of preset `index`, as its chooser shows it.
+    pub fn name_of(&self, index: usize) -> String {
+        match self.presets.get(index).map(|p| p.name.as_str()) {
+            Some(name) if !name.is_empty() => name.to_string(),
+            _ => format!("Preset {}", index + 1),
+        }
+    }
+
+    /// The slot for preset `index`, making room for it if it has never been used.
+    pub fn slot(&mut self, index: usize) -> &mut PluginPreset {
+        if self.presets.len() <= index {
+            self.presets.resize_with(index + 1, PluginPreset::default);
+        }
+        &mut self.presets[index]
+    }
 }
 
 fn default_visible_macros() -> u8 {
@@ -421,6 +489,8 @@ impl Device {
                 plugin_id: plugin_id.into(),
                 path,
                 state: None,
+                panel: PluginPanel::default(),
+                bank: PluginBank::default(),
             },
             name,
         )

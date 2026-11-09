@@ -56,10 +56,20 @@ unsafe fn len_wstring(string: *const TChar) -> usize {
 
 const PLUGIN_NAME: &'static str = "Gain (vst3-rs example plugin)";
 
+/// Parameter the fixture maps the mod wheel on channel 1 to through IMidiMapping.
+const MOD_WHEEL: u32 = 1;
+/// Parameters the fixture maps pitch bend on channels 1 and 2 to.
+const BEND: u32 = 2;
+const BEND_2: u32 = 3;
+/// A bundle with this in its path dies as soon as anyone asks it for its factory.
+const CRASH_MARK: &str = "crash-on-scan";
+
 struct GainProcessor {
     gain: AtomicU64,
     /// The host has switched the sidechain bus on.
     sidechain: AtomicBool,
+    /// The host has switched the aux output on.
+    aux: AtomicBool,
 }
 
 impl Class for GainProcessor {
@@ -73,6 +83,7 @@ impl GainProcessor {
         GainProcessor {
             gain: AtomicU64::new(1.0f64.to_bits()),
             sidechain: AtomicBool::new(false),
+            aux: AtomicBool::new(false),
         }
     }
 }
@@ -100,12 +111,11 @@ impl IComponentTrait for GainProcessor {
     unsafe fn getBusCount(&self, mediaType: MediaType, dir: BusDirection) -> i32 {
         match mediaType as BusDirections {
             MediaTypes_::kAudio => match dir as BusDirections {
-                // A second input bus takes the sidechain.
-                BusDirections_::kInput => 2,
-                BusDirections_::kOutput => 1,
+                // A second input bus takes the sidechain, and a second output is the aux.
+                BusDirections_::kInput | BusDirections_::kOutput => 2,
                 _ => 0,
             },
-            MediaTypes_::kEvent => 0,
+            MediaTypes_::kEvent => 1,
             _ => 0,
         }
     }
@@ -159,11 +169,34 @@ impl IComponentTrait for GainProcessor {
 
                         kResultOk
                     }
+                    1 => {
+                        let bus = &mut *bus;
+
+                        bus.mediaType = MediaTypes_::kAudio as MediaType;
+                        bus.direction = BusDirections_::kOutput as BusDirection;
+                        bus.channelCount = 2;
+                        copy_wstring("Aux", &mut bus.name);
+                        bus.busType = BusTypes_::kAux as BusType;
+                        bus.flags = 0;
+
+                        kResultOk
+                    }
                     _ => kInvalidArgument,
                 },
                 _ => kInvalidArgument,
             },
-            MediaTypes_::kEvent => kInvalidArgument,
+            MediaTypes_::kEvent if index == 0 => {
+                let bus = &mut *bus;
+
+                bus.mediaType = MediaTypes_::kEvent as MediaType;
+                bus.direction = dir;
+                bus.channelCount = 16;
+                copy_wstring("MIDI", &mut bus.name);
+                bus.busType = BusTypes_::kMain as BusType;
+                bus.flags = BusInfo_::BusFlags_::kDefaultActive as u32;
+
+                kResultOk
+            }
             _ => kInvalidArgument,
         }
     }
@@ -188,6 +221,12 @@ impl IComponentTrait for GainProcessor {
             && index == 1
         {
             self.sidechain.store(state != 0, Ordering::Relaxed);
+        }
+        if media_type as MediaTypes == MediaTypes_::kAudio
+            && dir as BusDirections == BusDirections_::kOutput
+            && index == 1
+        {
+            self.aux.store(state != 0, Ordering::Relaxed);
         }
         kResultOk
     }
@@ -274,6 +313,54 @@ impl IAudioProcessorTrait for GainProcessor {
     unsafe fn process(&self, data: *mut ProcessData) -> tresult {
         let process_data = &*data;
 
+        // Notes come back an octave up, each with a CC and a pitch bend, on the event output.
+        if let (Some(input), Some(output)) = (
+            ComRef::from_raw(process_data.inputEvents),
+            ComRef::from_raw(process_data.outputEvents),
+        ) {
+            for i in 0..input.getEventCount() {
+                let mut e: Event = std::mem::zeroed();
+                if input.getEvent(i, &mut e) != kResultOk {
+                    continue;
+                }
+                match e.r#type as u32 {
+                    Event_::EventTypes_::kNoteOnEvent => {
+                        let mut note = e;
+                        note.__field0.noteOn.pitch += 12;
+                        output.addEvent(&mut note);
+
+                        let mut cc: Event = std::mem::zeroed();
+                        cc.sampleOffset = e.sampleOffset;
+                        cc.r#type = Event_::EventTypes_::kLegacyMIDICCOutEvent as u16;
+                        cc.__field0.midiCCOut = LegacyMIDICCOutEvent {
+                            controlNumber: 11,
+                            channel: 2,
+                            value: 99,
+                            value2: 0,
+                        };
+                        output.addEvent(&mut cc);
+
+                        let mut bend: Event = std::mem::zeroed();
+                        bend.sampleOffset = e.sampleOffset;
+                        bend.r#type = Event_::EventTypes_::kLegacyMIDICCOutEvent as u16;
+                        bend.__field0.midiCCOut = LegacyMIDICCOutEvent {
+                            controlNumber: ControllerNumbers_::kPitchBend as u8,
+                            channel: 2,
+                            value: 0,
+                            value2: 0x60,
+                        };
+                        output.addEvent(&mut bend);
+                    }
+                    Event_::EventTypes_::kNoteOffEvent => {
+                        let mut note = e;
+                        note.__field0.noteOff.pitch += 12;
+                        output.addEvent(&mut note);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         if let Some(param_changes) = ComRef::from_raw(process_data.inputParameterChanges) {
             let param_count = param_changes.getParameterCount();
             for param_index in 0..param_count {
@@ -284,6 +371,28 @@ impl IAudioProcessorTrait for GainProcessor {
                     let point_count = param_queue.getPointCount();
 
                     match param_id {
+                        // Mapped controllers are reported straight back.
+                        MOD_WHEEL | BEND | BEND_2 => {
+                            let mut sample_offset = 0;
+                            let mut value = 0.0;
+                            let result = param_queue.getPoint(
+                                point_count - 1,
+                                &mut sample_offset,
+                                &mut value,
+                            );
+                            if result == kResultTrue {
+                                if let Some(out) =
+                                    ComRef::from_raw(process_data.outputParameterChanges)
+                                {
+                                    let mut index = 0;
+                                    if let Some(q) = ComRef::from_raw(
+                                        out.addParameterData(&param_id, &mut index),
+                                    ) {
+                                        q.addPoint(sample_offset, value, &mut index);
+                                    }
+                                }
+                            }
+                        }
                         0 => {
                             let mut sample_offset = 0;
                             let mut value = 0.0;
@@ -307,7 +416,7 @@ impl IAudioProcessorTrait for GainProcessor {
 
         let num_samples = process_data.numSamples as usize;
 
-        if process_data.numInputs < 1 || process_data.numOutputs != 1 {
+        if process_data.numInputs < 1 || process_data.numOutputs < 1 {
             return kResultOk;
         }
 
@@ -351,6 +460,19 @@ impl IAudioProcessorTrait for GainProcessor {
                 output_l[i] += key_l[i];
                 output_r[i] += key_r[i];
             }
+            // Half the key goes out of the aux bus, when that is switched on as well.
+            if output_buses.len() > 1 && self.aux.load(Ordering::Relaxed) {
+                let aux = slice::from_raw_parts(
+                    output_buses[1].__field0.channelBuffers32,
+                    output_buses[1].numChannels as usize,
+                );
+                let aux_l = slice::from_raw_parts_mut(aux[0], num_samples);
+                let aux_r = slice::from_raw_parts_mut(aux[1], num_samples);
+                for i in 0..num_samples {
+                    aux_l[i] = key_l[i] * 0.5;
+                    aux_r[i] = key_r[i] * 0.5;
+                }
+            }
         }
 
         kResultOk
@@ -372,7 +494,29 @@ struct GainController {
 }
 
 impl Class for GainController {
-    type Interfaces = (IEditController,);
+    type Interfaces = (IEditController, IMidiMapping);
+}
+
+impl IMidiMappingTrait for GainController {
+    unsafe fn getMidiControllerAssignment(
+        &self,
+        bus_index: i32,
+        channel: i16,
+        midi_cc: CtrlNumber,
+        id: *mut ParamID,
+    ) -> tresult {
+        if bus_index != 0 {
+            return kResultFalse;
+        }
+        let mapped = match (channel, midi_cc as u32) {
+            (0, 1) => MOD_WHEEL,
+            (0, ControllerNumbers_::kPitchBend) => BEND,
+            (1, ControllerNumbers_::kPitchBend) => BEND_2,
+            _ => return kResultFalse,
+        };
+        *id = mapped;
+        kResultTrue
+    }
 }
 
 impl GainController {
@@ -626,6 +770,9 @@ extern "system" fn ModuleExit() -> bool {
 
 #[no_mangle]
 extern "system" fn GetPluginFactory() -> *mut IPluginFactory {
+    if std::env::args().any(|a| a.contains(CRASH_MARK)) {
+        std::process::abort();
+    }
     ComWrapper::new(Factory {})
         .to_com_ptr::<IPluginFactory>()
         .unwrap()

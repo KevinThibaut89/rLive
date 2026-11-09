@@ -6,9 +6,11 @@ use super::modulators::{ModPlan, ModSlots};
 use super::ChainRef;
 use rlive_audio_io::{SampleCache, SampleStatus};
 use rlive_core::envelope::segment_value;
+use rlive_core::param::plugin_sidechain;
 use rlive_core::param::{chain as chain_controls, rack as rack_params, ClipParam, EnvTarget};
 use rlive_core::time::{BarMap, TempoMap, TempoPoint, TimeMaps};
 use rlive_core::warp::{self, WarpMap};
+use rlive_core::MPE_SLOT;
 use rlive_core::{
     ChainId, ClipRegion, DeviceId, ParamInfo, Ports, Processor, ScaleInfo, Section, ViewChannel,
 };
@@ -21,6 +23,7 @@ use rlive_engine::{
     MidiClip, MixSettings, Note, NoteExpression, NullProcessor, PlayGroup, ProgramChange,
     RackKind as EngineRackKind, RackNode, TrackNode, WarpedClip, MAX_RACK_DEPTH, MAX_SENDS,
 };
+use rlive_plugin_host::keyed::{sidechain_params, KeyedProcessor};
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
 use rlive_project::arrangement_edit::effective_fades;
@@ -69,9 +72,35 @@ pub struct DeviceRuntime {
     pub sidechain_input: bool,
     /// Names of its extra audio outputs.
     pub aux_names: Vec<String>,
+    /// A parameter its own window moved last, on offer in the choosers until it is replaced.
+    pub touched: Option<u32>,
+    /// What its window says now, so a change of track name gets through.
+    pub window_title: String,
+    /// Whether its open window is on screen.
+    pub window_visible: bool,
+    /// The presets a plug-in brought with it (Audio Units).
+    pub presets: Vec<rlive_plugin_host::PluginPreset>,
 }
 
 impl DeviceRuntime {
+    /// What the running plug-in says one of its own parameters is at. The host's own
+    /// parameters aren't the plug-in's to answer for.
+    pub fn plugin_param(&self, id: u32) -> Option<f64> {
+        if plugin_sidechain::contains(id) {
+            return None;
+        }
+        self.plugin.as_ref()?.param_value(id)
+    }
+
+    /// Whether its panel has a row for choosing presets: a VST's bank, an Audio Unit's list.
+    pub fn has_preset_row(&self) -> bool {
+        let vst3 = self
+            .plugin
+            .as_ref()
+            .is_some_and(|h| h.descriptor().format == rlive_core::PluginFormat::Vst3);
+        vst3 || !self.presets.is_empty()
+    }
+
     pub fn format_value(&self, p: &ParamInfo, value: f64) -> String {
         self.plugin
             .as_ref()
@@ -307,6 +336,17 @@ impl PluginWiring {
     }
 }
 
+/// Where a plug-in goes in a chain.
+pub fn plugin_role(desc: &PluginDescriptor) -> DeviceRole {
+    if desc.is_midi_effect {
+        DeviceRole::MidiEffect
+    } else if desc.is_instrument {
+        DeviceRole::Instrument
+    } else {
+        DeviceRole::AudioEffect
+    }
+}
+
 pub fn descriptor_for(
     kind: &DeviceKind,
     name: &str,
@@ -336,6 +376,7 @@ pub fn descriptor_for(
                 path: path.clone(),
                 is_instrument: false,
                 subcategories: String::new(),
+                is_midi_effect: false,
             }),
     )
 }
@@ -355,6 +396,7 @@ impl Builder<'_> {
         }
         let mut ports = Ports::default();
         let mut view = None;
+        let mut ports_instrument_out = false;
         let (processor, runtime) = match &dev.kind {
             DeviceKind::Builtin {
                 type_id,
@@ -412,6 +454,10 @@ impl Builder<'_> {
                             view: view.clone(),
                             sidechain_input,
                             aux_names,
+                            touched: None,
+                            window_title: String::new(),
+                            window_visible: false,
+                            presets: Vec::new(),
                         },
                     )
                 }
@@ -436,18 +482,31 @@ impl Builder<'_> {
                                 log::warn!("{}: could not restore plugin state", dev.name);
                             }
                         }
-                        let role = if desc.is_instrument {
-                            DeviceRole::Instrument
-                        } else {
-                            DeviceRole::AudioEffect
-                        };
+                        let role = plugin_role(&desc);
                         let latency = Arc::new(AtomicU32::new(inst.handle.latency()));
                         let sidechain_input = inst.handle.sidechain_input();
                         let aux_names = inst.handle.aux_outputs();
+                        let midi_out = inst.handle.midi_output();
+                        let presets = inst.handle.presets();
+                        let mut params = inst.handle.params();
+                        let mut processor = inst.processor;
+                        if sidechain_input {
+                            let mut keyed = KeyedProcessor::new(processor, self.max_block);
+                            for p in sidechain_params() {
+                                keyed.set_param(p.id, dev.stored_param(p.id).unwrap_or(p.default));
+                            }
+                            processor = Box::new(keyed);
+                            params.extend(sidechain_params());
+                        }
+                        if let Some(output) = dev.mpe {
+                            processor.set_resource(MPE_SLOT, Arc::new(Some(output)));
+                        }
+                        ports.midi_out = midi_out;
+                        ports_instrument_out = midi_out && role == DeviceRole::Instrument;
                         (
-                            inst.processor,
+                            processor,
                             DeviceRuntime {
-                                params: inst.handle.params(),
+                                params,
                                 plugin: Some(inst.handle),
                                 error: None,
                                 role,
@@ -458,6 +517,10 @@ impl Builder<'_> {
                                 view: None,
                                 sidechain_input,
                                 aux_names,
+                                touched: None,
+                                window_title: String::new(),
+                                window_visible: false,
+                                presets,
                             },
                         )
                     }
@@ -469,6 +532,7 @@ impl Builder<'_> {
         let mut slot = DeviceSlot::new(dev.id, processor).with_aux_outputs(aux, self.max_block);
         slot.bypass = dev.bypass;
         slot.midi_effect = ports.midi_out;
+        slot.instrument_midi_out = ports_instrument_out;
         slot.latency = runtime.latency.clone();
         slot.mod_out = vec![0.0; ports.mod_out.len()].into_boxed_slice();
         slot.mod_base = self.mod_slots.ensure(dev.id, ports.mod_out.len() as u32);
@@ -541,6 +605,10 @@ impl Builder<'_> {
                 view: None,
                 sidechain_input: false,
                 aux_names: Vec::new(),
+                touched: None,
+                window_title: String::new(),
+                window_visible: false,
+                presets: Vec::new(),
             },
         );
         Box::new(slot)
@@ -877,7 +945,7 @@ impl Builder<'_> {
 fn place_device(layout: &mut BusLayout, dev: &Device, rt: &DeviceRuntime) -> bool {
     layout.place_device(dev.id, !dev.bypass, &rt.params, |p| {
         dev.stored_param(p.id)
-            .or_else(|| rt.plugin.as_ref().and_then(|h| h.param_value(p.id)))
+            .or_else(|| rt.plugin_param(p.id))
             .unwrap_or(p.default)
     })
 }
@@ -1007,6 +1075,10 @@ fn placeholder(error: String) -> (Box<dyn Processor>, DeviceRuntime) {
             view: None,
             sidechain_input: false,
             aux_names: Vec::new(),
+            touched: None,
+            window_title: String::new(),
+            window_visible: false,
+            presets: Vec::new(),
         },
     )
 }

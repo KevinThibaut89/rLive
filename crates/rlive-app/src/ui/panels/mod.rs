@@ -30,6 +30,7 @@ mod modulator_scope;
 mod multiband_display;
 mod operator_display;
 mod plot;
+mod plugin_xy;
 mod roar_matrix;
 mod sample_ui;
 mod sampler_panels;
@@ -139,6 +140,44 @@ impl<'a> PanelCtx<'a> {
     /// A parameter of this device, unless it's hidden or gone.
     pub fn param(&self, id: ParamId) -> Option<&'a ParamInfo> {
         self.runtime.params.iter().find(|p| p.param_id() == id)
+    }
+
+    /// What a plug-in's X-Y field is set to.
+    pub fn xy(&self) -> [Option<u32>; 2] {
+        match &self.device.kind {
+            rlive_project::DeviceKind::Plugin { panel, .. } => panel.xy,
+            _ => [None, None],
+        }
+    }
+
+    /// What can go on a plug-in's X-Y field: its panel, and whatever its window moved last.
+    pub fn xy_choices(&self) -> Vec<(u32, String)> {
+        let rlive_project::DeviceKind::Plugin { panel, .. } = &self.device.kind else {
+            return Vec::new();
+        };
+        let mut ids = crate::session::plugins::panel_params(panel, &self.runtime.params);
+        if let Some(t) = self.runtime.touched.filter(|t| !ids.contains(t)) {
+            ids.push(t);
+        }
+        ids.iter()
+            .filter_map(|id| Some((*id, self.param(ParamId(*id))?.name.clone())))
+            .collect()
+    }
+
+    /// Choose an axis of a plug-in's X-Y field.
+    pub fn set_xy(&mut self, axis: usize, param: Option<u32>) {
+        self.queue
+            .push(self.chain, Action::SetXy(self.device.id, axis, param));
+    }
+
+    /// A plug-in parameter's value: as last set here, or as the plug-in says.
+    pub fn plugin_value(&self, param: &ParamInfo) -> f64 {
+        self.device
+            .params
+            .get(&param.id)
+            .copied()
+            .or_else(|| self.runtime.plugin_param(param.id))
+            .unwrap_or(param.default)
     }
 
     /// The value a parameter is set to.
@@ -273,6 +312,7 @@ pub const PANELS: &[PanelDef] = &[
     shaper_editor::PANEL,
     ds_display::PANEL,
     external_io::PANEL,
+    plugin_xy::PANEL,
 ];
 
 /// What a panel takes up when the table has no entry for it.

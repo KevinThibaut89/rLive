@@ -2,7 +2,11 @@
 //!
 //! AUv3 extensions are reachable through the same API: AudioToolbox bridges them.
 
-use crate::{HostError, HostNotification, PluginDescriptor, PluginHandle, PluginInstance, Result};
+use crate::midi_out::MidiOutput;
+use crate::{
+    HostError, HostNotification, PluginDescriptor, PluginHandle, PluginInstance, PluginPreset,
+    PresetSource, Result,
+};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{msg_send, sel};
@@ -15,13 +19,15 @@ use objc2_core_foundation::{
 };
 use objc2_foundation::{NSBundle, NSSize, NSString, NSURL};
 use rlive_core::{
-    MidiMessage, MpeEncoder, MpeOutput, MpeZone, ParamInfo, ParamKind, PluginFormat,
+    EventQueue, MidiMessage, MpeEncoder, MpeOutput, MpeZone, ParamInfo, ParamKind, PluginFormat,
     ProcessContext, Processor, Resource, Tail, MPE_SLOT,
 };
+use std::cell::UnsafeCell;
 use std::ffi::c_void;
+use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const NO_ERR: i32 = 0;
 
@@ -115,6 +121,7 @@ pub fn scan() -> Vec<PluginDescriptor> {
                 path: Default::default(),
                 is_instrument: ty == kAudioUnitType_MusicDevice,
                 subcategories: String::new(),
+                is_midi_effect: false,
             });
         }
     }
@@ -348,6 +355,246 @@ unsafe extern "C-unwind" fn input_callback(
     NO_ERR
 }
 
+/// `AudioUnitEvent`, for the parameter events asked for here.
+#[repr(C)]
+struct ParamEvent {
+    kind: u32,
+    unit: AudioUnit,
+    id: u32,
+    scope: u32,
+    element: u32,
+}
+
+const EVENT_VALUE_CHANGE: u32 = 0;
+const EVENT_GESTURE_BEGIN: u32 = 1;
+
+type ParamEventProc =
+    unsafe extern "C-unwind" fn(*mut c_void, *mut c_void, *const ParamEvent, u64, f32);
+
+extern "C-unwind" {
+    fn AUEventListenerCreate(
+        proc_: ParamEventProc,
+        user: *mut c_void,
+        run_loop: *const c_void,
+        mode: *const c_void,
+        notification_interval: f32,
+        value_granularity: f32,
+        listener: *mut *mut c_void,
+    ) -> i32;
+    fn AUEventListenerAddEventType(
+        listener: *mut c_void,
+        object: *mut c_void,
+        event: *const ParamEvent,
+    ) -> i32;
+    fn AUListenerDispose(listener: *mut c_void) -> i32;
+    fn CFRunLoopGetCurrent() -> *const c_void;
+    static kCFRunLoopDefaultMode: *const c_void;
+}
+
+/// Told what the unit's own window does to its parameters. Called on the main run loop.
+struct ParamListener {
+    listener: *mut c_void,
+    changes: Box<Mutex<Vec<(u32, f64)>>>,
+}
+
+unsafe extern "C-unwind" fn param_event(
+    user: *mut c_void,
+    _object: *mut c_void,
+    event: *const ParamEvent,
+    _time: u64,
+    value: f32,
+) {
+    let changes = &*(user as *const Mutex<Vec<(u32, f64)>>);
+    let e = &*event;
+    let value = match e.kind {
+        EVENT_VALUE_CHANGE => value,
+        // A touch with no change yet: all this says is which parameter it is.
+        EVENT_GESTURE_BEGIN => {
+            let mut now = 0.0;
+            if AudioUnitGetParameter(
+                e.unit,
+                e.id,
+                kAudioUnitScope_Global,
+                0,
+                NonNull::from(&mut now),
+            ) != NO_ERR
+            {
+                return;
+            }
+            now
+        }
+        _ => return,
+    };
+    if let Ok(mut changes) = changes.lock() {
+        changes.push((e.id, value as f64));
+    }
+}
+
+impl ParamListener {
+    /// Start listening to every parameter in `ids`, on the current thread's run loop.
+    fn new(unit: AudioUnit, ids: impl Iterator<Item = u32>) -> Option<Self> {
+        let changes = Box::new(Mutex::new(Vec::new()));
+        let user = &*changes as *const Mutex<Vec<(u32, f64)>> as *mut c_void;
+        let mut listener = std::ptr::null_mut();
+        let status = unsafe {
+            AUEventListenerCreate(
+                param_event,
+                user,
+                CFRunLoopGetCurrent(),
+                kCFRunLoopDefaultMode,
+                0.0,
+                0.0,
+                &mut listener,
+            )
+        };
+        if status != NO_ERR || listener.is_null() {
+            return None;
+        }
+        for id in ids {
+            for kind in [EVENT_VALUE_CHANGE, EVENT_GESTURE_BEGIN] {
+                let event = ParamEvent {
+                    kind,
+                    unit,
+                    id,
+                    scope: kAudioUnitScope_Global,
+                    element: 0,
+                };
+                unsafe { AUEventListenerAddEventType(listener, std::ptr::null_mut(), &event) };
+            }
+        }
+        Some(Self { listener, changes })
+    }
+
+    fn drain(&self) -> Vec<(u32, f64)> {
+        self.changes
+            .lock()
+            .map_or_else(|_| Vec::new(), |mut c| std::mem::take(&mut *c))
+    }
+}
+
+impl Drop for ParamListener {
+    fn drop(&mut self) {
+        unsafe { AUListenerDispose(self.listener) };
+    }
+}
+
+/// MIDI a unit produced while rendering. Only ever touched from the render thread.
+struct MidiCapture {
+    events: UnsafeCell<Vec<(u32, [u8; 3], usize)>>,
+}
+
+unsafe impl Send for MidiCapture {}
+unsafe impl Sync for MidiCapture {}
+
+/// `AUMIDIOutputCallbackStruct`, spelled out so this needn't depend on CoreMIDI's bindings.
+#[repr(C)]
+struct MidiOutputCallback {
+    callback:
+        unsafe extern "C-unwind" fn(*mut c_void, *const AudioTimeStamp, u32, *const u8) -> i32,
+    user: *mut c_void,
+}
+
+unsafe extern "C-unwind" fn midi_output(
+    user: *mut c_void,
+    _time: *const AudioTimeStamp,
+    _output: u32,
+    packets: *const u8,
+) -> i32 {
+    let capture = &*(user as *const MidiCapture);
+    let events = &mut *capture.events.get();
+    parse_midi_packets(packets, &mut |offset, bytes, len| {
+        if events.len() < events.capacity() {
+            events.push((offset, bytes, len));
+        }
+    });
+    NO_ERR
+}
+
+/// Walk a `MIDIPacketList`: `{ numPackets: u32, packet: [ { timeStamp: u64, length: u16,
+/// data: [u8] } ] }`. On Apple Silicon each packet starts on a four-byte boundary.
+unsafe fn parse_midi_packets(list: *const u8, out: &mut impl FnMut(u32, [u8; 3], usize)) {
+    if list.is_null() {
+        return;
+    }
+    let count = std::ptr::read_unaligned(list as *const u32);
+    let mut packet = list.add(4);
+    for _ in 0..count {
+        let time = std::ptr::read_unaligned(packet as *const u64);
+        let length = std::ptr::read_unaligned(packet.add(8) as *const u16) as usize;
+        let data = std::slice::from_raw_parts(packet.add(10), length);
+        let mut at = 0;
+        while at < data.len() {
+            let status = data[at];
+            let size = midi_message_size(status);
+            if size == 0 || at + size > data.len() {
+                break;
+            }
+            let mut bytes = [0u8; 3];
+            bytes[..size].copy_from_slice(&data[at..at + size]);
+            out(time.min(u32::MAX as u64) as u32, bytes, size);
+            at += size;
+        }
+        let next = packet.add(10 + length);
+        packet = if cfg!(target_arch = "aarch64") {
+            ((next as usize + 3) & !3) as *const u8
+        } else {
+            next
+        };
+    }
+}
+
+/// How long a channel message is, from its status byte. 0 for anything else (sysex, realtime).
+fn midi_message_size(status: u8) -> usize {
+    match status & 0xf0 {
+        0x80 | 0x90 | 0xa0 | 0xb0 | 0xe0 => 3,
+        0xc0 | 0xd0 => 2,
+        _ => 0,
+    }
+}
+
+/// Names of the unit's elements past the main one, in a scope.
+fn element_names(inst: &AuInstance, scope: AudioUnitScope, count: u32) -> Vec<String> {
+    (1..count)
+        .map(|bus| unsafe {
+            let mut name: *const CFString = std::ptr::null();
+            let mut size = std::mem::size_of::<*const CFString>() as u32;
+            let status = AudioUnitGetProperty(
+                inst.unit,
+                kAudioUnitProperty_ElementName,
+                scope,
+                bus,
+                NonNull::new_unchecked(&mut name as *mut _ as *mut c_void),
+                NonNull::from(&mut size),
+            );
+            if status == NO_ERR && !name.is_null() {
+                CFRetained::from_raw(NonNull::new_unchecked(name as *mut CFString)).to_string()
+            } else {
+                format!("Output {}", bus + 1)
+            }
+        })
+        .collect()
+}
+
+/// Whether the unit reports any MIDI output.
+fn has_midi_output(unit: AudioUnit) -> bool {
+    unsafe {
+        let mut names: *const CFArray = std::ptr::null();
+        let mut size = std::mem::size_of::<*const CFArray>() as u32;
+        let status = AudioUnitGetProperty(
+            unit,
+            kAudioUnitProperty_MIDIOutputCallbackInfo,
+            kAudioUnitScope_Global,
+            0,
+            NonNull::new_unchecked(&mut names as *mut _ as *mut c_void),
+            NonNull::from(&mut size),
+        );
+        if status != NO_ERR || names.is_null() {
+            return false;
+        }
+        CFRetained::from_raw(NonNull::new_unchecked(names as *mut CFArray)).count() > 0
+    }
+}
+
 /// `AudioBufferList` with room for two buffers (the C struct is variable-length).
 #[repr(C)]
 struct StereoBufferList {
@@ -387,6 +634,11 @@ pub fn instantiate(
     });
     let is_effect = query.componentType != kAudioUnitType_MusicDevice
         && query.componentType != kAudioUnitType_Generator;
+    let takes_midi = !is_effect || query.componentType == kAudioUnitType_MusicEffect;
+    let midi_capture = Box::new(MidiCapture {
+        events: UnsafeCell::new(Vec::with_capacity(1024)),
+    });
+    let midi_outputs = has_midi_output(unit);
     let fmt = stereo_format(sample_rate);
     let max_frames = max_block as u32;
     let mut input = Box::new(InputData {
@@ -394,7 +646,7 @@ pub fn instantiate(
         right: vec![0.0; max_block],
     });
     let mut sidechain = None;
-    let mut aux_buses = 0;
+    let mut aux_buses = 0u32;
     unsafe {
         set_property(
             unit,
@@ -451,6 +703,19 @@ pub fn instantiate(
                 sidechain = Some(key);
             }
         }
+        if midi_outputs {
+            let cb = MidiOutputCallback {
+                callback: midi_output,
+                user: &*midi_capture as *const MidiCapture as *mut c_void,
+            };
+            set_property(
+                unit,
+                kAudioUnitProperty_MIDIOutputCallback,
+                kAudioUnitScope_Global,
+                0,
+                &cb,
+            );
+        }
         for bus in 1..inst.element_count(kAudioUnitScope_Output) {
             let status = set_property(
                 unit,
@@ -496,9 +761,13 @@ pub fn instantiate(
     let mut handle = AuHandle {
         inst: inst.clone(),
         has_sidechain: sidechain.is_some(),
+        aux_names: element_names(&inst, kAudioUnitScope_Output, aux_buses + 1),
+        midi_output: midi_outputs,
         desc: desc.clone(),
         params: Vec::new(),
         editor: None,
+        listener: None,
+        title: None,
     };
     handle.rescan_params();
     inst.read_audio_props();
@@ -510,7 +779,10 @@ pub fn instantiate(
         output: [vec![0.0; max_block], vec![0.0; max_block]],
         pending: Vec::with_capacity(256),
         mpe: MpeEncoder::new(MpeZone::Lower, 15),
+        midi_capture,
+        midi_out: MidiOutput::default(),
         is_effect,
+        takes_midi,
         sample_time: 0.0,
         max_block,
     };
@@ -525,9 +797,15 @@ pub fn instantiate(
 pub struct AuHandle {
     inst: Arc<AuInstance>,
     has_sidechain: bool,
+    aux_names: Vec<String>,
+    midi_output: bool,
     desc: PluginDescriptor,
     params: Vec<ParamInfo>,
     editor: Option<crate::mac::EditorWindow>,
+    /// Present while the window is open.
+    listener: Option<ParamListener>,
+    /// What the window should say, once it is open.
+    title: Option<String>,
 }
 
 impl AuHandle {
@@ -653,6 +931,67 @@ impl AuHandle {
         }
     }
 
+    /// Hear about what the unit's own window changes. A host's own changes don't come back.
+    fn listen_to_params(&mut self) {
+        let ids = self.params.iter().map(|p| p.id);
+        self.listener = ParamListener::new(self.inst.unit, ids);
+    }
+
+    /// The presets built into the unit.
+    fn factory_presets(&self) -> Vec<PluginPreset> {
+        unsafe {
+            let mut arr: *const CFArray = std::ptr::null();
+            let mut size = std::mem::size_of::<*const CFArray>() as u32;
+            if AudioUnitGetProperty(
+                self.inst.unit,
+                kAudioUnitProperty_FactoryPresets,
+                kAudioUnitScope_Global,
+                0,
+                NonNull::new_unchecked(&mut arr as *mut _ as *mut c_void),
+                NonNull::from(&mut size),
+            ) != NO_ERR
+                || arr.is_null()
+            {
+                return Vec::new();
+            }
+            // Owned by this array, which keeps them valid while they are read.
+            let arr = CFRetained::from_raw(NonNull::new_unchecked(arr as *mut CFArray));
+            (0..arr.count())
+                .filter_map(|i| {
+                    let preset = arr.value_at_index(i) as *const AUPreset;
+                    if preset.is_null() || (*preset).presetName.is_null() {
+                        return None;
+                    }
+                    Some(PluginPreset {
+                        name: (*(*preset).presetName).to_string(),
+                        source: PresetSource::Factory((*preset).presetNumber),
+                    })
+                })
+                .collect()
+        }
+    }
+
+    fn apply_factory_preset(&mut self, number: i32) -> bool {
+        let empty = CFString::from_str("");
+        let preset = AUPreset {
+            presetNumber: number,
+            presetName: CFRetained::as_ptr(&empty).as_ptr(),
+        };
+        let ok = unsafe {
+            set_property(
+                self.inst.unit,
+                kAudioUnitProperty_PresentPreset,
+                kAudioUnitScope_Global,
+                0,
+                &preset,
+            ) == NO_ERR
+        };
+        if ok {
+            self.rescan_params();
+        }
+        ok
+    }
+
     fn cocoa_view(&self) -> Option<Retained<NSView>> {
         unsafe {
             let unit = self.inst.unit;
@@ -714,6 +1053,46 @@ impl PluginHandle for AuHandle {
 
     fn sidechain_input(&self) -> bool {
         self.has_sidechain
+    }
+
+    fn aux_outputs(&self) -> Vec<String> {
+        self.aux_names.clone()
+    }
+
+    fn midi_output(&self) -> bool {
+        self.midi_output
+    }
+
+    fn presets(&self) -> Vec<PluginPreset> {
+        let mut out = self.factory_presets();
+        out.extend(user_presets(&self.desc));
+        out
+    }
+
+    fn load_preset(&mut self, preset: &PluginPreset) -> bool {
+        match &preset.source {
+            PresetSource::Factory(number) => self.apply_factory_preset(*number),
+            PresetSource::File { path, .. } => match std::fs::read(path) {
+                Ok(data) => self.load_state(&data),
+                Err(e) => {
+                    log::warn!("could not read preset {}: {e}", path.display());
+                    false
+                }
+            },
+        }
+    }
+
+    fn set_editor_visible(&mut self, visible: bool) {
+        if let Some(w) = &self.editor {
+            w.set_visible(visible);
+        }
+    }
+
+    fn set_editor_title(&mut self, title: &str) {
+        self.title = Some(title.to_string());
+        if let Some(w) = &self.editor {
+            w.set_title(title);
+        }
     }
 
     fn params(&self) -> Vec<ParamInfo> {
@@ -844,15 +1223,18 @@ impl PluginHandle for AuHandle {
         }
         let view = self.cocoa_view().ok_or(HostError::NoEditor)?;
         let size = view.frame().size;
-        let window = crate::mac::EditorWindow::new(&self.desc.name, size.width, size.height, false)
+        let title = self.title.as_deref().unwrap_or(&self.desc.name);
+        let window = crate::mac::EditorWindow::new(title, size.width, size.height, false)
             .ok_or_else(|| HostError::Editor("could not create window".into()))?;
         window.set_content(&view);
         window.show();
         self.editor = Some(window);
+        self.listen_to_params();
         Ok(())
     }
 
     fn close_editor(&mut self) {
+        self.listener = None;
         if let Some(w) = self.editor.take() {
             w.close();
         }
@@ -860,6 +1242,13 @@ impl PluginHandle for AuHandle {
 
     fn idle(&mut self) -> Vec<HostNotification> {
         let mut out = Vec::new();
+        if let Some(l) = &self.listener {
+            out.extend(
+                l.drain()
+                    .into_iter()
+                    .map(|(id, value)| HostNotification::ParamChanged { id, value }),
+            );
+        }
         // Audio Units have no latency callback here, so notice a change by asking.
         let before = self.inst.latency_frames.load(Ordering::Relaxed);
         self.inst.read_audio_props();
@@ -868,6 +1257,7 @@ impl PluginHandle for AuHandle {
         }
         if matches!(&self.editor, Some(w) if !w.is_visible()) {
             self.editor = None;
+            self.listener = None;
             out.push(HostNotification::EditorClosed);
         }
         out
@@ -885,6 +1275,45 @@ impl Drop for AuHandle {
     }
 }
 
+/// The `.aupreset` files for a unit under the two standard preset folders. Those in the system
+/// folder can't be changed from here.
+fn user_presets(desc: &PluginDescriptor) -> Vec<PluginPreset> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let roots = [
+        (home.join("Library/Audio/Presets"), false),
+        (PathBuf::from("/Library/Audio/Presets"), true),
+    ];
+    let mut out = Vec::new();
+    for (root, read_only) in roots {
+        out.extend(presets_under(&root, desc, read_only));
+    }
+    out
+}
+
+/// The `.aupreset` files for a unit below `root`, in `<Manufacturer>/<Plug-in>`.
+fn presets_under(root: &Path, desc: &PluginDescriptor, read_only: bool) -> Vec<PluginPreset> {
+    let folder = root.join(&desc.vendor).join(&desc.name);
+    let Ok(entries) = std::fs::read_dir(&folder) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PluginPreset> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "aupreset"))
+        .map(|path| PluginPreset {
+            name: path
+                .file_stem()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            source: PresetSource::File { path, read_only },
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
 // ------------------------------------------------------------------ processor
 
 pub struct AuProcessor {
@@ -893,12 +1322,16 @@ pub struct AuProcessor {
     /// Where the key input is read from, when the unit has one.
     sidechain: Option<Box<InputData>>,
     /// Output buses past the main one.
-    aux_buses: usize,
+    aux_buses: u32,
     output: [Vec<f32>; 2],
     pending: Vec<(u32, f32)>,
     is_effect: bool,
+    /// Instruments and music effects are sent MIDI; plain effects aren't.
+    takes_midi: bool,
     /// AU takes notes as MIDI, so note expression reaches it as MPE.
     mpe: MpeEncoder,
+    midi_capture: Box<MidiCapture>,
+    midi_out: MidiOutput,
     sample_time: f64,
     max_block: usize,
 }
@@ -906,6 +1339,20 @@ pub struct AuProcessor {
 unsafe impl Send for AuProcessor {}
 
 static WARNED: AtomicBool = AtomicBool::new(false);
+
+impl AuProcessor {
+    /// Hand what the unit sent out while rendering to the next device.
+    fn collect_midi(&mut self, out: &mut EventQueue, frames: usize) {
+        let captured = unsafe { &mut *self.midi_capture.events.get() };
+        for &(offset, bytes, len) in captured.iter() {
+            if let Some(message) = MidiMessage::from_bytes(&bytes[..len]) {
+                let offset = offset.min(frames.saturating_sub(1) as u32);
+                self.midi_out.push(out, offset, message);
+            }
+        }
+        captured.clear();
+    }
+}
 
 impl Processor for AuProcessor {
     fn activate(&mut self, _sample_rate: f64, _max_block: usize) {}
@@ -919,6 +1366,7 @@ impl Processor for AuProcessor {
                 Some(o) => MpeEncoder::configured(*o),
                 None => MpeEncoder::new(MpeZone::Lower, 15),
             };
+            self.midi_out = MidiOutput::new_for(*output);
         }
         Some(resource)
     }
@@ -955,7 +1403,7 @@ impl Processor for AuProcessor {
                     e.offset.min(last),
                 );
             }
-            if !self.is_effect {
+            if self.takes_midi {
                 self.mpe.encode(ctx.events, &mut |e| {
                     let (bytes, _) = e.message.to_bytes();
                     if matches!(e.message, MidiMessage::AllNotesOff) {
@@ -1020,6 +1468,7 @@ impl Processor for AuProcessor {
             )
         };
         self.sample_time += frames as f64;
+        self.collect_midi(&mut *ctx.events_out, frames);
         if status != NO_ERR {
             if !WARNED.swap(true, Ordering::Relaxed) {
                 // Logging allocates, but this happens once per process at most.
@@ -1041,7 +1490,12 @@ impl Processor for AuProcessor {
                 right[i] += out_r[i];
             }
         }
-        for (i, aux) in ctx.aux_out.iter_mut().take(self.aux_buses).enumerate() {
+        for (i, aux) in ctx
+            .aux_out
+            .iter_mut()
+            .take(self.aux_buses as usize)
+            .enumerate()
+        {
             let n = frames.min(aux.frames());
             let mut list = StereoBufferList {
                 number_buffers: 2,
@@ -1140,5 +1594,180 @@ mod tests {
         assert!(l.iter().all(|s| s.is_finite()));
         let state = inst.handle.save_state().expect("AU state");
         assert!(inst.handle.load_state(&state));
+    }
+
+    /// A bare unit of `desc`, initialized, and a parameter of it that can move.
+    fn unit_with_params(desc: &PluginDescriptor) -> (AudioUnit, ParamInfo) {
+        let mut query = description_from_id(&desc.id).unwrap();
+        let comp =
+            unsafe { AudioComponentFindNext(std::ptr::null_mut(), NonNull::from(&mut query)) };
+        let mut unit: AudioComponentInstance = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { AudioComponentInstanceNew(comp, NonNull::from(&mut unit)) },
+            NO_ERR
+        );
+        assert_eq!(unsafe { AudioUnitInitialize(unit) }, NO_ERR);
+        let inst = instantiate(desc, 48_000.0, 512).unwrap();
+        let target = inst
+            .handle
+            .params()
+            .into_iter()
+            .find(|p| p.max > p.min)
+            .unwrap();
+        (unit, target)
+    }
+
+    /// Lays packets out as CoreMIDI does, including its alignment on Apple Silicon.
+    fn packet_list(packets: &[(u64, &[u8])]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(packets.len() as u32).to_ne_bytes());
+        for (time, data) in packets {
+            out.extend_from_slice(&time.to_ne_bytes());
+            out.extend_from_slice(&(data.len() as u16).to_ne_bytes());
+            out.extend_from_slice(data);
+            if cfg!(target_arch = "aarch64") {
+                while out.len() % 4 != 0 {
+                    out.push(0);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn midi_packets_are_split_into_messages_with_their_offsets() {
+        let list = packet_list(&[(7, &[0x90, 60, 100, 0xc1, 5]), (30, &[0xe2, 0, 64])]);
+        let mut seen = Vec::new();
+        unsafe {
+            parse_midi_packets(list.as_ptr(), &mut |offset, bytes, len| {
+                seen.push((offset, bytes, len))
+            })
+        };
+        assert_eq!(
+            seen,
+            vec![
+                (7, [0x90, 60, 100], 3),
+                (7, [0xc1, 5, 0], 2),
+                (30, [0xe2, 0, 64], 3)
+            ]
+        );
+    }
+
+    #[test]
+    fn captured_midi_reaches_the_next_device() {
+        let found = scan();
+        let delay = found.iter().find(|d| d.id == "aufx:dely:appl").unwrap();
+        let inst = instantiate(delay, 48_000.0, 512).unwrap();
+        // Reach the processor by building one the same way, without the box.
+        let mut capture = MidiCapture {
+            events: UnsafeCell::new(Vec::with_capacity(8)),
+        };
+        let list = packet_list(&[(9, &[0x93, 61, 90])]);
+        unsafe {
+            midi_output(
+                &mut capture as *mut MidiCapture as *mut c_void,
+                std::ptr::null(),
+                0,
+                list.as_ptr(),
+            );
+        }
+        let events = unsafe { &*capture.events.get() };
+        assert_eq!(events.as_slice(), &[(9, [0x93, 61, 90], 3)]);
+        drop(inst);
+    }
+
+    #[test]
+    fn apple_reverb_has_factory_presets_that_load() {
+        let found = scan();
+        let reverb = found
+            .iter()
+            .find(|d| d.id == "aufx:rvb2:appl")
+            .expect("AUReverb2 should be installed");
+        let mut inst = instantiate(reverb, 48_000.0, 512).unwrap();
+        let presets = inst.handle.presets();
+        assert!(presets.len() > 1, "{presets:?}");
+        assert!(presets[0].read_only());
+        let values = |h: &dyn PluginHandle| -> Vec<Option<f64>> {
+            h.params().iter().map(|p| h.param_value(p.id)).collect()
+        };
+        let before = values(&*inst.handle);
+        let changed = presets.iter().any(|p| {
+            assert!(inst.handle.load_preset(p));
+            values(&*inst.handle) != before
+        });
+        assert!(changed, "a factory preset should move a parameter");
+    }
+
+    #[test]
+    fn user_presets_are_found_by_manufacturer_and_plugin_and_load_as_state() {
+        let root = std::env::temp_dir().join(format!("rlive-aupreset-{}", std::process::id()));
+        let found = scan();
+        let delay = found.iter().find(|d| d.id == "aufx:dely:appl").unwrap();
+        let folder = root.join(&delay.vendor).join(&delay.name);
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut inst = instantiate(delay, 48_000.0, 512).unwrap();
+        let state = inst.handle.save_state().unwrap();
+        std::fs::write(folder.join("Mine.aupreset"), &state).unwrap();
+        std::fs::write(folder.join("notes.txt"), b"not a preset").unwrap();
+        let presets = presets_under(&root, delay, false);
+        assert_eq!(presets.len(), 1);
+        assert_eq!(presets[0].name, "Mine");
+        assert!(!presets[0].read_only());
+        assert!(inst.handle.load_preset(&presets[0]));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// What a unit's own window does: tells its listeners a parameter moved. The listener is
+    /// real, and the event is handed to it as the system would.
+    #[test]
+    fn what_a_units_window_does_comes_back_as_a_parameter_change() {
+        let found = scan();
+        let delay = found.iter().find(|d| d.id == "aufx:dely:appl").unwrap();
+        let (unit, target) = unit_with_params(delay);
+        let listener = ParamListener::new(unit, std::iter::once(target.id)).expect("listens");
+        let user = &*listener.changes as *const Mutex<Vec<(u32, f64)>> as *mut c_void;
+        let event = |kind| ParamEvent {
+            kind,
+            unit,
+            id: target.id,
+            scope: kAudioUnitScope_Global,
+            element: 0,
+        };
+        unsafe {
+            param_event(
+                user,
+                std::ptr::null_mut(),
+                &event(EVENT_VALUE_CHANGE),
+                0,
+                0.25,
+            );
+            param_event(
+                user,
+                std::ptr::null_mut(),
+                &event(EVENT_GESTURE_BEGIN),
+                0,
+                0.0,
+            );
+            param_event(user, std::ptr::null_mut(), &event(99), 0, 1.0);
+        }
+        let changes = listener.drain();
+        assert_eq!(
+            changes.len(),
+            2,
+            "a move and a touch, not the unknown event"
+        );
+        assert_eq!(changes[0], (target.id, 0.25));
+        assert_eq!(changes[1].0, target.id);
+        assert!(listener.drain().is_empty());
+    }
+
+    #[test]
+    fn audio_unit_reports_its_aux_outputs_by_name_or_number() {
+        let found = scan();
+        let delay = found.iter().find(|d| d.id == "aufx:dely:appl").unwrap();
+        let inst = instantiate(delay, 48_000.0, 512).unwrap();
+        // AUDelay has only its main output; the list holds extras alone.
+        assert!(inst.handle.aux_outputs().is_empty());
+        assert!(!inst.handle.midi_output());
     }
 }

@@ -774,17 +774,22 @@ impl Session {
                     plugin_id,
                     path,
                     state: _,
+                    panel,
+                    bank: _,
                 },
                 DeviceKind::Plugin {
                     format: f,
                     plugin_id: p,
                     path: pa,
                     state: _,
+                    panel: pn,
+                    bank: _,
                 },
             ) => {
                 *format = *f;
                 plugin_id.clone_from(p);
                 path.clone_from(pa);
+                panel.clone_from(pn);
             }
             (
                 DeviceKind::Rack {

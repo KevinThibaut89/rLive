@@ -517,6 +517,7 @@ fn choosers(
         state.arr.auto.automated_only = !only;
     }
     if let Some(choice) = chosen {
+        session.envelope_chooser_picked(choice);
         apply_choice(session, state, key, choice);
     }
 }

@@ -457,6 +457,7 @@ impl FakePlugin {
                 path: PathBuf::new(),
                 is_instrument: false,
                 subcategories: String::new(),
+                is_midi_effect: false,
             },
             params,
             pending,

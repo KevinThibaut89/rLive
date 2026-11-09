@@ -742,19 +742,19 @@ Overview chapter; only behaviours stated here or foundational are listed.
 **Milestones:** A17
 
 - `[ ]` VST2, VST3, AU2, AU3 (AU on macOS only). XL overall. VST2 SDK licensing is restricted (my note, not in the manual).
-- `[ ]` Skip scan at launch with modifier; Activate flow; Rescan; modifier forces clean database rebuild. M
-- `[ ]` Crash-safe scanning: reports culprit, offers rescan or disable, auto-disables after repeat. L. Needs out-of-process scan.
+- `[~]` Skip scan at launch with modifier; Activate flow; Rescan; modifier forces clean database rebuild. M
+- `[x]` Crash-safe scanning: reports culprit, offers rescan or disable, auto-disables after repeat. L. Needs out-of-process scan.
 - `[ ]` Browser separates instruments from effects; AU presets only. M
-- `[ ]` Generic panel: sliders for up to 64 parameters; empty panel above that. M
-- `[ ]` X-Y field for two parameters. S
-- `[ ]` Floating editor windows: Auto-Open, Multiple Windows (modifier overrides), Auto-Hide by track; hide-all shortcut; track name in title. L
-- `[ ]` Configure Mode: add by touching, reorder, delete, warns if parameter is automated or mapped; unique per instance. M
-- `[ ]` Implicit panel additions via temporary chooser entries, recording changes, or mapping modes. M
-- `[ ]` Plug-ins behave as native devices for mapping, envelopes, moves, multi-I/O. L. Depends on host.
-- `[ ]` Sidechain block: source, Gain, Mix, Mute. M
+- `[x]` Generic panel: sliders for up to 64 parameters; empty panel above that. M
+- `[~]` X-Y field for two parameters. S
+- `[~]` Floating editor windows: Auto-Open, Multiple Windows (modifier overrides), Auto-Hide by track; hide-all shortcut; track name in title. L
+- `[~]` Configure Mode: add by touching, reorder, delete, warns if parameter is automated or mapped; unique per instance. M
+- `[~]` Implicit panel additions via temporary chooser entries, recording changes, or mapping modes. M
+- `[~]` Plug-ins behave as native devices for mapping, envelopes, moves, multi-I/O. L. Depends on host.
+- `[x]` Sidechain block: source, Gain, Mix, Mute. M
 - `[ ]` VST folders: custom folder, Windows registry path, macOS system folders, aliases followed. S
-- `[ ]` VST per-instance preset bank; rename; load and save .fxp/.fxb style files. M
-- `[ ]` AU: quality modes only in plug-in UI; AU presets on disk, some read-only. M
+- `[~]` VST per-instance preset bank; rename; load and save .fxp/.fxb style files. M
+- `[~]` AU: quality modes only in plug-in UI; AU presets on disk, some read-only. M
 
 
 ## 25. Racks (491-510)
@@ -1328,7 +1328,6 @@ Requirement: Cmd+Shift+F, Cmd+Shift+E, Cmd+I, Cmd+E and Z/X all change meaning b
 Shortcuts declared in the keymap that do nothing yet, by milestone. This list is generated from `crates/rlive-app/src/ui/keymap/bindings.rs`.
 
 <!-- pending-shortcuts:begin -->
-- `[ ]` **A17:** Hide/show plug-in windows; Keep several plug-in windows open
 - `[ ]` **A19:** Next similar sample; Previous similar sample; Return to reference; Save as similarity reference; Show similar-sample swap controls; Similarity search
 - `[ ]` **A5:** Audio engine on/off
 - `[ ]` **A9:** Reverse audio selection; Stretch warped clip

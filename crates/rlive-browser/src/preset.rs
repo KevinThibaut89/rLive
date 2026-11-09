@@ -54,7 +54,11 @@ pub struct TrackTemplate {
 pub struct PluginConfig {
     pub format: PluginFormat,
     pub plugin_id: String,
+    /// What its panel shows, in order.
     pub params: Vec<u32>,
+    /// The X and Y parameters of its X-Y field.
+    #[serde(default)]
+    pub xy: [Option<u32>; 2],
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
