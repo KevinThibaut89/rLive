@@ -1859,3 +1859,1374 @@ rlive.impulse	192	Volume
 rlive.impulse	193	Transpose
 rlive.impulse	194	Time
 rlive.impulse	195	Link 7+8
+rlive.drift	0	Osc 1
+rlive.drift	1	Osc 1 Oct
+rlive.drift	2	Osc 1 Shape
+rlive.drift	3	Osc 1 Shape Mod Source
+rlive.drift	4	Osc 1 Shape Mod Amount
+rlive.drift	5	Osc 2
+rlive.drift	6	Osc 2 Oct
+rlive.drift	7	Osc 2 Detune
+rlive.drift	8	Pitch Mod Source A
+rlive.drift	9	Pitch Mod Amount A
+rlive.drift	10	Pitch Mod Source B
+rlive.drift	11	Pitch Mod Amount B
+rlive.drift	12	Osc 1 On
+rlive.drift	13	Osc 1 Gain
+rlive.drift	14	Osc 1 Filter
+rlive.drift	15	Osc 2 On
+rlive.drift	16	Osc 2 Gain
+rlive.drift	17	Osc 2 Filter
+rlive.drift	18	Noise On
+rlive.drift	19	Noise Gain
+rlive.drift	20	Noise Filter
+rlive.drift	21	R
+rlive.drift	22	LP Freq
+rlive.drift	23	LP Type
+rlive.drift	24	LP Key
+rlive.drift	25	LP Res
+rlive.drift	26	HP
+rlive.drift	27	LP Mod Source A
+rlive.drift	28	LP Mod Amount A
+rlive.drift	29	LP Mod Source B
+rlive.drift	30	LP Mod Amount B
+rlive.drift	31	Env 1 Attack
+rlive.drift	32	Env 1 Decay
+rlive.drift	33	Env 1 Sustain
+rlive.drift	34	Env 1 Release
+rlive.drift	35	Env 2 Attack
+rlive.drift	36	Env 2 Decay
+rlive.drift	37	Env 2 Sustain
+rlive.drift	38	Env 2 Release
+rlive.drift	39	Cycling Env
+rlive.drift	40	Cyc Time Mode
+rlive.drift	41	Cyc Rate
+rlive.drift	42	Cyc Ratio
+rlive.drift	43	Cyc Time
+rlive.drift	44	Cyc Sync
+rlive.drift	45	Tilt
+rlive.drift	46	Hold
+rlive.drift	47	LFO Wave
+rlive.drift	48	LFO Time Mode
+rlive.drift	49	LFO Rate
+rlive.drift	50	LFO Ratio
+rlive.drift	51	LFO Time
+rlive.drift	52	LFO Sync
+rlive.drift	53	LFO R
+rlive.drift	54	LFO Amount
+rlive.drift	55	LFO Mod Source
+rlive.drift	56	LFO Mod Amount
+rlive.drift	57	Mod 1 Source
+rlive.drift	58	Mod 1 Destination
+rlive.drift	59	Mod 1 Amount
+rlive.drift	60	Mod 2 Source
+rlive.drift	61	Mod 2 Destination
+rlive.drift	62	Mod 2 Amount
+rlive.drift	63	Mod 3 Source
+rlive.drift	64	Mod 3 Destination
+rlive.drift	65	Mod 3 Amount
+rlive.drift	66	Mode
+rlive.drift	67	Mono Thickness
+rlive.drift	68	Stereo Spread
+rlive.drift	69	Unison Strength
+rlive.drift	70	Voices
+rlive.drift	71	Drift
+rlive.drift	72	Legato
+rlive.drift	73	Glide
+rlive.drift	74	Volume
+rlive.drift	75	Vel > Vol
+rlive.drift	76	Transpose
+rlive.drift	77	Note PB
+rlive.drift	78	PB Range
+rlive.analog	0	Osc 1
+rlive.analog	1	Osc 1 Level
+rlive.analog	2	Osc 1 F1/F2
+rlive.analog	3	Osc 1 Shape
+rlive.analog	4	Osc 1 Width
+rlive.analog	5	Osc 1 Width < LFO
+rlive.analog	6	Osc 1 Octave
+rlive.analog	7	Osc 1 Semi
+rlive.analog	8	Osc 1 Detune
+rlive.analog	9	Osc 1 Pitch < LFO
+rlive.analog	10	Osc 1 Key
+rlive.analog	11	Osc 1 Pitch Env Initial
+rlive.analog	12	Osc 1 Pitch Env Time
+rlive.analog	13	Osc 1 Sub/Sync
+rlive.analog	14	Osc 1 Sub Level
+rlive.analog	15	Osc 1 Sync Ratio
+rlive.analog	16	Osc 2
+rlive.analog	17	Osc 2 Level
+rlive.analog	18	Osc 2 F1/F2
+rlive.analog	19	Osc 2 Shape
+rlive.analog	20	Osc 2 Width
+rlive.analog	21	Osc 2 Width < LFO
+rlive.analog	22	Osc 2 Octave
+rlive.analog	23	Osc 2 Semi
+rlive.analog	24	Osc 2 Detune
+rlive.analog	25	Osc 2 Pitch < LFO
+rlive.analog	26	Osc 2 Key
+rlive.analog	27	Osc 2 Pitch Env Initial
+rlive.analog	28	Osc 2 Pitch Env Time
+rlive.analog	29	Osc 2 Sub/Sync
+rlive.analog	30	Osc 2 Sub Level
+rlive.analog	31	Osc 2 Sync Ratio
+rlive.analog	32	Noise
+rlive.analog	33	Noise Level
+rlive.analog	34	Noise F1/F2
+rlive.analog	35	Noise Color
+rlive.analog	36	Fil 1
+rlive.analog	37	Fil 1 Type
+rlive.analog	38	Fil 1 Freq
+rlive.analog	39	Fil 1 Reso
+rlive.analog	40	Fil 1 To F2
+rlive.analog	41	Fil 1 Drive
+rlive.analog	42	Fil 1 Freq < LFO
+rlive.analog	43	Fil 1 Freq < Key
+rlive.analog	44	Fil 1 Freq < Env
+rlive.analog	45	Fil 1 Res < LFO
+rlive.analog	46	Fil 1 Res < Key
+rlive.analog	47	Fil 1 Res < Env
+rlive.analog	48	FEG1 Attack
+rlive.analog	49	FEG1 Att < Vel
+rlive.analog	50	FEG1 Decay
+rlive.analog	51	FEG1 Sustain
+rlive.analog	52	FEG1 S.Time
+rlive.analog	53	FEG1 Release
+rlive.analog	54	FEG1 Env < Vel
+rlive.analog	55	FEG1 Attack Exp
+rlive.analog	56	FEG1 Decay Exp
+rlive.analog	57	FEG1 Release Exp
+rlive.analog	58	FEG1 Legato
+rlive.analog	59	FEG1 Free
+rlive.analog	60	FEG1 Loop
+rlive.analog	61	Fil 2
+rlive.analog	62	Fil 2 Type
+rlive.analog	63	Fil 2 Freq
+rlive.analog	64	Fil 2 Reso
+rlive.analog	65	Fil 2 Follow
+rlive.analog	66	Fil 2 Drive
+rlive.analog	67	Fil 2 Freq < LFO
+rlive.analog	68	Fil 2 Freq < Key
+rlive.analog	69	Fil 2 Freq < Env
+rlive.analog	70	Fil 2 Res < LFO
+rlive.analog	71	Fil 2 Res < Key
+rlive.analog	72	Fil 2 Res < Env
+rlive.analog	73	FEG2 Attack
+rlive.analog	74	FEG2 Att < Vel
+rlive.analog	75	FEG2 Decay
+rlive.analog	76	FEG2 Sustain
+rlive.analog	77	FEG2 S.Time
+rlive.analog	78	FEG2 Release
+rlive.analog	79	FEG2 Env < Vel
+rlive.analog	80	FEG2 Attack Exp
+rlive.analog	81	FEG2 Decay Exp
+rlive.analog	82	FEG2 Release Exp
+rlive.analog	83	FEG2 Legato
+rlive.analog	84	FEG2 Free
+rlive.analog	85	FEG2 Loop
+rlive.analog	86	Amp 1
+rlive.analog	87	Amp 1 Level
+rlive.analog	88	Amp 1 Pan
+rlive.analog	89	Amp 1 Level < LFO
+rlive.analog	90	Amp 1 Level < Key
+rlive.analog	91	Amp 1 Level < Env
+rlive.analog	92	Amp 1 Pan < LFO
+rlive.analog	93	Amp 1 Pan < Key
+rlive.analog	94	Amp 1 Pan < Env
+rlive.analog	95	AEG1 Attack
+rlive.analog	96	AEG1 Att < Vel
+rlive.analog	97	AEG1 Decay
+rlive.analog	98	AEG1 Sustain
+rlive.analog	99	AEG1 S.Time
+rlive.analog	100	AEG1 Release
+rlive.analog	101	AEG1 Env < Vel
+rlive.analog	102	AEG1 Attack Exp
+rlive.analog	103	AEG1 Decay Exp
+rlive.analog	104	AEG1 Release Exp
+rlive.analog	105	AEG1 Legato
+rlive.analog	106	AEG1 Free
+rlive.analog	107	AEG1 Loop
+rlive.analog	108	Amp 2
+rlive.analog	109	Amp 2 Level
+rlive.analog	110	Amp 2 Pan
+rlive.analog	111	Amp 2 Level < LFO
+rlive.analog	112	Amp 2 Level < Key
+rlive.analog	113	Amp 2 Level < Env
+rlive.analog	114	Amp 2 Pan < LFO
+rlive.analog	115	Amp 2 Pan < Key
+rlive.analog	116	Amp 2 Pan < Env
+rlive.analog	117	AEG2 Attack
+rlive.analog	118	AEG2 Att < Vel
+rlive.analog	119	AEG2 Decay
+rlive.analog	120	AEG2 Sustain
+rlive.analog	121	AEG2 S.Time
+rlive.analog	122	AEG2 Release
+rlive.analog	123	AEG2 Env < Vel
+rlive.analog	124	AEG2 Attack Exp
+rlive.analog	125	AEG2 Decay Exp
+rlive.analog	126	AEG2 Release Exp
+rlive.analog	127	AEG2 Legato
+rlive.analog	128	AEG2 Free
+rlive.analog	129	AEG2 Loop
+rlive.analog	130	LFO 1
+rlive.analog	131	LFO 1 Rate
+rlive.analog	132	LFO 1 Sync
+rlive.analog	133	LFO 1 Beat Rate
+rlive.analog	134	LFO 1 Wave
+rlive.analog	135	LFO 1 Width
+rlive.analog	136	LFO 1 Delay
+rlive.analog	137	LFO 1 Attack
+rlive.analog	138	LFO 1 Retrig
+rlive.analog	139	LFO 1 Offset
+rlive.analog	140	LFO 2
+rlive.analog	141	LFO 2 Rate
+rlive.analog	142	LFO 2 Sync
+rlive.analog	143	LFO 2 Beat Rate
+rlive.analog	144	LFO 2 Wave
+rlive.analog	145	LFO 2 Width
+rlive.analog	146	LFO 2 Delay
+rlive.analog	147	LFO 2 Attack
+rlive.analog	148	LFO 2 Retrig
+rlive.analog	149	LFO 2 Offset
+rlive.analog	150	Volume
+rlive.analog	151	Vib
+rlive.analog	152	Vib Amount
+rlive.analog	153	Vib Rate
+rlive.analog	154	Vib Delay
+rlive.analog	155	Vib Attack
+rlive.analog	156	Vib Error
+rlive.analog	157	Vib Amt < MW
+rlive.analog	158	Uni
+rlive.analog	159	Uni Detune
+rlive.analog	160	Uni Voices
+rlive.analog	161	Uni Delay
+rlive.analog	162	Gli
+rlive.analog	163	Glide Time
+rlive.analog	164	Glide Legato
+rlive.analog	165	Glide Mode
+rlive.analog	166	Octave
+rlive.analog	167	Semi
+rlive.analog	168	Detune
+rlive.analog	169	PB Range
+rlive.analog	170	Stretch
+rlive.analog	171	Error
+rlive.analog	172	Voices
+rlive.analog	173	Priority
+rlive.analog	174	MPE
+rlive.analog	175	Pressure Dest A
+rlive.analog	176	Pressure Amount A
+rlive.analog	177	Pressure Dest B
+rlive.analog	178	Pressure Amount B
+rlive.analog	179	Slide Dest A
+rlive.analog	180	Slide Amount A
+rlive.analog	181	Slide Dest B
+rlive.analog	182	Slide Amount B
+rlive.analog	183	Note PB
+rlive.wavetable	0	Osc 1
+rlive.wavetable	1	Osc 1 Gain
+rlive.wavetable	2	Osc 1 Pan
+rlive.wavetable	3	Osc 1 Semi
+rlive.wavetable	4	Osc 1 Detune
+rlive.wavetable	5	Osc 1 Category
+rlive.wavetable	6	Osc 1 Table
+rlive.wavetable	7	Osc 1 Raw
+rlive.wavetable	8	Osc 1 Position
+rlive.wavetable	9	Osc 1 Effect
+rlive.wavetable	10	Osc 1 Effect 1
+rlive.wavetable	11	Osc 1 Effect 2
+rlive.wavetable	12	Osc 2
+rlive.wavetable	13	Osc 2 Gain
+rlive.wavetable	14	Osc 2 Pan
+rlive.wavetable	15	Osc 2 Semi
+rlive.wavetable	16	Osc 2 Detune
+rlive.wavetable	17	Osc 2 Category
+rlive.wavetable	18	Osc 2 Table
+rlive.wavetable	19	Osc 2 Raw
+rlive.wavetable	20	Osc 2 Position
+rlive.wavetable	21	Osc 2 Effect
+rlive.wavetable	22	Osc 2 Effect 1
+rlive.wavetable	23	Osc 2 Effect 2
+rlive.wavetable	24	Sub
+rlive.wavetable	25	Sub Gain
+rlive.wavetable	26	Sub Tone
+rlive.wavetable	27	Sub Octave
+rlive.wavetable	28	Filter 1
+rlive.wavetable	29	Filter 1 Type
+rlive.wavetable	30	Filter 1 Slope
+rlive.wavetable	31	Filter 1 Circuit
+rlive.wavetable	32	Filter 1 Freq
+rlive.wavetable	33	Filter 1 Res
+rlive.wavetable	34	Filter 1 Drive
+rlive.wavetable	35	Filter 1 Morph
+rlive.wavetable	36	Filter 2
+rlive.wavetable	37	Filter 2 Type
+rlive.wavetable	38	Filter 2 Slope
+rlive.wavetable	39	Filter 2 Circuit
+rlive.wavetable	40	Filter 2 Freq
+rlive.wavetable	41	Filter 2 Res
+rlive.wavetable	42	Filter 2 Drive
+rlive.wavetable	43	Filter 2 Morph
+rlive.wavetable	44	Routing
+rlive.wavetable	45	Time
+rlive.wavetable	46	Amount
+rlive.wavetable	47	Amp Attack
+rlive.wavetable	48	Amp Decay
+rlive.wavetable	49	Amp Sustain
+rlive.wavetable	50	Amp Release
+rlive.wavetable	51	Amp Attack Slope
+rlive.wavetable	52	Amp Decay Slope
+rlive.wavetable	53	Amp Release Slope
+rlive.wavetable	54	Amp Loop
+rlive.wavetable	58	Env 2 Attack
+rlive.wavetable	59	Env 2 Decay
+rlive.wavetable	60	Env 2 Sustain
+rlive.wavetable	61	Env 2 Release
+rlive.wavetable	62	Env 2 Attack Slope
+rlive.wavetable	63	Env 2 Decay Slope
+rlive.wavetable	64	Env 2 Release Slope
+rlive.wavetable	65	Env 2 Loop
+rlive.wavetable	66	Env 2 Initial
+rlive.wavetable	67	Env 2 Peak
+rlive.wavetable	68	Env 2 Final
+rlive.wavetable	69	Env 3 Attack
+rlive.wavetable	70	Env 3 Decay
+rlive.wavetable	71	Env 3 Sustain
+rlive.wavetable	72	Env 3 Release
+rlive.wavetable	73	Env 3 Attack Slope
+rlive.wavetable	74	Env 3 Decay Slope
+rlive.wavetable	75	Env 3 Release Slope
+rlive.wavetable	76	Env 3 Loop
+rlive.wavetable	77	Env 3 Initial
+rlive.wavetable	78	Env 3 Peak
+rlive.wavetable	79	Env 3 Final
+rlive.wavetable	80	LFO 1 Wave
+rlive.wavetable	81	LFO 1 Shape
+rlive.wavetable	82	LFO 1 Sync
+rlive.wavetable	83	LFO 1 Rate
+rlive.wavetable	84	LFO 1 Beat Rate
+rlive.wavetable	85	LFO 1 Amount
+rlive.wavetable	86	LFO 1 Offset
+rlive.wavetable	87	LFO 1 Attack
+rlive.wavetable	88	LFO 1 Retrigger
+rlive.wavetable	89	LFO 2 Wave
+rlive.wavetable	90	LFO 2 Shape
+rlive.wavetable	91	LFO 2 Sync
+rlive.wavetable	92	LFO 2 Rate
+rlive.wavetable	93	LFO 2 Beat Rate
+rlive.wavetable	94	LFO 2 Amount
+rlive.wavetable	95	LFO 2 Offset
+rlive.wavetable	96	LFO 2 Attack
+rlive.wavetable	97	LFO 2 Retrigger
+rlive.wavetable	98	Transpose
+rlive.wavetable	99	Volume
+rlive.wavetable	100	Mono
+rlive.wavetable	101	Poly Voices
+rlive.wavetable	102	Glide
+rlive.wavetable	103	Unison
+rlive.wavetable	104	Unison Voices
+rlive.wavetable	105	Unison Amount
+rlive.wavetable	106	Hi-Quality
+rlive.wavetable	107	Amp > Osc 1 Pitch
+rlive.wavetable	108	Amp > Osc 1 Position
+rlive.wavetable	109	Amp > Osc 1 Effect 1
+rlive.wavetable	110	Amp > Osc 1 Effect 2
+rlive.wavetable	111	Amp > Osc 1 Gain
+rlive.wavetable	112	Amp > Osc 1 Pan
+rlive.wavetable	113	Amp > Osc 2 Pitch
+rlive.wavetable	114	Amp > Osc 2 Position
+rlive.wavetable	115	Amp > Osc 2 Effect 1
+rlive.wavetable	116	Amp > Osc 2 Effect 2
+rlive.wavetable	117	Amp > Osc 2 Gain
+rlive.wavetable	118	Amp > Osc 2 Pan
+rlive.wavetable	119	Amp > Sub Gain
+rlive.wavetable	120	Amp > Sub Tone
+rlive.wavetable	121	Amp > Filter 1 Freq
+rlive.wavetable	122	Amp > Filter 1 Res
+rlive.wavetable	123	Amp > Filter 2 Freq
+rlive.wavetable	124	Amp > Filter 2 Res
+rlive.wavetable	125	Amp > Volume
+rlive.wavetable	126	Amp > Unison Amount
+rlive.wavetable	127	Amp > Mod Amount
+rlive.wavetable	128	Amp > Mod Time
+rlive.wavetable	129	Amp > Env Sustain
+rlive.wavetable	130	Amp > Env Initial
+rlive.wavetable	131	Amp > LFO 1 Amount
+rlive.wavetable	132	Amp > LFO 1 Rate
+rlive.wavetable	133	Amp > LFO 2 Amount
+rlive.wavetable	134	Amp > LFO 2 Rate
+rlive.wavetable	135	Env 2 > Osc 1 Pitch
+rlive.wavetable	136	Env 2 > Osc 1 Position
+rlive.wavetable	137	Env 2 > Osc 1 Effect 1
+rlive.wavetable	138	Env 2 > Osc 1 Effect 2
+rlive.wavetable	139	Env 2 > Osc 1 Gain
+rlive.wavetable	140	Env 2 > Osc 1 Pan
+rlive.wavetable	141	Env 2 > Osc 2 Pitch
+rlive.wavetable	142	Env 2 > Osc 2 Position
+rlive.wavetable	143	Env 2 > Osc 2 Effect 1
+rlive.wavetable	144	Env 2 > Osc 2 Effect 2
+rlive.wavetable	145	Env 2 > Osc 2 Gain
+rlive.wavetable	146	Env 2 > Osc 2 Pan
+rlive.wavetable	147	Env 2 > Sub Gain
+rlive.wavetable	148	Env 2 > Sub Tone
+rlive.wavetable	149	Env 2 > Filter 1 Freq
+rlive.wavetable	150	Env 2 > Filter 1 Res
+rlive.wavetable	151	Env 2 > Filter 2 Freq
+rlive.wavetable	152	Env 2 > Filter 2 Res
+rlive.wavetable	153	Env 2 > Volume
+rlive.wavetable	154	Env 2 > Unison Amount
+rlive.wavetable	155	Env 2 > Mod Amount
+rlive.wavetable	156	Env 2 > Mod Time
+rlive.wavetable	157	Env 2 > Env Sustain
+rlive.wavetable	158	Env 2 > Env Initial
+rlive.wavetable	159	Env 2 > LFO 1 Amount
+rlive.wavetable	160	Env 2 > LFO 1 Rate
+rlive.wavetable	161	Env 2 > LFO 2 Amount
+rlive.wavetable	162	Env 2 > LFO 2 Rate
+rlive.wavetable	163	Env 3 > Osc 1 Pitch
+rlive.wavetable	164	Env 3 > Osc 1 Position
+rlive.wavetable	165	Env 3 > Osc 1 Effect 1
+rlive.wavetable	166	Env 3 > Osc 1 Effect 2
+rlive.wavetable	167	Env 3 > Osc 1 Gain
+rlive.wavetable	168	Env 3 > Osc 1 Pan
+rlive.wavetable	169	Env 3 > Osc 2 Pitch
+rlive.wavetable	170	Env 3 > Osc 2 Position
+rlive.wavetable	171	Env 3 > Osc 2 Effect 1
+rlive.wavetable	172	Env 3 > Osc 2 Effect 2
+rlive.wavetable	173	Env 3 > Osc 2 Gain
+rlive.wavetable	174	Env 3 > Osc 2 Pan
+rlive.wavetable	175	Env 3 > Sub Gain
+rlive.wavetable	176	Env 3 > Sub Tone
+rlive.wavetable	177	Env 3 > Filter 1 Freq
+rlive.wavetable	178	Env 3 > Filter 1 Res
+rlive.wavetable	179	Env 3 > Filter 2 Freq
+rlive.wavetable	180	Env 3 > Filter 2 Res
+rlive.wavetable	181	Env 3 > Volume
+rlive.wavetable	182	Env 3 > Unison Amount
+rlive.wavetable	183	Env 3 > Mod Amount
+rlive.wavetable	184	Env 3 > Mod Time
+rlive.wavetable	185	Env 3 > Env Sustain
+rlive.wavetable	186	Env 3 > Env Initial
+rlive.wavetable	187	Env 3 > LFO 1 Amount
+rlive.wavetable	188	Env 3 > LFO 1 Rate
+rlive.wavetable	189	Env 3 > LFO 2 Amount
+rlive.wavetable	190	Env 3 > LFO 2 Rate
+rlive.wavetable	191	LFO 1 > Osc 1 Pitch
+rlive.wavetable	192	LFO 1 > Osc 1 Position
+rlive.wavetable	193	LFO 1 > Osc 1 Effect 1
+rlive.wavetable	194	LFO 1 > Osc 1 Effect 2
+rlive.wavetable	195	LFO 1 > Osc 1 Gain
+rlive.wavetable	196	LFO 1 > Osc 1 Pan
+rlive.wavetable	197	LFO 1 > Osc 2 Pitch
+rlive.wavetable	198	LFO 1 > Osc 2 Position
+rlive.wavetable	199	LFO 1 > Osc 2 Effect 1
+rlive.wavetable	200	LFO 1 > Osc 2 Effect 2
+rlive.wavetable	201	LFO 1 > Osc 2 Gain
+rlive.wavetable	202	LFO 1 > Osc 2 Pan
+rlive.wavetable	203	LFO 1 > Sub Gain
+rlive.wavetable	204	LFO 1 > Sub Tone
+rlive.wavetable	205	LFO 1 > Filter 1 Freq
+rlive.wavetable	206	LFO 1 > Filter 1 Res
+rlive.wavetable	207	LFO 1 > Filter 2 Freq
+rlive.wavetable	208	LFO 1 > Filter 2 Res
+rlive.wavetable	209	LFO 1 > Volume
+rlive.wavetable	210	LFO 1 > Unison Amount
+rlive.wavetable	211	LFO 1 > Mod Amount
+rlive.wavetable	212	LFO 1 > Mod Time
+rlive.wavetable	213	LFO 1 > Env Sustain
+rlive.wavetable	214	LFO 1 > Env Initial
+rlive.wavetable	215	LFO 1 > LFO 1 Amount
+rlive.wavetable	216	LFO 1 > LFO 1 Rate
+rlive.wavetable	217	LFO 1 > LFO 2 Amount
+rlive.wavetable	218	LFO 1 > LFO 2 Rate
+rlive.wavetable	219	LFO 2 > Osc 1 Pitch
+rlive.wavetable	220	LFO 2 > Osc 1 Position
+rlive.wavetable	221	LFO 2 > Osc 1 Effect 1
+rlive.wavetable	222	LFO 2 > Osc 1 Effect 2
+rlive.wavetable	223	LFO 2 > Osc 1 Gain
+rlive.wavetable	224	LFO 2 > Osc 1 Pan
+rlive.wavetable	225	LFO 2 > Osc 2 Pitch
+rlive.wavetable	226	LFO 2 > Osc 2 Position
+rlive.wavetable	227	LFO 2 > Osc 2 Effect 1
+rlive.wavetable	228	LFO 2 > Osc 2 Effect 2
+rlive.wavetable	229	LFO 2 > Osc 2 Gain
+rlive.wavetable	230	LFO 2 > Osc 2 Pan
+rlive.wavetable	231	LFO 2 > Sub Gain
+rlive.wavetable	232	LFO 2 > Sub Tone
+rlive.wavetable	233	LFO 2 > Filter 1 Freq
+rlive.wavetable	234	LFO 2 > Filter 1 Res
+rlive.wavetable	235	LFO 2 > Filter 2 Freq
+rlive.wavetable	236	LFO 2 > Filter 2 Res
+rlive.wavetable	237	LFO 2 > Volume
+rlive.wavetable	238	LFO 2 > Unison Amount
+rlive.wavetable	239	LFO 2 > Mod Amount
+rlive.wavetable	240	LFO 2 > Mod Time
+rlive.wavetable	241	LFO 2 > Env Sustain
+rlive.wavetable	242	LFO 2 > Env Initial
+rlive.wavetable	243	LFO 2 > LFO 1 Amount
+rlive.wavetable	244	LFO 2 > LFO 1 Rate
+rlive.wavetable	245	LFO 2 > LFO 2 Amount
+rlive.wavetable	246	LFO 2 > LFO 2 Rate
+rlive.wavetable	247	Velocity > Osc 1 Pitch
+rlive.wavetable	248	Velocity > Osc 1 Position
+rlive.wavetable	249	Velocity > Osc 1 Effect 1
+rlive.wavetable	250	Velocity > Osc 1 Effect 2
+rlive.wavetable	251	Velocity > Osc 1 Gain
+rlive.wavetable	252	Velocity > Osc 1 Pan
+rlive.wavetable	253	Velocity > Osc 2 Pitch
+rlive.wavetable	254	Velocity > Osc 2 Position
+rlive.wavetable	255	Velocity > Osc 2 Effect 1
+rlive.wavetable	256	Velocity > Osc 2 Effect 2
+rlive.wavetable	257	Velocity > Osc 2 Gain
+rlive.wavetable	258	Velocity > Osc 2 Pan
+rlive.wavetable	259	Velocity > Sub Gain
+rlive.wavetable	260	Velocity > Sub Tone
+rlive.wavetable	261	Velocity > Filter 1 Freq
+rlive.wavetable	262	Velocity > Filter 1 Res
+rlive.wavetable	263	Velocity > Filter 2 Freq
+rlive.wavetable	264	Velocity > Filter 2 Res
+rlive.wavetable	265	Velocity > Volume
+rlive.wavetable	266	Velocity > Unison Amount
+rlive.wavetable	267	Velocity > Mod Amount
+rlive.wavetable	268	Velocity > Mod Time
+rlive.wavetable	269	Velocity > Env Sustain
+rlive.wavetable	270	Velocity > Env Initial
+rlive.wavetable	271	Velocity > LFO 1 Amount
+rlive.wavetable	272	Velocity > LFO 1 Rate
+rlive.wavetable	273	Velocity > LFO 2 Amount
+rlive.wavetable	274	Velocity > LFO 2 Rate
+rlive.wavetable	275	Note > Osc 1 Pitch
+rlive.wavetable	276	Note > Osc 1 Position
+rlive.wavetable	277	Note > Osc 1 Effect 1
+rlive.wavetable	278	Note > Osc 1 Effect 2
+rlive.wavetable	279	Note > Osc 1 Gain
+rlive.wavetable	280	Note > Osc 1 Pan
+rlive.wavetable	281	Note > Osc 2 Pitch
+rlive.wavetable	282	Note > Osc 2 Position
+rlive.wavetable	283	Note > Osc 2 Effect 1
+rlive.wavetable	284	Note > Osc 2 Effect 2
+rlive.wavetable	285	Note > Osc 2 Gain
+rlive.wavetable	286	Note > Osc 2 Pan
+rlive.wavetable	287	Note > Sub Gain
+rlive.wavetable	288	Note > Sub Tone
+rlive.wavetable	289	Note > Filter 1 Freq
+rlive.wavetable	290	Note > Filter 1 Res
+rlive.wavetable	291	Note > Filter 2 Freq
+rlive.wavetable	292	Note > Filter 2 Res
+rlive.wavetable	293	Note > Volume
+rlive.wavetable	294	Note > Unison Amount
+rlive.wavetable	295	Note > Mod Amount
+rlive.wavetable	296	Note > Mod Time
+rlive.wavetable	297	Note > Env Sustain
+rlive.wavetable	298	Note > Env Initial
+rlive.wavetable	299	Note > LFO 1 Amount
+rlive.wavetable	300	Note > LFO 1 Rate
+rlive.wavetable	301	Note > LFO 2 Amount
+rlive.wavetable	302	Note > LFO 2 Rate
+rlive.wavetable	303	Pitch Bend > Osc 1 Pitch
+rlive.wavetable	304	Pitch Bend > Osc 1 Position
+rlive.wavetable	305	Pitch Bend > Osc 1 Effect 1
+rlive.wavetable	306	Pitch Bend > Osc 1 Effect 2
+rlive.wavetable	307	Pitch Bend > Osc 1 Gain
+rlive.wavetable	308	Pitch Bend > Osc 1 Pan
+rlive.wavetable	309	Pitch Bend > Osc 2 Pitch
+rlive.wavetable	310	Pitch Bend > Osc 2 Position
+rlive.wavetable	311	Pitch Bend > Osc 2 Effect 1
+rlive.wavetable	312	Pitch Bend > Osc 2 Effect 2
+rlive.wavetable	313	Pitch Bend > Osc 2 Gain
+rlive.wavetable	314	Pitch Bend > Osc 2 Pan
+rlive.wavetable	315	Pitch Bend > Sub Gain
+rlive.wavetable	316	Pitch Bend > Sub Tone
+rlive.wavetable	317	Pitch Bend > Filter 1 Freq
+rlive.wavetable	318	Pitch Bend > Filter 1 Res
+rlive.wavetable	319	Pitch Bend > Filter 2 Freq
+rlive.wavetable	320	Pitch Bend > Filter 2 Res
+rlive.wavetable	321	Pitch Bend > Volume
+rlive.wavetable	322	Pitch Bend > Unison Amount
+rlive.wavetable	323	Pitch Bend > Mod Amount
+rlive.wavetable	324	Pitch Bend > Mod Time
+rlive.wavetable	325	Pitch Bend > Env Sustain
+rlive.wavetable	326	Pitch Bend > Env Initial
+rlive.wavetable	327	Pitch Bend > LFO 1 Amount
+rlive.wavetable	328	Pitch Bend > LFO 1 Rate
+rlive.wavetable	329	Pitch Bend > LFO 2 Amount
+rlive.wavetable	330	Pitch Bend > LFO 2 Rate
+rlive.wavetable	331	Aftertouch > Osc 1 Pitch
+rlive.wavetable	332	Aftertouch > Osc 1 Position
+rlive.wavetable	333	Aftertouch > Osc 1 Effect 1
+rlive.wavetable	334	Aftertouch > Osc 1 Effect 2
+rlive.wavetable	335	Aftertouch > Osc 1 Gain
+rlive.wavetable	336	Aftertouch > Osc 1 Pan
+rlive.wavetable	337	Aftertouch > Osc 2 Pitch
+rlive.wavetable	338	Aftertouch > Osc 2 Position
+rlive.wavetable	339	Aftertouch > Osc 2 Effect 1
+rlive.wavetable	340	Aftertouch > Osc 2 Effect 2
+rlive.wavetable	341	Aftertouch > Osc 2 Gain
+rlive.wavetable	342	Aftertouch > Osc 2 Pan
+rlive.wavetable	343	Aftertouch > Sub Gain
+rlive.wavetable	344	Aftertouch > Sub Tone
+rlive.wavetable	345	Aftertouch > Filter 1 Freq
+rlive.wavetable	346	Aftertouch > Filter 1 Res
+rlive.wavetable	347	Aftertouch > Filter 2 Freq
+rlive.wavetable	348	Aftertouch > Filter 2 Res
+rlive.wavetable	349	Aftertouch > Volume
+rlive.wavetable	350	Aftertouch > Unison Amount
+rlive.wavetable	351	Aftertouch > Mod Amount
+rlive.wavetable	352	Aftertouch > Mod Time
+rlive.wavetable	353	Aftertouch > Env Sustain
+rlive.wavetable	354	Aftertouch > Env Initial
+rlive.wavetable	355	Aftertouch > LFO 1 Amount
+rlive.wavetable	356	Aftertouch > LFO 1 Rate
+rlive.wavetable	357	Aftertouch > LFO 2 Amount
+rlive.wavetable	358	Aftertouch > LFO 2 Rate
+rlive.wavetable	359	Mod Wheel > Osc 1 Pitch
+rlive.wavetable	360	Mod Wheel > Osc 1 Position
+rlive.wavetable	361	Mod Wheel > Osc 1 Effect 1
+rlive.wavetable	362	Mod Wheel > Osc 1 Effect 2
+rlive.wavetable	363	Mod Wheel > Osc 1 Gain
+rlive.wavetable	364	Mod Wheel > Osc 1 Pan
+rlive.wavetable	365	Mod Wheel > Osc 2 Pitch
+rlive.wavetable	366	Mod Wheel > Osc 2 Position
+rlive.wavetable	367	Mod Wheel > Osc 2 Effect 1
+rlive.wavetable	368	Mod Wheel > Osc 2 Effect 2
+rlive.wavetable	369	Mod Wheel > Osc 2 Gain
+rlive.wavetable	370	Mod Wheel > Osc 2 Pan
+rlive.wavetable	371	Mod Wheel > Sub Gain
+rlive.wavetable	372	Mod Wheel > Sub Tone
+rlive.wavetable	373	Mod Wheel > Filter 1 Freq
+rlive.wavetable	374	Mod Wheel > Filter 1 Res
+rlive.wavetable	375	Mod Wheel > Filter 2 Freq
+rlive.wavetable	376	Mod Wheel > Filter 2 Res
+rlive.wavetable	377	Mod Wheel > Volume
+rlive.wavetable	378	Mod Wheel > Unison Amount
+rlive.wavetable	379	Mod Wheel > Mod Amount
+rlive.wavetable	380	Mod Wheel > Mod Time
+rlive.wavetable	381	Mod Wheel > Env Sustain
+rlive.wavetable	382	Mod Wheel > Env Initial
+rlive.wavetable	383	Mod Wheel > LFO 1 Amount
+rlive.wavetable	384	Mod Wheel > LFO 1 Rate
+rlive.wavetable	385	Mod Wheel > LFO 2 Amount
+rlive.wavetable	386	Mod Wheel > LFO 2 Rate
+rlive.wavetable	387	Random > Osc 1 Pitch
+rlive.wavetable	388	Random > Osc 1 Position
+rlive.wavetable	389	Random > Osc 1 Effect 1
+rlive.wavetable	390	Random > Osc 1 Effect 2
+rlive.wavetable	391	Random > Osc 1 Gain
+rlive.wavetable	392	Random > Osc 1 Pan
+rlive.wavetable	393	Random > Osc 2 Pitch
+rlive.wavetable	394	Random > Osc 2 Position
+rlive.wavetable	395	Random > Osc 2 Effect 1
+rlive.wavetable	396	Random > Osc 2 Effect 2
+rlive.wavetable	397	Random > Osc 2 Gain
+rlive.wavetable	398	Random > Osc 2 Pan
+rlive.wavetable	399	Random > Sub Gain
+rlive.wavetable	400	Random > Sub Tone
+rlive.wavetable	401	Random > Filter 1 Freq
+rlive.wavetable	402	Random > Filter 1 Res
+rlive.wavetable	403	Random > Filter 2 Freq
+rlive.wavetable	404	Random > Filter 2 Res
+rlive.wavetable	405	Random > Volume
+rlive.wavetable	406	Random > Unison Amount
+rlive.wavetable	407	Random > Mod Amount
+rlive.wavetable	408	Random > Mod Time
+rlive.wavetable	409	Random > Env Sustain
+rlive.wavetable	410	Random > Env Initial
+rlive.wavetable	411	Random > LFO 1 Amount
+rlive.wavetable	412	Random > LFO 1 Rate
+rlive.wavetable	413	Random > LFO 2 Amount
+rlive.wavetable	414	Random > LFO 2 Rate
+rlive.wavetable	415	Slide > Osc 1 Pitch
+rlive.wavetable	416	Slide > Osc 1 Position
+rlive.wavetable	417	Slide > Osc 1 Effect 1
+rlive.wavetable	418	Slide > Osc 1 Effect 2
+rlive.wavetable	419	Slide > Osc 1 Gain
+rlive.wavetable	420	Slide > Osc 1 Pan
+rlive.wavetable	421	Slide > Osc 2 Pitch
+rlive.wavetable	422	Slide > Osc 2 Position
+rlive.wavetable	423	Slide > Osc 2 Effect 1
+rlive.wavetable	424	Slide > Osc 2 Effect 2
+rlive.wavetable	425	Slide > Osc 2 Gain
+rlive.wavetable	426	Slide > Osc 2 Pan
+rlive.wavetable	427	Slide > Sub Gain
+rlive.wavetable	428	Slide > Sub Tone
+rlive.wavetable	429	Slide > Filter 1 Freq
+rlive.wavetable	430	Slide > Filter 1 Res
+rlive.wavetable	431	Slide > Filter 2 Freq
+rlive.wavetable	432	Slide > Filter 2 Res
+rlive.wavetable	433	Slide > Volume
+rlive.wavetable	434	Slide > Unison Amount
+rlive.wavetable	435	Slide > Mod Amount
+rlive.wavetable	436	Slide > Mod Time
+rlive.wavetable	437	Slide > Env Sustain
+rlive.wavetable	438	Slide > Env Initial
+rlive.wavetable	439	Slide > LFO 1 Amount
+rlive.wavetable	440	Slide > LFO 1 Rate
+rlive.wavetable	441	Slide > LFO 2 Amount
+rlive.wavetable	442	Slide > LFO 2 Rate
+rlive.meld	0	Engine A
+rlive.meld	1	A Octaves
+rlive.meld	2	A Semitones
+rlive.meld	3	A Cents
+rlive.meld	4	A Oscillator Type
+rlive.meld	5	A Osc Macro 1
+rlive.meld	6	A Osc Macro 2
+rlive.meld	7	A Amp Attack
+rlive.meld	8	A Amp Decay
+rlive.meld	9	A Amp Sustain
+rlive.meld	10	A Amp Release
+rlive.meld	11	A Amp Attack Slope
+rlive.meld	12	A Amp Decay Slope
+rlive.meld	13	A Amp Release Slope
+rlive.meld	14	A Amp Loop
+rlive.meld	15	A Mod Attack
+rlive.meld	16	A Mod Decay
+rlive.meld	17	A Mod Sustain
+rlive.meld	18	A Mod Release
+rlive.meld	19	A Mod Attack Slope
+rlive.meld	20	A Mod Decay Slope
+rlive.meld	21	A Mod Release Slope
+rlive.meld	22	A Mod Loop
+rlive.meld	23	A Mod Initial
+rlive.meld	24	A Mod Peak
+rlive.meld	25	A Mod Final
+rlive.meld	26	A LFO 1 Type
+rlive.meld	27	A LFO 1 Rate
+rlive.meld	28	A LFO 1 Sync
+rlive.meld	29	A LFO 1 Beat Rate
+rlive.meld	30	A LFO 1 Phase
+rlive.meld	31	A LFO 1 Retrig
+rlive.meld	32	A LFO 1 Macro 1
+rlive.meld	33	A LFO 1 Macro 2
+rlive.meld	34	A LFO 1 FX 1
+rlive.meld	35	A LFO 1 FX 1 Amount
+rlive.meld	36	A LFO 1 FX 2
+rlive.meld	37	A LFO 1 FX 2 Amount
+rlive.meld	38	A LFO 2 Type
+rlive.meld	39	A LFO 2 Rate
+rlive.meld	40	A LFO 2 Sync
+rlive.meld	41	A LFO 2 Beat Rate
+rlive.meld	42	A LFO 2 Phase
+rlive.meld	43	A LFO 2 Retrig
+rlive.meld	44	A Osc Key Tracking
+rlive.meld	45	A Phase Reset
+rlive.meld	46	A Phase Spread
+rlive.meld	47	A Oscillator Scale Awareness
+rlive.meld	48	A Filter Scale Awareness
+rlive.meld	49	A Glide Mode
+rlive.meld	50	A Glide Time
+rlive.meld	51	Filter A
+rlive.meld	52	A Filter Frequency
+rlive.meld	53	A Filter Type
+rlive.meld	54	A Filter Macro 1
+rlive.meld	55	A Filter Macro 2
+rlive.meld	56	A Volume
+rlive.meld	57	A Pan
+rlive.meld	58	A Tone Filter
+rlive.meld	59	Engine B
+rlive.meld	60	B Octaves
+rlive.meld	61	B Semitones
+rlive.meld	62	B Cents
+rlive.meld	63	B Oscillator Type
+rlive.meld	64	B Osc Macro 1
+rlive.meld	65	B Osc Macro 2
+rlive.meld	66	B Amp Attack
+rlive.meld	67	B Amp Decay
+rlive.meld	68	B Amp Sustain
+rlive.meld	69	B Amp Release
+rlive.meld	70	B Amp Attack Slope
+rlive.meld	71	B Amp Decay Slope
+rlive.meld	72	B Amp Release Slope
+rlive.meld	73	B Amp Loop
+rlive.meld	74	B Mod Attack
+rlive.meld	75	B Mod Decay
+rlive.meld	76	B Mod Sustain
+rlive.meld	77	B Mod Release
+rlive.meld	78	B Mod Attack Slope
+rlive.meld	79	B Mod Decay Slope
+rlive.meld	80	B Mod Release Slope
+rlive.meld	81	B Mod Loop
+rlive.meld	82	B Mod Initial
+rlive.meld	83	B Mod Peak
+rlive.meld	84	B Mod Final
+rlive.meld	85	B LFO 1 Type
+rlive.meld	86	B LFO 1 Rate
+rlive.meld	87	B LFO 1 Sync
+rlive.meld	88	B LFO 1 Beat Rate
+rlive.meld	89	B LFO 1 Phase
+rlive.meld	90	B LFO 1 Retrig
+rlive.meld	91	B LFO 1 Macro 1
+rlive.meld	92	B LFO 1 Macro 2
+rlive.meld	93	B LFO 1 FX 1
+rlive.meld	94	B LFO 1 FX 1 Amount
+rlive.meld	95	B LFO 1 FX 2
+rlive.meld	96	B LFO 1 FX 2 Amount
+rlive.meld	97	B LFO 2 Type
+rlive.meld	98	B LFO 2 Rate
+rlive.meld	99	B LFO 2 Sync
+rlive.meld	100	B LFO 2 Beat Rate
+rlive.meld	101	B LFO 2 Phase
+rlive.meld	102	B LFO 2 Retrig
+rlive.meld	103	B Osc Key Tracking
+rlive.meld	104	B Phase Reset
+rlive.meld	105	B Phase Spread
+rlive.meld	106	B Oscillator Scale Awareness
+rlive.meld	107	B Filter Scale Awareness
+rlive.meld	108	B Glide Mode
+rlive.meld	109	B Glide Time
+rlive.meld	110	Filter B
+rlive.meld	111	B Filter Frequency
+rlive.meld	112	B Filter Type
+rlive.meld	113	B Filter Macro 1
+rlive.meld	114	B Filter Macro 2
+rlive.meld	115	B Volume
+rlive.meld	116	B Pan
+rlive.meld	117	B Tone Filter
+rlive.meld	118	Mono/Poly
+rlive.meld	119	Legato
+rlive.meld	120	Voices
+rlive.meld	121	Spread
+rlive.meld	122	Stacked Voices
+rlive.meld	123	Mixer Drive
+rlive.meld	124	Limit
+rlive.meld	125	Volume
+rlive.meld	126	Use Current Scale
+rlive.meld	127	Link Envelopes
+rlive.meld	128	A Amp Env > Volume
+rlive.meld	129	A Amp Env > Pan
+rlive.meld	130	A Amp Env > Pitch
+rlive.meld	131	A Amp Env > Pitch Quant
+rlive.meld	132	A Amp Env > Osc Macro 1
+rlive.meld	133	A Amp Env > Osc Macro 2
+rlive.meld	134	A Amp Env > Filter Freq
+rlive.meld	135	A Amp Env > Filter Macro 1
+rlive.meld	136	A Amp Env > Filter Macro 2
+rlive.meld	137	A Amp Env > Tone Filter
+rlive.meld	138	A Amp Env > Amp Env Time
+rlive.meld	139	A Amp Env > Mod Env Time
+rlive.meld	140	A Amp Env > LFO 1 Rate
+rlive.meld	141	A Amp Env > LFO 1 Macro 1
+rlive.meld	142	A Amp Env > LFO 1 Macro 2
+rlive.meld	143	A Amp Env > LFO 1 FX 1
+rlive.meld	144	A Amp Env > LFO 1 FX 2
+rlive.meld	145	A Amp Env > LFO 2 Rate
+rlive.meld	146	A Mod Env > Volume
+rlive.meld	147	A Mod Env > Pan
+rlive.meld	148	A Mod Env > Pitch
+rlive.meld	149	A Mod Env > Pitch Quant
+rlive.meld	150	A Mod Env > Osc Macro 1
+rlive.meld	151	A Mod Env > Osc Macro 2
+rlive.meld	152	A Mod Env > Filter Freq
+rlive.meld	153	A Mod Env > Filter Macro 1
+rlive.meld	154	A Mod Env > Filter Macro 2
+rlive.meld	155	A Mod Env > Tone Filter
+rlive.meld	156	A Mod Env > Amp Env Time
+rlive.meld	157	A Mod Env > Mod Env Time
+rlive.meld	158	A Mod Env > LFO 1 Rate
+rlive.meld	159	A Mod Env > LFO 1 Macro 1
+rlive.meld	160	A Mod Env > LFO 1 Macro 2
+rlive.meld	161	A Mod Env > LFO 1 FX 1
+rlive.meld	162	A Mod Env > LFO 1 FX 2
+rlive.meld	163	A Mod Env > LFO 2 Rate
+rlive.meld	164	A LFO 1 > Volume
+rlive.meld	165	A LFO 1 > Pan
+rlive.meld	166	A LFO 1 > Pitch
+rlive.meld	167	A LFO 1 > Pitch Quant
+rlive.meld	168	A LFO 1 > Osc Macro 1
+rlive.meld	169	A LFO 1 > Osc Macro 2
+rlive.meld	170	A LFO 1 > Filter Freq
+rlive.meld	171	A LFO 1 > Filter Macro 1
+rlive.meld	172	A LFO 1 > Filter Macro 2
+rlive.meld	173	A LFO 1 > Tone Filter
+rlive.meld	174	A LFO 1 > Amp Env Time
+rlive.meld	175	A LFO 1 > Mod Env Time
+rlive.meld	176	A LFO 1 > LFO 1 Rate
+rlive.meld	177	A LFO 1 > LFO 1 Macro 1
+rlive.meld	178	A LFO 1 > LFO 1 Macro 2
+rlive.meld	179	A LFO 1 > LFO 1 FX 1
+rlive.meld	180	A LFO 1 > LFO 1 FX 2
+rlive.meld	181	A LFO 1 > LFO 2 Rate
+rlive.meld	182	A LFO 1 FX > Volume
+rlive.meld	183	A LFO 1 FX > Pan
+rlive.meld	184	A LFO 1 FX > Pitch
+rlive.meld	185	A LFO 1 FX > Pitch Quant
+rlive.meld	186	A LFO 1 FX > Osc Macro 1
+rlive.meld	187	A LFO 1 FX > Osc Macro 2
+rlive.meld	188	A LFO 1 FX > Filter Freq
+rlive.meld	189	A LFO 1 FX > Filter Macro 1
+rlive.meld	190	A LFO 1 FX > Filter Macro 2
+rlive.meld	191	A LFO 1 FX > Tone Filter
+rlive.meld	192	A LFO 1 FX > Amp Env Time
+rlive.meld	193	A LFO 1 FX > Mod Env Time
+rlive.meld	194	A LFO 1 FX > LFO 1 Rate
+rlive.meld	195	A LFO 1 FX > LFO 1 Macro 1
+rlive.meld	196	A LFO 1 FX > LFO 1 Macro 2
+rlive.meld	197	A LFO 1 FX > LFO 1 FX 1
+rlive.meld	198	A LFO 1 FX > LFO 1 FX 2
+rlive.meld	199	A LFO 1 FX > LFO 2 Rate
+rlive.meld	200	A LFO 2 > Volume
+rlive.meld	201	A LFO 2 > Pan
+rlive.meld	202	A LFO 2 > Pitch
+rlive.meld	203	A LFO 2 > Pitch Quant
+rlive.meld	204	A LFO 2 > Osc Macro 1
+rlive.meld	205	A LFO 2 > Osc Macro 2
+rlive.meld	206	A LFO 2 > Filter Freq
+rlive.meld	207	A LFO 2 > Filter Macro 1
+rlive.meld	208	A LFO 2 > Filter Macro 2
+rlive.meld	209	A LFO 2 > Tone Filter
+rlive.meld	210	A LFO 2 > Amp Env Time
+rlive.meld	211	A LFO 2 > Mod Env Time
+rlive.meld	212	A LFO 2 > LFO 1 Rate
+rlive.meld	213	A LFO 2 > LFO 1 Macro 1
+rlive.meld	214	A LFO 2 > LFO 1 Macro 2
+rlive.meld	215	A LFO 2 > LFO 1 FX 1
+rlive.meld	216	A LFO 2 > LFO 1 FX 2
+rlive.meld	217	A LFO 2 > LFO 2 Rate
+rlive.meld	218	A Velocity > Volume
+rlive.meld	219	A Velocity > Pan
+rlive.meld	220	A Velocity > Pitch
+rlive.meld	221	A Velocity > Pitch Quant
+rlive.meld	222	A Velocity > Osc Macro 1
+rlive.meld	223	A Velocity > Osc Macro 2
+rlive.meld	224	A Velocity > Filter Freq
+rlive.meld	225	A Velocity > Filter Macro 1
+rlive.meld	226	A Velocity > Filter Macro 2
+rlive.meld	227	A Velocity > Tone Filter
+rlive.meld	228	A Velocity > Amp Env Time
+rlive.meld	229	A Velocity > Mod Env Time
+rlive.meld	230	A Velocity > LFO 1 Rate
+rlive.meld	231	A Velocity > LFO 1 Macro 1
+rlive.meld	232	A Velocity > LFO 1 Macro 2
+rlive.meld	233	A Velocity > LFO 1 FX 1
+rlive.meld	234	A Velocity > LFO 1 FX 2
+rlive.meld	235	A Velocity > LFO 2 Rate
+rlive.meld	236	A Pitch > Volume
+rlive.meld	237	A Pitch > Pan
+rlive.meld	238	A Pitch > Pitch
+rlive.meld	239	A Pitch > Pitch Quant
+rlive.meld	240	A Pitch > Osc Macro 1
+rlive.meld	241	A Pitch > Osc Macro 2
+rlive.meld	242	A Pitch > Filter Freq
+rlive.meld	243	A Pitch > Filter Macro 1
+rlive.meld	244	A Pitch > Filter Macro 2
+rlive.meld	245	A Pitch > Tone Filter
+rlive.meld	246	A Pitch > Amp Env Time
+rlive.meld	247	A Pitch > Mod Env Time
+rlive.meld	248	A Pitch > LFO 1 Rate
+rlive.meld	249	A Pitch > LFO 1 Macro 1
+rlive.meld	250	A Pitch > LFO 1 Macro 2
+rlive.meld	251	A Pitch > LFO 1 FX 1
+rlive.meld	252	A Pitch > LFO 1 FX 2
+rlive.meld	253	A Pitch > LFO 2 Rate
+rlive.meld	254	A Random > Volume
+rlive.meld	255	A Random > Pan
+rlive.meld	256	A Random > Pitch
+rlive.meld	257	A Random > Pitch Quant
+rlive.meld	258	A Random > Osc Macro 1
+rlive.meld	259	A Random > Osc Macro 2
+rlive.meld	260	A Random > Filter Freq
+rlive.meld	261	A Random > Filter Macro 1
+rlive.meld	262	A Random > Filter Macro 2
+rlive.meld	263	A Random > Tone Filter
+rlive.meld	264	A Random > Amp Env Time
+rlive.meld	265	A Random > Mod Env Time
+rlive.meld	266	A Random > LFO 1 Rate
+rlive.meld	267	A Random > LFO 1 Macro 1
+rlive.meld	268	A Random > LFO 1 Macro 2
+rlive.meld	269	A Random > LFO 1 FX 1
+rlive.meld	270	A Random > LFO 1 FX 2
+rlive.meld	271	A Random > LFO 2 Rate
+rlive.meld	272	A Spread > Volume
+rlive.meld	273	A Spread > Pan
+rlive.meld	274	A Spread > Pitch
+rlive.meld	275	A Spread > Pitch Quant
+rlive.meld	276	A Spread > Osc Macro 1
+rlive.meld	277	A Spread > Osc Macro 2
+rlive.meld	278	A Spread > Filter Freq
+rlive.meld	279	A Spread > Filter Macro 1
+rlive.meld	280	A Spread > Filter Macro 2
+rlive.meld	281	A Spread > Tone Filter
+rlive.meld	282	A Spread > Amp Env Time
+rlive.meld	283	A Spread > Mod Env Time
+rlive.meld	284	A Spread > LFO 1 Rate
+rlive.meld	285	A Spread > LFO 1 Macro 1
+rlive.meld	286	A Spread > LFO 1 Macro 2
+rlive.meld	287	A Spread > LFO 1 FX 1
+rlive.meld	288	A Spread > LFO 1 FX 2
+rlive.meld	289	A Spread > LFO 2 Rate
+rlive.meld	290	A Pitch Bend > Volume
+rlive.meld	291	A Pitch Bend > Pan
+rlive.meld	292	A Pitch Bend > Pitch
+rlive.meld	293	A Pitch Bend > Pitch Quant
+rlive.meld	294	A Pitch Bend > Osc Macro 1
+rlive.meld	295	A Pitch Bend > Osc Macro 2
+rlive.meld	296	A Pitch Bend > Filter Freq
+rlive.meld	297	A Pitch Bend > Filter Macro 1
+rlive.meld	298	A Pitch Bend > Filter Macro 2
+rlive.meld	299	A Pitch Bend > Tone Filter
+rlive.meld	300	A Pitch Bend > Amp Env Time
+rlive.meld	301	A Pitch Bend > Mod Env Time
+rlive.meld	302	A Pitch Bend > LFO 1 Rate
+rlive.meld	303	A Pitch Bend > LFO 1 Macro 1
+rlive.meld	304	A Pitch Bend > LFO 1 Macro 2
+rlive.meld	305	A Pitch Bend > LFO 1 FX 1
+rlive.meld	306	A Pitch Bend > LFO 1 FX 2
+rlive.meld	307	A Pitch Bend > LFO 2 Rate
+rlive.meld	308	A Press > Volume
+rlive.meld	309	A Press > Pan
+rlive.meld	310	A Press > Pitch
+rlive.meld	311	A Press > Pitch Quant
+rlive.meld	312	A Press > Osc Macro 1
+rlive.meld	313	A Press > Osc Macro 2
+rlive.meld	314	A Press > Filter Freq
+rlive.meld	315	A Press > Filter Macro 1
+rlive.meld	316	A Press > Filter Macro 2
+rlive.meld	317	A Press > Tone Filter
+rlive.meld	318	A Press > Amp Env Time
+rlive.meld	319	A Press > Mod Env Time
+rlive.meld	320	A Press > LFO 1 Rate
+rlive.meld	321	A Press > LFO 1 Macro 1
+rlive.meld	322	A Press > LFO 1 Macro 2
+rlive.meld	323	A Press > LFO 1 FX 1
+rlive.meld	324	A Press > LFO 1 FX 2
+rlive.meld	325	A Press > LFO 2 Rate
+rlive.meld	326	A Mod Wheel > Volume
+rlive.meld	327	A Mod Wheel > Pan
+rlive.meld	328	A Mod Wheel > Pitch
+rlive.meld	329	A Mod Wheel > Pitch Quant
+rlive.meld	330	A Mod Wheel > Osc Macro 1
+rlive.meld	331	A Mod Wheel > Osc Macro 2
+rlive.meld	332	A Mod Wheel > Filter Freq
+rlive.meld	333	A Mod Wheel > Filter Macro 1
+rlive.meld	334	A Mod Wheel > Filter Macro 2
+rlive.meld	335	A Mod Wheel > Tone Filter
+rlive.meld	336	A Mod Wheel > Amp Env Time
+rlive.meld	337	A Mod Wheel > Mod Env Time
+rlive.meld	338	A Mod Wheel > LFO 1 Rate
+rlive.meld	339	A Mod Wheel > LFO 1 Macro 1
+rlive.meld	340	A Mod Wheel > LFO 1 Macro 2
+rlive.meld	341	A Mod Wheel > LFO 1 FX 1
+rlive.meld	342	A Mod Wheel > LFO 1 FX 2
+rlive.meld	343	A Mod Wheel > LFO 2 Rate
+rlive.meld	344	A Note PB > Volume
+rlive.meld	345	A Note PB > Pan
+rlive.meld	346	A Note PB > Pitch
+rlive.meld	347	A Note PB > Pitch Quant
+rlive.meld	348	A Note PB > Osc Macro 1
+rlive.meld	349	A Note PB > Osc Macro 2
+rlive.meld	350	A Note PB > Filter Freq
+rlive.meld	351	A Note PB > Filter Macro 1
+rlive.meld	352	A Note PB > Filter Macro 2
+rlive.meld	353	A Note PB > Tone Filter
+rlive.meld	354	A Note PB > Amp Env Time
+rlive.meld	355	A Note PB > Mod Env Time
+rlive.meld	356	A Note PB > LFO 1 Rate
+rlive.meld	357	A Note PB > LFO 1 Macro 1
+rlive.meld	358	A Note PB > LFO 1 Macro 2
+rlive.meld	359	A Note PB > LFO 1 FX 1
+rlive.meld	360	A Note PB > LFO 1 FX 2
+rlive.meld	361	A Note PB > LFO 2 Rate
+rlive.meld	362	A Slide > Volume
+rlive.meld	363	A Slide > Pan
+rlive.meld	364	A Slide > Pitch
+rlive.meld	365	A Slide > Pitch Quant
+rlive.meld	366	A Slide > Osc Macro 1
+rlive.meld	367	A Slide > Osc Macro 2
+rlive.meld	368	A Slide > Filter Freq
+rlive.meld	369	A Slide > Filter Macro 1
+rlive.meld	370	A Slide > Filter Macro 2
+rlive.meld	371	A Slide > Tone Filter
+rlive.meld	372	A Slide > Amp Env Time
+rlive.meld	373	A Slide > Mod Env Time
+rlive.meld	374	A Slide > LFO 1 Rate
+rlive.meld	375	A Slide > LFO 1 Macro 1
+rlive.meld	376	A Slide > LFO 1 Macro 2
+rlive.meld	377	A Slide > LFO 1 FX 1
+rlive.meld	378	A Slide > LFO 1 FX 2
+rlive.meld	379	A Slide > LFO 2 Rate
+rlive.meld	380	A MPE Press > Volume
+rlive.meld	381	A MPE Press > Pan
+rlive.meld	382	A MPE Press > Pitch
+rlive.meld	383	A MPE Press > Pitch Quant
+rlive.meld	384	A MPE Press > Osc Macro 1
+rlive.meld	385	A MPE Press > Osc Macro 2
+rlive.meld	386	A MPE Press > Filter Freq
+rlive.meld	387	A MPE Press > Filter Macro 1
+rlive.meld	388	A MPE Press > Filter Macro 2
+rlive.meld	389	A MPE Press > Tone Filter
+rlive.meld	390	A MPE Press > Amp Env Time
+rlive.meld	391	A MPE Press > Mod Env Time
+rlive.meld	392	A MPE Press > LFO 1 Rate
+rlive.meld	393	A MPE Press > LFO 1 Macro 1
+rlive.meld	394	A MPE Press > LFO 1 Macro 2
+rlive.meld	395	A MPE Press > LFO 1 FX 1
+rlive.meld	396	A MPE Press > LFO 1 FX 2
+rlive.meld	397	A MPE Press > LFO 2 Rate
+rlive.meld	398	B Amp Env > Volume
+rlive.meld	399	B Amp Env > Pan
+rlive.meld	400	B Amp Env > Pitch
+rlive.meld	401	B Amp Env > Pitch Quant
+rlive.meld	402	B Amp Env > Osc Macro 1
+rlive.meld	403	B Amp Env > Osc Macro 2
+rlive.meld	404	B Amp Env > Filter Freq
+rlive.meld	405	B Amp Env > Filter Macro 1
+rlive.meld	406	B Amp Env > Filter Macro 2
+rlive.meld	407	B Amp Env > Tone Filter
+rlive.meld	408	B Amp Env > Amp Env Time
+rlive.meld	409	B Amp Env > Mod Env Time
+rlive.meld	410	B Amp Env > LFO 1 Rate
+rlive.meld	411	B Amp Env > LFO 1 Macro 1
+rlive.meld	412	B Amp Env > LFO 1 Macro 2
+rlive.meld	413	B Amp Env > LFO 1 FX 1
+rlive.meld	414	B Amp Env > LFO 1 FX 2
+rlive.meld	415	B Amp Env > LFO 2 Rate
+rlive.meld	416	B Mod Env > Volume
+rlive.meld	417	B Mod Env > Pan
+rlive.meld	418	B Mod Env > Pitch
+rlive.meld	419	B Mod Env > Pitch Quant
+rlive.meld	420	B Mod Env > Osc Macro 1
+rlive.meld	421	B Mod Env > Osc Macro 2
+rlive.meld	422	B Mod Env > Filter Freq
+rlive.meld	423	B Mod Env > Filter Macro 1
+rlive.meld	424	B Mod Env > Filter Macro 2
+rlive.meld	425	B Mod Env > Tone Filter
+rlive.meld	426	B Mod Env > Amp Env Time
+rlive.meld	427	B Mod Env > Mod Env Time
+rlive.meld	428	B Mod Env > LFO 1 Rate
+rlive.meld	429	B Mod Env > LFO 1 Macro 1
+rlive.meld	430	B Mod Env > LFO 1 Macro 2
+rlive.meld	431	B Mod Env > LFO 1 FX 1
+rlive.meld	432	B Mod Env > LFO 1 FX 2
+rlive.meld	433	B Mod Env > LFO 2 Rate
+rlive.meld	434	B LFO 1 > Volume
+rlive.meld	435	B LFO 1 > Pan
+rlive.meld	436	B LFO 1 > Pitch
+rlive.meld	437	B LFO 1 > Pitch Quant
+rlive.meld	438	B LFO 1 > Osc Macro 1
+rlive.meld	439	B LFO 1 > Osc Macro 2
+rlive.meld	440	B LFO 1 > Filter Freq
+rlive.meld	441	B LFO 1 > Filter Macro 1
+rlive.meld	442	B LFO 1 > Filter Macro 2
+rlive.meld	443	B LFO 1 > Tone Filter
+rlive.meld	444	B LFO 1 > Amp Env Time
+rlive.meld	445	B LFO 1 > Mod Env Time
+rlive.meld	446	B LFO 1 > LFO 1 Rate
+rlive.meld	447	B LFO 1 > LFO 1 Macro 1
+rlive.meld	448	B LFO 1 > LFO 1 Macro 2
+rlive.meld	449	B LFO 1 > LFO 1 FX 1
+rlive.meld	450	B LFO 1 > LFO 1 FX 2
+rlive.meld	451	B LFO 1 > LFO 2 Rate
+rlive.meld	452	B LFO 1 FX > Volume
+rlive.meld	453	B LFO 1 FX > Pan
+rlive.meld	454	B LFO 1 FX > Pitch
+rlive.meld	455	B LFO 1 FX > Pitch Quant
+rlive.meld	456	B LFO 1 FX > Osc Macro 1
+rlive.meld	457	B LFO 1 FX > Osc Macro 2
+rlive.meld	458	B LFO 1 FX > Filter Freq
+rlive.meld	459	B LFO 1 FX > Filter Macro 1
+rlive.meld	460	B LFO 1 FX > Filter Macro 2
+rlive.meld	461	B LFO 1 FX > Tone Filter
+rlive.meld	462	B LFO 1 FX > Amp Env Time
+rlive.meld	463	B LFO 1 FX > Mod Env Time
+rlive.meld	464	B LFO 1 FX > LFO 1 Rate
+rlive.meld	465	B LFO 1 FX > LFO 1 Macro 1
+rlive.meld	466	B LFO 1 FX > LFO 1 Macro 2
+rlive.meld	467	B LFO 1 FX > LFO 1 FX 1
+rlive.meld	468	B LFO 1 FX > LFO 1 FX 2
+rlive.meld	469	B LFO 1 FX > LFO 2 Rate
+rlive.meld	470	B LFO 2 > Volume
+rlive.meld	471	B LFO 2 > Pan
+rlive.meld	472	B LFO 2 > Pitch
+rlive.meld	473	B LFO 2 > Pitch Quant
+rlive.meld	474	B LFO 2 > Osc Macro 1
+rlive.meld	475	B LFO 2 > Osc Macro 2
+rlive.meld	476	B LFO 2 > Filter Freq
+rlive.meld	477	B LFO 2 > Filter Macro 1
+rlive.meld	478	B LFO 2 > Filter Macro 2
+rlive.meld	479	B LFO 2 > Tone Filter
+rlive.meld	480	B LFO 2 > Amp Env Time
+rlive.meld	481	B LFO 2 > Mod Env Time
+rlive.meld	482	B LFO 2 > LFO 1 Rate
+rlive.meld	483	B LFO 2 > LFO 1 Macro 1
+rlive.meld	484	B LFO 2 > LFO 1 Macro 2
+rlive.meld	485	B LFO 2 > LFO 1 FX 1
+rlive.meld	486	B LFO 2 > LFO 1 FX 2
+rlive.meld	487	B LFO 2 > LFO 2 Rate
+rlive.meld	488	B Velocity > Volume
+rlive.meld	489	B Velocity > Pan
+rlive.meld	490	B Velocity > Pitch
+rlive.meld	491	B Velocity > Pitch Quant
+rlive.meld	492	B Velocity > Osc Macro 1
+rlive.meld	493	B Velocity > Osc Macro 2
+rlive.meld	494	B Velocity > Filter Freq
+rlive.meld	495	B Velocity > Filter Macro 1
+rlive.meld	496	B Velocity > Filter Macro 2
+rlive.meld	497	B Velocity > Tone Filter
+rlive.meld	498	B Velocity > Amp Env Time
+rlive.meld	499	B Velocity > Mod Env Time
+rlive.meld	500	B Velocity > LFO 1 Rate
+rlive.meld	501	B Velocity > LFO 1 Macro 1
+rlive.meld	502	B Velocity > LFO 1 Macro 2
+rlive.meld	503	B Velocity > LFO 1 FX 1
+rlive.meld	504	B Velocity > LFO 1 FX 2
+rlive.meld	505	B Velocity > LFO 2 Rate
+rlive.meld	506	B Pitch > Volume
+rlive.meld	507	B Pitch > Pan
+rlive.meld	508	B Pitch > Pitch
+rlive.meld	509	B Pitch > Pitch Quant
+rlive.meld	510	B Pitch > Osc Macro 1
+rlive.meld	511	B Pitch > Osc Macro 2
+rlive.meld	512	B Pitch > Filter Freq
+rlive.meld	513	B Pitch > Filter Macro 1
+rlive.meld	514	B Pitch > Filter Macro 2
+rlive.meld	515	B Pitch > Tone Filter
+rlive.meld	516	B Pitch > Amp Env Time
+rlive.meld	517	B Pitch > Mod Env Time
+rlive.meld	518	B Pitch > LFO 1 Rate
+rlive.meld	519	B Pitch > LFO 1 Macro 1
+rlive.meld	520	B Pitch > LFO 1 Macro 2
+rlive.meld	521	B Pitch > LFO 1 FX 1
+rlive.meld	522	B Pitch > LFO 1 FX 2
+rlive.meld	523	B Pitch > LFO 2 Rate
+rlive.meld	524	B Random > Volume
+rlive.meld	525	B Random > Pan
+rlive.meld	526	B Random > Pitch
+rlive.meld	527	B Random > Pitch Quant
+rlive.meld	528	B Random > Osc Macro 1
+rlive.meld	529	B Random > Osc Macro 2
+rlive.meld	530	B Random > Filter Freq
+rlive.meld	531	B Random > Filter Macro 1
+rlive.meld	532	B Random > Filter Macro 2
+rlive.meld	533	B Random > Tone Filter
+rlive.meld	534	B Random > Amp Env Time
+rlive.meld	535	B Random > Mod Env Time
+rlive.meld	536	B Random > LFO 1 Rate
+rlive.meld	537	B Random > LFO 1 Macro 1
+rlive.meld	538	B Random > LFO 1 Macro 2
+rlive.meld	539	B Random > LFO 1 FX 1
+rlive.meld	540	B Random > LFO 1 FX 2
+rlive.meld	541	B Random > LFO 2 Rate
+rlive.meld	542	B Spread > Volume
+rlive.meld	543	B Spread > Pan
+rlive.meld	544	B Spread > Pitch
+rlive.meld	545	B Spread > Pitch Quant
+rlive.meld	546	B Spread > Osc Macro 1
+rlive.meld	547	B Spread > Osc Macro 2
+rlive.meld	548	B Spread > Filter Freq
+rlive.meld	549	B Spread > Filter Macro 1
+rlive.meld	550	B Spread > Filter Macro 2
+rlive.meld	551	B Spread > Tone Filter
+rlive.meld	552	B Spread > Amp Env Time
+rlive.meld	553	B Spread > Mod Env Time
+rlive.meld	554	B Spread > LFO 1 Rate
+rlive.meld	555	B Spread > LFO 1 Macro 1
+rlive.meld	556	B Spread > LFO 1 Macro 2
+rlive.meld	557	B Spread > LFO 1 FX 1
+rlive.meld	558	B Spread > LFO 1 FX 2
+rlive.meld	559	B Spread > LFO 2 Rate
+rlive.meld	560	B Pitch Bend > Volume
+rlive.meld	561	B Pitch Bend > Pan
+rlive.meld	562	B Pitch Bend > Pitch
+rlive.meld	563	B Pitch Bend > Pitch Quant
+rlive.meld	564	B Pitch Bend > Osc Macro 1
+rlive.meld	565	B Pitch Bend > Osc Macro 2
+rlive.meld	566	B Pitch Bend > Filter Freq
+rlive.meld	567	B Pitch Bend > Filter Macro 1
+rlive.meld	568	B Pitch Bend > Filter Macro 2
+rlive.meld	569	B Pitch Bend > Tone Filter
+rlive.meld	570	B Pitch Bend > Amp Env Time
+rlive.meld	571	B Pitch Bend > Mod Env Time
+rlive.meld	572	B Pitch Bend > LFO 1 Rate
+rlive.meld	573	B Pitch Bend > LFO 1 Macro 1
+rlive.meld	574	B Pitch Bend > LFO 1 Macro 2
+rlive.meld	575	B Pitch Bend > LFO 1 FX 1
+rlive.meld	576	B Pitch Bend > LFO 1 FX 2
+rlive.meld	577	B Pitch Bend > LFO 2 Rate
+rlive.meld	578	B Press > Volume
+rlive.meld	579	B Press > Pan
+rlive.meld	580	B Press > Pitch
+rlive.meld	581	B Press > Pitch Quant
+rlive.meld	582	B Press > Osc Macro 1
+rlive.meld	583	B Press > Osc Macro 2
+rlive.meld	584	B Press > Filter Freq
+rlive.meld	585	B Press > Filter Macro 1
+rlive.meld	586	B Press > Filter Macro 2
+rlive.meld	587	B Press > Tone Filter
+rlive.meld	588	B Press > Amp Env Time
+rlive.meld	589	B Press > Mod Env Time
+rlive.meld	590	B Press > LFO 1 Rate
+rlive.meld	591	B Press > LFO 1 Macro 1
+rlive.meld	592	B Press > LFO 1 Macro 2
+rlive.meld	593	B Press > LFO 1 FX 1
+rlive.meld	594	B Press > LFO 1 FX 2
+rlive.meld	595	B Press > LFO 2 Rate
+rlive.meld	596	B Mod Wheel > Volume
+rlive.meld	597	B Mod Wheel > Pan
+rlive.meld	598	B Mod Wheel > Pitch
+rlive.meld	599	B Mod Wheel > Pitch Quant
+rlive.meld	600	B Mod Wheel > Osc Macro 1
+rlive.meld	601	B Mod Wheel > Osc Macro 2
+rlive.meld	602	B Mod Wheel > Filter Freq
+rlive.meld	603	B Mod Wheel > Filter Macro 1
+rlive.meld	604	B Mod Wheel > Filter Macro 2
+rlive.meld	605	B Mod Wheel > Tone Filter
+rlive.meld	606	B Mod Wheel > Amp Env Time
+rlive.meld	607	B Mod Wheel > Mod Env Time
+rlive.meld	608	B Mod Wheel > LFO 1 Rate
+rlive.meld	609	B Mod Wheel > LFO 1 Macro 1
+rlive.meld	610	B Mod Wheel > LFO 1 Macro 2
+rlive.meld	611	B Mod Wheel > LFO 1 FX 1
+rlive.meld	612	B Mod Wheel > LFO 1 FX 2
+rlive.meld	613	B Mod Wheel > LFO 2 Rate
+rlive.meld	614	B Note PB > Volume
+rlive.meld	615	B Note PB > Pan
+rlive.meld	616	B Note PB > Pitch
+rlive.meld	617	B Note PB > Pitch Quant
+rlive.meld	618	B Note PB > Osc Macro 1
+rlive.meld	619	B Note PB > Osc Macro 2
+rlive.meld	620	B Note PB > Filter Freq
+rlive.meld	621	B Note PB > Filter Macro 1
+rlive.meld	622	B Note PB > Filter Macro 2
+rlive.meld	623	B Note PB > Tone Filter
+rlive.meld	624	B Note PB > Amp Env Time
+rlive.meld	625	B Note PB > Mod Env Time
+rlive.meld	626	B Note PB > LFO 1 Rate
+rlive.meld	627	B Note PB > LFO 1 Macro 1
+rlive.meld	628	B Note PB > LFO 1 Macro 2
+rlive.meld	629	B Note PB > LFO 1 FX 1
+rlive.meld	630	B Note PB > LFO 1 FX 2
+rlive.meld	631	B Note PB > LFO 2 Rate
+rlive.meld	632	B Slide > Volume
+rlive.meld	633	B Slide > Pan
+rlive.meld	634	B Slide > Pitch
+rlive.meld	635	B Slide > Pitch Quant
+rlive.meld	636	B Slide > Osc Macro 1
+rlive.meld	637	B Slide > Osc Macro 2
+rlive.meld	638	B Slide > Filter Freq
+rlive.meld	639	B Slide > Filter Macro 1
+rlive.meld	640	B Slide > Filter Macro 2
+rlive.meld	641	B Slide > Tone Filter
+rlive.meld	642	B Slide > Amp Env Time
+rlive.meld	643	B Slide > Mod Env Time
+rlive.meld	644	B Slide > LFO 1 Rate
+rlive.meld	645	B Slide > LFO 1 Macro 1
+rlive.meld	646	B Slide > LFO 1 Macro 2
+rlive.meld	647	B Slide > LFO 1 FX 1
+rlive.meld	648	B Slide > LFO 1 FX 2
+rlive.meld	649	B Slide > LFO 2 Rate
+rlive.meld	650	B MPE Press > Volume
+rlive.meld	651	B MPE Press > Pan
+rlive.meld	652	B MPE Press > Pitch
+rlive.meld	653	B MPE Press > Pitch Quant
+rlive.meld	654	B MPE Press > Osc Macro 1
+rlive.meld	655	B MPE Press > Osc Macro 2
+rlive.meld	656	B MPE Press > Filter Freq
+rlive.meld	657	B MPE Press > Filter Macro 1
+rlive.meld	658	B MPE Press > Filter Macro 2
+rlive.meld	659	B MPE Press > Tone Filter
+rlive.meld	660	B MPE Press > Amp Env Time
+rlive.meld	661	B MPE Press > Mod Env Time
+rlive.meld	662	B MPE Press > LFO 1 Rate
+rlive.meld	663	B MPE Press > LFO 1 Macro 1
+rlive.meld	664	B MPE Press > LFO 1 Macro 2
+rlive.meld	665	B MPE Press > LFO 1 FX 1
+rlive.meld	666	B MPE Press > LFO 1 FX 2
+rlive.meld	667	B MPE Press > LFO 2 Rate

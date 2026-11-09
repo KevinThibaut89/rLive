@@ -163,6 +163,10 @@ const EXISTING: &[(&str, &str)] = &[
     ("rlive.hybrid_reverb", "Hybrid Reverb"),
     ("rlive.resonators", "Resonators"),
     ("rlive.corpus", "Corpus"),
+    ("rlive.analog", "Analog"),
+    ("rlive.drift", "Drift"),
+    ("rlive.meld", "Meld"),
+    ("rlive.wavetable", "Wavetable"),
 ];
 
 #[test]
@@ -249,6 +253,8 @@ fn a_sample_slot_is_declared_only_where_samples_load() {
             "rlive.sampler" => devices::b10::multi::MAX_LAYERS,
             "rlive.impulse" => 8,
             "rlive.simpler" | "rlive.drum_sampler" | "rlive.hybrid_reverb" => 1,
+            // One user table per oscillator.
+            "rlive.wavetable" => 2,
             _ => 0,
         };
         assert_eq!(slots, expected, "{}", b.id);

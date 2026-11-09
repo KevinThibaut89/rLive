@@ -11,81 +11,73 @@ use std::f32::consts::{PI, TAU};
 pub struct Wavetable {
     frame_len: usize,
     frames: usize,
+    capacity: usize,
     /// Per mip: start offset and length, including one wrap-around sample.
     mips: Vec<(usize, usize)>,
     data: Vec<f32>,
 }
 
+/// The mip levels of a `frame_len` table: each has half the harmonics of the one above it, down
+/// to the fundamental alone, but no less than a table's worth of samples to read smoothly.
+/// `(samples per frame, harmonics kept)`.
+fn mip_levels(frame_len: usize) -> Vec<(usize, usize)> {
+    const MIN_MIP_LEN: usize = 32;
+    (0..)
+        .map(|m| frame_len >> (m + 1))
+        .take_while(|h| *h >= 1)
+        .map(|harmonics| {
+            let len = (harmonics * 2).max(MIN_MIP_LEN);
+            let keep = if harmonics * 2 == len {
+                (harmonics - 1).max(1)
+            } else {
+                harmonics
+            };
+            (len, keep)
+        })
+        .collect()
+}
+
 impl Wavetable {
+    /// An empty table with room for `capacity` frames, reading as silence until frames are
+    /// written with a [`WavetableBuilder`]. Allocates.
+    pub fn with_capacity(capacity: usize, frame_len: usize) -> Self {
+        let capacity = capacity.max(1);
+        let frame_len = frame_len.next_power_of_two().max(32);
+        let levels = mip_levels(frame_len);
+        let total: usize = levels.iter().map(|(l, _)| (l + 1) * capacity).sum();
+        let mut mips = Vec::with_capacity(levels.len());
+        let mut offset = 0;
+        for &(len, _) in &levels {
+            mips.push((offset, len));
+            offset += (len + 1) * capacity;
+        }
+        Self {
+            frame_len,
+            frames: 1,
+            capacity,
+            mips,
+            data: vec![0.0; total],
+        }
+    }
+
     /// Builds the bandwidths for `frames`, each a single cycle of `frame_len` samples (a power
     /// of two). Allocates.
     pub fn from_frames(frames: &[Vec<f32>], frame_len: usize) -> Self {
         let frame_count = frames.len().max(1);
-        let frame_len = frame_len.next_power_of_two().max(32);
-        let bins = frame_len / 2 + 1;
-
-        // Each level has half the harmonics of the one above it, down to the fundamental
-        // alone, but no less than a table's worth of samples to read smoothly.
-        const MIN_MIP_LEN: usize = 32;
-        let levels: Vec<(usize, usize)> = (0..)
-            .map(|m| frame_len >> (m + 1))
-            .take_while(|h| *h >= 1)
-            .map(|harmonics| {
-                let len = (harmonics * 2).max(MIN_MIP_LEN);
-                let keep = if harmonics * 2 == len {
-                    (harmonics - 1).max(1)
-                } else {
-                    harmonics
-                };
-                (len, keep)
-            })
-            .collect();
-        let total: usize = levels.iter().map(|(l, _)| (l + 1) * frame_count).sum();
-        let mut data = vec![0.0f32; total];
-
-        let mut forward = Fft::new(frame_len);
-        let mut spectrum = vec![Complex32::new(0.0, 0.0); bins];
-        let mut scratch = vec![0.0f32; frame_len];
-        let mut mips = Vec::with_capacity(levels.len());
-        let mut offset = 0;
-        for &(len, keep) in &levels {
-            let mut inverse = Fft::new(len);
-            let mut small = vec![Complex32::new(0.0, 0.0); inverse.bins()];
-            let mut output = vec![0.0f32; len];
-            for f in 0..frame_count {
-                scratch.fill(0.0);
-                if let Some(frame) = frames.get(f) {
-                    let n = frame.len().min(frame_len);
-                    scratch[..n].copy_from_slice(&frame[..n]);
-                }
-                forward.forward(&mut scratch, &mut spectrum);
-                // Only harmonics below the mip's own Nyquist survive.
-                small.fill(Complex32::new(0.0, 0.0));
-                let scale = len as f32 / frame_len as f32;
-                for (out, bin) in small[1..=keep].iter_mut().zip(&spectrum[1..]) {
-                    *out = bin * scale;
-                }
-                inverse.inverse(&mut small, &mut output);
-                let start = offset + f * (len + 1);
-                data[start..start + len].copy_from_slice(&output);
-                data[start + len] = output[0];
-            }
-            mips.push((offset, len));
-            offset += (len + 1) * frame_count;
+        let mut table = Self::with_capacity(frame_count, frame_len);
+        let mut builder = WavetableBuilder::new(table.frame_len);
+        let silent = vec![0.0f32; table.frame_len];
+        for f in 0..frame_count {
+            let frame = frames.get(f).map_or(silent.as_slice(), |v| v.as_slice());
+            builder.write_frame(&mut table, f, frame);
         }
+        builder.finish(&mut table, frame_count);
+        table
+    }
 
-        let peak = data.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-        if peak > 0.0 {
-            for s in &mut data {
-                *s /= peak;
-            }
-        }
-        Self {
-            frame_len,
-            frames: frame_count,
-            mips,
-            data,
-        }
+    /// How many frames this table has room for.
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     pub fn frames(&self) -> usize {
@@ -142,6 +134,85 @@ impl Wavetable {
             self.sweep(mip + 1, position, phase),
             lean,
         )
+    }
+}
+
+/// Writes frames into a table without allocating, so a table can be rebuilt a frame at a time on
+/// the audio thread. Its plans and buffers are made once, by [`new`](Self::new).
+#[derive(Clone, Debug)]
+pub struct WavetableBuilder {
+    levels: Vec<(usize, usize)>,
+    forward: Fft,
+    inverse: Vec<Fft>,
+    spectrum: Vec<Complex32>,
+    small: Vec<Vec<Complex32>>,
+    output: Vec<Vec<f32>>,
+    scratch: Vec<f32>,
+}
+
+impl WavetableBuilder {
+    pub fn new(frame_len: usize) -> Self {
+        let frame_len = frame_len.next_power_of_two().max(32);
+        let levels = mip_levels(frame_len);
+        let forward = Fft::new(frame_len);
+        let bins = forward.bins();
+        let inverse: Vec<Fft> = levels.iter().map(|(len, _)| Fft::new(*len)).collect();
+        Self {
+            spectrum: vec![Complex32::new(0.0, 0.0); bins],
+            small: inverse
+                .iter()
+                .map(|f| vec![Complex32::new(0.0, 0.0); f.bins()])
+                .collect(),
+            output: levels.iter().map(|(len, _)| vec![0.0; *len]).collect(),
+            scratch: vec![0.0; frame_len],
+            forward,
+            inverse,
+            levels,
+        }
+    }
+
+    /// Writes one frame at `index`, at every bandwidth. `frame` is one cycle of up to `frame_len`
+    /// samples.
+    pub fn write_frame(&mut self, table: &mut Wavetable, index: usize, frame: &[f32]) {
+        let frame_len = table.frame_len;
+        self.scratch.fill(0.0);
+        let n = frame.len().min(frame_len);
+        self.scratch[..n].copy_from_slice(&frame[..n]);
+        self.forward.forward(&mut self.scratch, &mut self.spectrum);
+        for (i, &(len, keep)) in self.levels.iter().enumerate() {
+            let small = &mut self.small[i];
+            small.fill(Complex32::new(0.0, 0.0));
+            let scale = len as f32 / frame_len as f32;
+            for (out, bin) in small[1..=keep].iter_mut().zip(&self.spectrum[1..]) {
+                *out = bin * scale;
+            }
+            self.inverse[i].inverse(small, &mut self.output[i]);
+            let (offset, _) = table.mips[i];
+            let start = offset + index * (len + 1);
+            table.data[start..start + len].copy_from_slice(&self.output[i]);
+            table.data[start + len] = self.output[i][0];
+        }
+    }
+
+    /// Makes `frames` the readable part of `table`, scaled to a peak of one. The table's level
+    /// across its positions stays what the frames made it.
+    pub fn finish(&self, table: &mut Wavetable, frames: usize) {
+        let frames = frames.clamp(1, table.capacity());
+        table.frames = frames;
+        let mut peak = 0.0f32;
+        for &(offset, len) in &table.mips {
+            for s in &table.data[offset..offset + (len + 1) * frames] {
+                peak = peak.max(s.abs());
+            }
+        }
+        if peak > 0.0 {
+            for i in 0..table.mips.len() {
+                let (offset, len) = table.mips[i];
+                for s in &mut table.data[offset..offset + (len + 1) * frames] {
+                    *s /= peak;
+                }
+            }
+        }
     }
 }
 

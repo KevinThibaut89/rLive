@@ -3,12 +3,14 @@
 //! To add one: write a file here with a [`PanelDef`] named `PANEL`, add a row to [`PANELS`], and
 //! put `Item::Panel("its name")` in the device's layout. The renderer finds it by name.
 
+mod analog_display;
 mod auto_filter_display;
 mod b1_leds;
 mod channel_eq_display;
 mod clip_led;
 mod compressor_display;
 mod corpus_display;
+mod drift_display;
 mod echo_tunnel;
 mod eq_eight_display;
 mod eq_three_leds;
@@ -25,7 +27,9 @@ mod sample_ui;
 mod sampler_panels;
 mod scale_matrix;
 mod simpler_panels;
+mod synth_matrix;
 mod velocity_curve;
+mod wavetable_view;
 
 use super::devices::{Action, ActionQueue};
 use crate::session::{ChainRef, DeviceRuntime};
@@ -160,6 +164,11 @@ pub const PANELS: &[PanelDef] = &[
     corpus_display::PANEL,
     hybrid_ir_view::PANEL,
     hybrid_algo_view::PANEL,
+    analog_display::PANEL,
+    drift_display::PANEL,
+    synth_matrix::MELD,
+    synth_matrix::WAVETABLE,
+    wavetable_view::PANEL,
 ];
 
 /// What a panel takes up when the table has no entry for it.

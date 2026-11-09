@@ -294,6 +294,19 @@ impl VoiceAllocator {
         v.pitch + v.note_pitch + bend * self.settings.bend_range
     }
 
+    /// The per-note pitch part of [`pitch`](Self::pitch), in semitones: the note-on tuning, later
+    /// replaced by per-note expression. For a device with its own per-note bend range or switch.
+    #[inline]
+    pub fn note_bend(&self, voice: usize) -> f32 {
+        self.voices[voice].note_pitch
+    }
+
+    /// The channel pitch bend on a voice's channel, -1..1, before `bend_range`.
+    #[inline]
+    pub fn channel_bend(&self, voice: usize) -> f32 {
+        self.channel_bend[self.voices[voice].note.channel as usize % CHANNELS]
+    }
+
     /// Channel pressure on a voice's channel, 0..1.
     pub fn channel_pressure(&self, voice: usize) -> f32 {
         self.channel_pressure[self.voices[voice].note.channel as usize % CHANNELS]

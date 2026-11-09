@@ -980,12 +980,12 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 - `[ ]` Scale awareness from global Scale Mode [S]
 
 **Analog (704-713)** [L] {PM}
-- `[ ]` Edition not stated. Virtual analog by real-time circuit-equation solving (with AAS); no samples or wavetables.
-- `[ ]` 2 oscillators (sine/saw/rect/noise, PW, sub or sync, pitch env, key scaling); noise with colour LP.
-- `[ ]` 2 multimode filters (LP/BP/notch/HP/formant, 2nd/4th order, series/parallel, Follow, sym/asym drive); 2 amps.
-- `[ ]` 4 ADSRs (AD-R, ADR-R, ADS-R loops, Free, Legato, S.Time, velocity); 2 LFOs.
-- `[ ]` Global: vibrato with Error, unison 2/4, const/prop glide, 4 Quick Routings, stretch tuning, tuning error, voice priority; MPE (2 destinations each).
-- `[ ]` A band-limited non-modelled version would be cheaper.
+- `[~]` Edition not stated. Virtual analog by real-time circuit-equation solving (with AAS); no samples or wavetables.
+- `[x]` 2 oscillators (sine/saw/rect/noise, PW, sub or sync, pitch env, key scaling); noise with colour LP.
+- `[x]` 2 multimode filters (LP/BP/notch/HP/formant, 2nd/4th order, series/parallel, Follow, sym/asym drive); 2 amps.
+- `[x]` 4 ADSRs (AD-R, ADR-R, ADS-R loops, Free, Legato, S.Time, velocity); 2 LFOs.
+- `[x]` Global: vibrato with Error, unison 2/4, const/prop glide, 4 Quick Routings, stretch tuning, tuning error, voice priority; MPE (2 destinations each).
+- `[x]` A band-limited non-modelled version would be cheaper.
 
 **Collision (713-722)** [L] {PM}
 - `[ ]` Not stated. Modelled mallet percussion (AAS): exciters feeding two stereo resonators.
@@ -994,11 +994,11 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 - `[ ]` 2 LFOs that can modulate each other; MIDI/MPE tab; 1>2 or 1+2 structure.
 
 **Drift (722-730)** [M] {PM: DFM-1, MS2 filters}
-- `[ ]` Not stated. Low-CPU subtractive, fully MPE.
-- `[ ]` Osc 1 (7 waves incl. Shark Tooth, Saturated) with Shape mod; Osc 2 (5 waves); noise; per-source filter bypass; two gain-staged saturation points; waveform display.
-- `[ ]` 12/24 dB LP, key tracking, HP, XY display; Env 1 and Env 2/Cycling (Rate, Ratio, Time, Sync; Tilt, Hold).
-- `[ ]` 9-wave LFO; 3-slot mod matrix; ratio-mode LFO can do FM.
-- `[ ]` Poly/Mono/Stereo/Unison up to 32 voices; per-voice Drift randomisation.
+- `[~]` Not stated. Low-CPU subtractive, fully MPE.
+- `[x]` Osc 1 (7 waves incl. Shark Tooth, Saturated) with Shape mod; Osc 2 (5 waves); noise; per-source filter bypass; two gain-staged saturation points; waveform display.
+- `[~]` 12/24 dB LP, key tracking, HP, XY display; Env 1 and Env 2/Cycling (Rate, Ratio, Time, Sync; Tilt, Hold).
+- `[x]` 9-wave LFO; 3-slot mod matrix; ratio-mode LFO can do FM.
+- `[x]` Poly/Mono/Stereo/Unison up to 32 voices; per-voice Drift randomisation.
 
 **Drum Sampler (730-735)** [M] {ML?: similar swap}
 - `[x]` Not stated. One-shot playback for Drum Rack pads.
@@ -1025,14 +1025,14 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 - `[x]` Global volume, transpose, Time; individual slot outputs.
 
 **Meld (745-755)** [XL] {PM: some filters}
-- `[ ]` Not stated. Two macro-oscillator engines, each with filter, envelopes, LFOs and matrix.
-- `[ ]` Manual says 24 oscillator types but describes 25: Basic, Dual Basic, Noisy Shapes, Square Sync, Square 5th, Sub, 4 Swarms, Harmonic/Fold/Simple FM, Squelch, Chip, Shepard's Pi, Tarp, Extratone, Noise Loop, Filtered Noise, Bitgrunge, Crackle, Rain, Bubble, Chord.
-- `[ ]` Two type-specific macros per oscillator; each engine has Amp and Mod envelopes (Trigger, Loop, AD Loop; Link).
-- `[ ]` LFO 1 (6 types plus two serial FX slots of 18) and LFO 2 (6 shapes).
-- `[ ]` 17 filters: SVF, MS2, OSR, LP Crunch, Switched Res, Filther, EQ peak/notch, Phaser, Redux, Vowel, Comb +/-, Plate and Membrane modal.
-- `[ ]` Matrix with expanded view and A/B copy; MIDI and MPE tabs; key tracking off, phase reset/spread, porta/gliss.
-- `[ ]` Scale awareness: 6 oscillators, 2 filters; Chord also follows the scale.
-- `[ ]` Per-engine tone filter, per-voice drive and limiter; mono/poly 2-12, stacked voices, Spread.
+- `[~]` Not stated. Two macro-oscillator engines, each with filter, envelopes, LFOs and matrix.
+- `[~]` Manual says 24 oscillator types but describes 25: Basic, Dual Basic, Noisy Shapes, Square Sync, Square 5th, Sub, 4 Swarms, Harmonic/Fold/Simple FM, Squelch, Chip, Shepard's Pi, Tarp, Extratone, Noise Loop, Filtered Noise, Bitgrunge, Crackle, Rain, Bubble, Chord.
+- `[x]` Two type-specific macros per oscillator; each engine has Amp and Mod envelopes (Trigger, Loop, AD Loop; Link).
+- `[~]` LFO 1 (6 types plus two serial FX slots of 18) and LFO 2 (6 shapes).
+- `[~]` 17 filters: SVF, MS2, OSR, LP Crunch, Switched Res, Filther, EQ peak/notch, Phaser, Redux, Vowel, Comb +/-, Plate and Membrane modal.
+- `[x]` Matrix with expanded view and A/B copy; MIDI and MPE tabs; key tracking off, phase reset/spread, porta/gliss.
+- `[x]` Scale awareness: 6 oscillators, 2 filters; Chord also follows the scale.
+- `[x]` Per-engine tone filter, per-voice drive and limiter; mono/poly 2-12, stacked voices, Spread.
 
 **Operator (755-772)** [L] {PM: filter circuits}
 - `[ ]` Not stated. 4-oscillator FM combined with subtractive and additive; 11 algorithms.
@@ -1068,11 +1068,11 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 - `[ ]` Filter with envelope and LFO; MPE; stretch and tuning error, voice priority; portamento; unison.
 
 **Wavetable (814-823)** [L] {CONTENT: factory tables; PM: filter circuits}
-- `[ ]` Not stated. 2 wavetable oscillators plus sub.
-- `[ ]` WAV/AIFF import with automatic cleanup or Raw; linear/polar view; oscillator effects FM, Classic (PW, Sync), Modern (Warp, Fold).
-- `[ ]` 2 filters, Serial/Parallel/Split.
-- `[ ]` Modulation matrix and MIDI tab; 3 envelopes; 2 shapeable LFOs; global time and amount.
-- `[ ]` 6 unison modes; Hi-Quality toggle (off means modulation every 32 samples and low-power filters).
+- `[~]` Not stated. 2 wavetable oscillators plus sub.
+- `[x]` WAV/AIFF import with automatic cleanup or Raw; linear/polar view; oscillator effects FM, Classic (PW, Sync), Modern (Warp, Fold).
+- `[x]` 2 filters, Serial/Parallel/Split.
+- `[x]` Modulation matrix and MIDI tab; 3 envelopes; 2 shapeable LFOs; global time and amount.
+- `[~]` 6 unison modes; Hi-Quality toggle (off means modulation every 32 samples and low-power filters).
 
 
 ## 32. Max for Live (824-829)
