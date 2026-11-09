@@ -128,34 +128,37 @@ pub fn params() -> Vec<ParamInfo> {
 
 fn layout() -> Vec<Section> {
     const TITLES: [&str; SLOTS] = ["Mod 1", "Mod 2", "Mod 3", "Mod 4", "Mod 5"];
-    (0..SLOTS)
-        .map(|slot| {
-            let id = |p| ParamId(slot_param(slot, p));
-            Section {
-                title: TITLES[slot],
-                items: vec![
-                    Item::Menu(id(SOURCE)),
-                    Item::Menu(id(MODULATION)),
-                    Item::Menu(id(POLARITY)),
-                    Item::Knob(id(OUT_MAX)),
-                    Item::Knob(id(OUT_MIN)),
-                    Item::Menu(id(CURVE_TYPE)),
-                    Item::Knob(id(CURVE_A)),
-                    Item::Knob(id(CURVE_B)),
-                    Item::Toggle(id(CURVE_LINK)),
-                    Item::Knob(id(MIN)),
-                    Item::Knob(id(MAX)),
-                    Item::Knob(id(X)),
-                    Item::Knob(id(Y)),
-                    Item::Knob(id(INCREMENT_STEPS)),
-                    Item::Knob(id(RANDOM_AMOUNT)),
-                    Item::Menu(id(SMOOTHING_TYPE)),
-                    Item::Knob(id(RISE)),
-                    Item::Knob(id(FALL)),
-                ],
-            }
-        })
-        .collect()
+    let mut sections = vec![Section {
+        title: "Map",
+        items: vec![Item::Panel("expression_map")],
+    }];
+    sections.extend((0..SLOTS).map(|slot| {
+        let id = |p| ParamId(slot_param(slot, p));
+        Section {
+            title: TITLES[slot],
+            items: vec![
+                Item::Menu(id(SOURCE)),
+                Item::Menu(id(MODULATION)),
+                Item::Menu(id(POLARITY)),
+                Item::Knob(id(OUT_MAX)),
+                Item::Knob(id(OUT_MIN)),
+                Item::Menu(id(CURVE_TYPE)),
+                Item::Knob(id(CURVE_A)),
+                Item::Knob(id(CURVE_B)),
+                Item::Toggle(id(CURVE_LINK)),
+                Item::Knob(id(MIN)),
+                Item::Knob(id(MAX)),
+                Item::Knob(id(X)),
+                Item::Knob(id(Y)),
+                Item::Knob(id(INCREMENT_STEPS)),
+                Item::Knob(id(RANDOM_AMOUNT)),
+                Item::Menu(id(SMOOTHING_TYPE)),
+                Item::Knob(id(RISE)),
+                Item::Knob(id(FALL)),
+            ],
+        }
+    }));
+    sections
 }
 
 #[derive(Clone, Copy)]
@@ -356,6 +359,9 @@ impl MidiFx for ExpressionControl {
             if let Some(out) = mod_out.get_mut(i) {
                 *out = Self::output(slot, slot.smoother.value);
             }
+            if let Some(flag) = mod_out.get_mut(SLOTS + i) {
+                *flag = slot.remote as u8 as f32;
+            }
         }
     }
 
@@ -376,7 +382,18 @@ pub static INFO: BuiltinInfo = BuiltinInfo {
         params: params(),
         ports: Ports {
             midi_out: true,
-            mod_out: vec!["Mod 1", "Mod 2", "Mod 3", "Mod 4", "Mod 5"],
+            mod_out: vec![
+                "Mod 1",
+                "Mod 2",
+                "Mod 3",
+                "Mod 4",
+                "Mod 5",
+                "Mod 1 Remote",
+                "Mod 2 Remote",
+                "Mod 3 Remote",
+                "Mod 4 Remote",
+                "Mod 5 Remote",
+            ],
             ..Default::default()
         },
         layout: layout(),

@@ -6,10 +6,13 @@
 //!
 //! 1. A Macro writes `auto` and owns the parameter ([`ControlHooks::macros`]).
 //! 2. Automation writes `auto` unless overridden ([`TrackRoutes`]).
-//! 3. Modulators and clip envelopes set `add` and `scale` ([`ControlHooks::modulation`]).
-//! 4. `effective = clamp(norm(auto or base) * scale + add)`, converted to plain units and
-//!    delivered if changed. A [`ModMode::Intensity`] control reduces `add` as its value nears
-//!    either end of its range.
+//! 3. Modulators set `mod_add`, and clip envelopes set `add` and `scale`
+//!    ([`ControlHooks::modulation`]).
+//! 4. `effective = clamp(norm(auto or base) * scale + add + mod_add)`, converted to plain units
+//!    and delivered if changed. A [`ModMode::Intensity`] control reduces both additions as its
+//!    value nears either end of its range.
+//!
+//! A modulator's Remote Control is step 1: it owns the parameter the way a Macro does.
 //!
 //! Working in normalized space keeps VST3's normalized values and CLAP's plain values uniform.
 //! A cell's identity is its index: cells never move for the life of a track, so a [`CellIx`]
@@ -223,7 +226,7 @@ impl CellState {
         if cell.flags & MACRO != 0 {
             bits |= Self::MACRO;
         }
-        if cell.add != 0.0 || cell.scale != 1.0 {
+        if cell.add != 0.0 || cell.scale != 1.0 || cell.mod_add != 0.0 {
             bits |= Self::MODULATED;
         }
         Self(bits)
@@ -260,6 +263,8 @@ struct ParamCell {
     auto: f64,
     add: f32,
     scale: f32,
+    /// What a modulator adds, kept apart from what a clip envelope does so the two compose.
+    mod_add: f32,
     flags: u8,
     /// The last value handed to delivery, in plain units.
     sent: f64,
@@ -502,12 +507,13 @@ impl ParamBus {
         let automated = c.flags & MACRO != 0
             || (c.flags & AUTOMATED != 0 && c.flags & (OVERRIDDEN | TOUCHED) == 0);
         let source = if automated { c.auto } else { c.base };
-        if c.add == 0.0 && c.scale == 1.0 {
+        if c.add == 0.0 && c.scale == 1.0 && c.mod_add == 0.0 {
             return source;
         }
         let range = self.specs[ix].range;
         let mode = self.specs[ix].mod_mode;
-        range.from_normalized(modulated(range.to_normalized(source), c.add, c.scale, mode))
+        let add = c.add + c.mod_add;
+        range.from_normalized(modulated(range.to_normalized(source), add, c.scale, mode))
     }
 
     pub fn release_macro(&mut self, cell: CellIx) {
@@ -618,6 +624,19 @@ impl ParamBus {
         }
     }
 
+    /// Step 3 for a modulator: how far it pushes this cell, in normalized units. Adds to whatever
+    /// a clip envelope is doing to the cell.
+    pub fn modulate_by(&mut self, cell: CellIx, add: f32) {
+        let ix = cell.0 as usize;
+        if ix >= self.cells.len() || !add.is_finite() {
+            return;
+        }
+        if self.cells[ix].mod_add != add {
+            self.cells[ix].mod_add = add;
+            self.touch(ix);
+        }
+    }
+
     /// Hand one cell, or all of them, back to automation.
     pub fn re_enable(&mut self, cell: Option<CellIx>) {
         let (start, end) = match cell {
@@ -671,7 +690,7 @@ impl ParamBus {
             let automated = c.flags & MACRO != 0
                 || (c.flags & AUTOMATED != 0 && c.flags & (OVERRIDDEN | TOUCHED) == 0);
             let source = if automated { c.auto } else { c.base };
-            let (norm, plain, source_norm) = if c.add == 0.0 && c.scale == 1.0 {
+            let (norm, plain, source_norm) = if c.add == 0.0 && c.scale == 1.0 && c.mod_add == 0.0 {
                 // Without modulation, skip the trip through normalized space: delivered values
                 // stay exactly what was set.
                 let plain = spec.range.clamp(source);
@@ -679,7 +698,7 @@ impl ParamBus {
                 (norm, plain, norm)
             } else {
                 let knob = spec.range.to_normalized(source);
-                let norm = modulated(knob, c.add, c.scale, spec.mod_mode);
+                let norm = modulated(knob, c.add + c.mod_add, c.scale, spec.mod_mode);
                 (norm, spec.range.from_normalized(norm), knob)
             };
             self.effective[ix].store(norm as f32);
@@ -1133,6 +1152,7 @@ impl BusLayout {
                 auto: value,
                 add: 0.0,
                 scale: 1.0,
+                mod_add: 0.0,
                 flags: 0,
                 sent: spec.range.clamp(value),
             })
@@ -1362,6 +1382,25 @@ mod tests {
     }
 
     #[test]
+    fn a_modulator_composes_with_a_clip_envelope_and_automation() {
+        let (mut l, _, cell) = layout();
+        let mut bus = l.build();
+        bus.write_automation(cell, 4.0);
+        bus.modulate(cell, 0.1, 1.0);
+        bus.modulate_by(cell, 0.2);
+        resolve(&mut bus);
+        // Automation sets 4.0 of 10, then clip and modulator both move it.
+        assert_eq!(bus.effective(cell).map(|v| (v * 100.0).round()), Some(70.0));
+        assert!(bus.state(cell).modulated());
+
+        bus.modulate_by(cell, 0.0);
+        bus.modulate(cell, 0.0, 1.0);
+        resolve(&mut bus);
+        assert_eq!(bus.effective(cell).map(|v| (v * 100.0).round()), Some(40.0));
+        assert!(!bus.state(cell).modulated());
+    }
+
+    #[test]
     fn stepped_params_stay_quantized_under_modulation() {
         let mut l = BusLayout::for_track(&MixSettings::default());
         let dev = DeviceId::new();
@@ -1543,6 +1582,7 @@ mod tests {
         bus.set_base(beyond, 1.0, true);
         bus.write_automation(beyond, 1.0);
         bus.modulate(beyond, 0.5, 0.5);
+        bus.modulate_by(beyond, 0.5);
         bus.re_enable(Some(beyond));
         assert!(resolve(&mut bus).is_empty());
     }

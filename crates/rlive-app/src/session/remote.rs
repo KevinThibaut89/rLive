@@ -425,7 +425,7 @@ impl Session {
         }
     }
 
-    fn describe_param(&self, r: ParamRef) -> (String, String) {
+    pub(super) fn describe_param(&self, r: ParamRef) -> (String, String) {
         match r.owner {
             ParamOwner::Device(d) => {
                 let path = self

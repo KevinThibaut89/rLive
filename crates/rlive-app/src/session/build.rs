@@ -2,6 +2,7 @@
 
 use super::automation::routes_for;
 use super::grooves::grooved_warp;
+use super::modulators::{ModPlan, ModSlots};
 use super::ChainRef;
 use rlive_audio_io::{SampleCache, SampleStatus};
 use rlive_core::envelope::segment_value;
@@ -267,6 +268,10 @@ pub struct Builder<'a> {
     pub plugins: &'a PluginCache,
     pub samples: &'a mut SampleCache,
     pub wiring: &'a PluginWiring,
+    /// Where each modulator publishes on the engine's bus.
+    pub mod_slots: &'a mut ModSlots,
+    /// Every mapping in the project being built.
+    pub mod_plan: &'a ModPlan,
     /// Where chains publish what the UI reads, if anyone is reading.
     pub chain_shared: Option<&'a mut HashMap<ChainId, Arc<ChainShared>>>,
     /// Create Fades on Clip Edges: the default fade length, in ticks.
@@ -466,6 +471,7 @@ impl Builder<'_> {
         slot.midi_effect = ports.midi_out;
         slot.latency = runtime.latency.clone();
         slot.mod_out = vec![0.0; ports.mod_out.len()].into_boxed_slice();
+        slot.mod_base = self.mod_slots.ensure(dev.id, ports.mod_out.len() as u32);
         slot.ports = ports;
         slot.view = view;
         runtimes.insert(dev.id, runtime);
@@ -809,12 +815,14 @@ impl Builder<'_> {
             place_device_tree(&mut layout, d, runtimes);
         }
         node.bus = layout.build();
+        let (plan, slots) = (self.mod_plan, &mut *self.mod_slots);
         node.routes = routes_for(
             &track.automation,
             &track.devices,
             ChainRef::Track(track.id),
             &layout,
             (&track.clips, &track.arrangement),
+            |macros| plan.routes(ChainRef::Track(track.id), &layout, slots, macros),
         );
         layouts.insert(ChainRef::Track(track.id), layout);
         for (i, c) in track.clips.iter().enumerate() {
@@ -850,12 +858,14 @@ impl Builder<'_> {
             place_device_tree(&mut layout, d, runtimes);
         }
         node.bus = layout.build();
+        let (plan, slots) = (self.mod_plan, &mut *self.mod_slots);
         node.routes = routes_for(
             &project.master.automation,
             &project.master.devices,
             ChainRef::Master,
             &layout,
             (&[], &[]),
+            |macros| plan.routes(ChainRef::Master, &layout, slots, macros),
         );
         layouts.insert(ChainRef::Master, layout);
         Box::new(node)
@@ -1242,6 +1252,8 @@ mod tests {
             plugins: &plugins,
             samples: &mut samples,
             wiring: &PluginWiring::default(),
+            mod_slots: &mut ModSlots::default(),
+            mod_plan: &ModPlan::default(),
             chain_shared: None,
             edge_fade: None,
             frozen: false,

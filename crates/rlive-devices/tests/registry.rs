@@ -177,6 +177,21 @@ const EXISTING: &[(&str, &str)] = &[
     ("rlive.spectral_time", "Spectral Time"),
     ("rlive.vocoder", "Vocoder"),
     ("rlive.auto_shift", "Auto Shift"),
+    ("rlive.lfo", "LFO"),
+    ("rlive.envelope_follower", "Envelope Follower"),
+    ("rlive.shaper", "Shaper"),
+    ("rlive.envelope_midi", "Envelope MIDI"),
+    ("rlive.shaper_midi", "Shaper MIDI"),
+    ("rlive.ds_kick", "DS Kick"),
+    ("rlive.ds_snare", "DS Snare"),
+    ("rlive.ds_clap", "DS Clap"),
+    ("rlive.ds_tom", "DS Tom"),
+    ("rlive.ds_hh", "DS HH"),
+    ("rlive.ds_cymbal", "DS Cymbal"),
+    ("rlive.ds_fm", "DS FM"),
+    ("rlive.ds_clang", "DS Clang"),
+    ("rlive.external_audio_effect", "External Audio Effect"),
+    ("rlive.external_instrument", "External Instrument"),
 ];
 
 #[test]

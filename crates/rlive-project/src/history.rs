@@ -189,6 +189,8 @@ fn device_shell(d: &Device) -> Device {
         sidechain: d.sidechain,
         mpe: d.mpe,
         compare: d.compare.clone(),
+        modulations: d.modulations.clone(),
+        external: d.external.clone(),
     }
 }
 

@@ -791,6 +791,7 @@ impl Session {
     ) -> bool {
         if n >= MACRO_COUNT
             || self.is_macro_mapped(chain, target)
+            || self.is_remote_controlled(target)
             || !self.rack_contains(chain, rack, target)
         {
             return false;

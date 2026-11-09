@@ -284,7 +284,10 @@ impl Session {
                 l.remove_chain(c);
             }
         }
+        self.mods_dirty = true;
         for id in ids {
+            self.mod_slots.release(id);
+            self.sent_device_outputs.remove(&id);
             if let Some(mut rt) = self.runtimes.remove(&id) {
                 if let Some(h) = rt.plugin.as_mut() {
                     h.close_editor();
@@ -333,7 +336,8 @@ impl Session {
         if self.devices_locked(chain) {
             return;
         }
-        if self.is_macro_mapped(chain, device_param(id, rlive_core::ACTIVATOR)) {
+        let target = device_param(id, rlive_core::ACTIVATOR);
+        if self.is_macro_mapped(chain, target) || self.is_remote_controlled(target) {
             return;
         }
         self.write_bypass(chain, id, bypass, true);
@@ -380,7 +384,8 @@ impl Session {
             return;
         }
         // A Macro owns this one. Only a clip envelope can still move it (manual p. 505).
-        if self.is_macro_mapped(chain, device_param(id, ParamId(param))) {
+        let target = device_param(id, ParamId(param));
+        if self.is_macro_mapped(chain, target) || self.is_remote_controlled(target) {
             return;
         }
         self.write_param(chain, id, param, value, true);
@@ -580,7 +585,9 @@ impl Session {
         d.for_each(&mut |nested| ids.push(nested.id));
         for nested in ids {
             self.runtimes.remove(&nested);
+            self.sent_device_outputs.remove(&nested);
         }
+        self.mods_dirty = true;
         let mut built = HashMap::new();
         let (mut b, _) = self.builder();
         let slot = b.device(&d, chain.depth(), &mut built);

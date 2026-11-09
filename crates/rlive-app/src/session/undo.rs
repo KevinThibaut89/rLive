@@ -25,6 +25,7 @@ impl Session {
         self.dirty = true;
         // Whatever this edit deleted, mappings to it go in the same undo step.
         self.project.prune_mappings();
+        self.mods_dirty |= label != "Change Parameter";
         self.history.pending.get_or_insert(label);
         self.history.settling = 0;
         // Leaders' tempo comes from their clips, which any edit can move.
@@ -92,6 +93,7 @@ impl Session {
 
     fn after_restore(&mut self) {
         self.restoring = false;
+        self.mods_dirty = true;
         self.record_fingerprints();
         self.history.pending = None;
         self.history.was_busy = false;
@@ -737,6 +739,8 @@ impl Session {
             sidechain,
             mpe,
             compare,
+            modulations,
+            external,
         } = d;
         *name = s.shell.name.clone();
         *bypass = s.shell.bypass;
@@ -745,6 +749,8 @@ impl Session {
         *sidechain = s.shell.sidechain;
         *mpe = s.shell.mpe;
         compare.clone_from(&s.shell.compare);
+        modulations.clone_from(&s.shell.modulations);
+        external.clone_from(&s.shell.external);
         match (kind, &s.shell.kind) {
             (
                 DeviceKind::Builtin {

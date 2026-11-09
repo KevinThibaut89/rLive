@@ -202,6 +202,8 @@ fn upgrade_device(d: Device) -> crate::Device {
         sidechain: None,
         mpe: None,
         compare: None,
+        modulations: Vec::new(),
+        external: None,
     }
 }
 

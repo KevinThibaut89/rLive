@@ -664,6 +664,270 @@ rlive.mpe_control	50	NotePB Rise
 rlive.mpe_control	51	NotePB Fall
 rlive.mpe_control	52	NotePB Pitch Range
 rlive.mpe_control	53	NotePB to PB
+rlive.lfo	0	Waveform
+rlive.lfo	1	Shape
+rlive.lfo	2	Steps
+rlive.lfo	3	Jitter
+rlive.lfo	4	Smooth
+rlive.lfo	5	Rate
+rlive.lfo	6	Time Mode
+rlive.lfo	7	x10
+rlive.lfo	8	Sync Rate
+rlive.lfo	9	Depth
+rlive.lfo	10	Offset
+rlive.lfo	11	Phase
+rlive.lfo	12	Hold
+rlive.lfo	13	R
+rlive.lfo	200	Map 1 Mod
+rlive.lfo	201	Map 1 Polarity
+rlive.lfo	202	Map 1 Amount
+rlive.lfo	203	Map 1 Min
+rlive.lfo	204	Map 1 Max
+rlive.lfo	205	Map 2 Mod
+rlive.lfo	206	Map 2 Polarity
+rlive.lfo	207	Map 2 Amount
+rlive.lfo	208	Map 2 Min
+rlive.lfo	209	Map 2 Max
+rlive.lfo	210	Map 3 Mod
+rlive.lfo	211	Map 3 Polarity
+rlive.lfo	212	Map 3 Amount
+rlive.lfo	213	Map 3 Min
+rlive.lfo	214	Map 3 Max
+rlive.lfo	215	Map 4 Mod
+rlive.lfo	216	Map 4 Polarity
+rlive.lfo	217	Map 4 Amount
+rlive.lfo	218	Map 4 Min
+rlive.lfo	219	Map 4 Max
+rlive.lfo	220	Map 5 Mod
+rlive.lfo	221	Map 5 Polarity
+rlive.lfo	222	Map 5 Amount
+rlive.lfo	223	Map 5 Min
+rlive.lfo	224	Map 5 Max
+rlive.lfo	225	Map 6 Mod
+rlive.lfo	226	Map 6 Polarity
+rlive.lfo	227	Map 6 Amount
+rlive.lfo	228	Map 6 Min
+rlive.lfo	229	Map 6 Max
+rlive.lfo	230	Map 7 Mod
+rlive.lfo	231	Map 7 Polarity
+rlive.lfo	232	Map 7 Amount
+rlive.lfo	233	Map 7 Min
+rlive.lfo	234	Map 7 Max
+rlive.lfo	235	Map 8 Mod
+rlive.lfo	236	Map 8 Polarity
+rlive.lfo	237	Map 8 Amount
+rlive.lfo	238	Map 8 Min
+rlive.lfo	239	Map 8 Max
+rlive.envelope_follower	0	Gain
+rlive.envelope_follower	1	Rise
+rlive.envelope_follower	2	Fall
+rlive.envelope_follower	3	Delay
+rlive.envelope_follower	4	Delay Mode
+rlive.envelope_follower	5	Delay Sync
+rlive.envelope_follower	6	Sidechain
+rlive.envelope_follower	7	Sidechain Mix
+rlive.envelope_follower	200	Map 1 Mod
+rlive.envelope_follower	201	Map 1 Polarity
+rlive.envelope_follower	202	Map 1 Amount
+rlive.envelope_follower	203	Map 1 Min
+rlive.envelope_follower	204	Map 1 Max
+rlive.envelope_follower	205	Map 2 Mod
+rlive.envelope_follower	206	Map 2 Polarity
+rlive.envelope_follower	207	Map 2 Amount
+rlive.envelope_follower	208	Map 2 Min
+rlive.envelope_follower	209	Map 2 Max
+rlive.envelope_follower	210	Map 3 Mod
+rlive.envelope_follower	211	Map 3 Polarity
+rlive.envelope_follower	212	Map 3 Amount
+rlive.envelope_follower	213	Map 3 Min
+rlive.envelope_follower	214	Map 3 Max
+rlive.envelope_follower	215	Map 4 Mod
+rlive.envelope_follower	216	Map 4 Polarity
+rlive.envelope_follower	217	Map 4 Amount
+rlive.envelope_follower	218	Map 4 Min
+rlive.envelope_follower	219	Map 4 Max
+rlive.envelope_follower	220	Map 5 Mod
+rlive.envelope_follower	221	Map 5 Polarity
+rlive.envelope_follower	222	Map 5 Amount
+rlive.envelope_follower	223	Map 5 Min
+rlive.envelope_follower	224	Map 5 Max
+rlive.envelope_follower	225	Map 6 Mod
+rlive.envelope_follower	226	Map 6 Polarity
+rlive.envelope_follower	227	Map 6 Amount
+rlive.envelope_follower	228	Map 6 Min
+rlive.envelope_follower	229	Map 6 Max
+rlive.envelope_follower	230	Map 7 Mod
+rlive.envelope_follower	231	Map 7 Polarity
+rlive.envelope_follower	232	Map 7 Amount
+rlive.envelope_follower	233	Map 7 Min
+rlive.envelope_follower	234	Map 7 Max
+rlive.envelope_follower	235	Map 8 Mod
+rlive.envelope_follower	236	Map 8 Polarity
+rlive.envelope_follower	237	Map 8 Amount
+rlive.envelope_follower	238	Map 8 Min
+rlive.envelope_follower	239	Map 8 Max
+rlive.shaper	0	Trigger Mode
+rlive.shaper	1	Rate
+rlive.shaper	2	Time Mode
+rlive.shaper	3	Sync Rate
+rlive.shaper	4	Depth
+rlive.shaper	5	Offset
+rlive.shaper	6	Phase
+rlive.shaper	7	Jitter
+rlive.shaper	8	Smooth
+rlive.shaper	9	Manual
+rlive.shaper	10	T
+rlive.shaper	11	R
+rlive.shaper	12	Grid
+rlive.shaper	13	Snap
+rlive.shaper	200	Map 1 Mod
+rlive.shaper	201	Map 1 Polarity
+rlive.shaper	202	Map 1 Amount
+rlive.shaper	203	Map 1 Min
+rlive.shaper	204	Map 1 Max
+rlive.shaper	205	Map 2 Mod
+rlive.shaper	206	Map 2 Polarity
+rlive.shaper	207	Map 2 Amount
+rlive.shaper	208	Map 2 Min
+rlive.shaper	209	Map 2 Max
+rlive.shaper	210	Map 3 Mod
+rlive.shaper	211	Map 3 Polarity
+rlive.shaper	212	Map 3 Amount
+rlive.shaper	213	Map 3 Min
+rlive.shaper	214	Map 3 Max
+rlive.shaper	215	Map 4 Mod
+rlive.shaper	216	Map 4 Polarity
+rlive.shaper	217	Map 4 Amount
+rlive.shaper	218	Map 4 Min
+rlive.shaper	219	Map 4 Max
+rlive.shaper	220	Map 5 Mod
+rlive.shaper	221	Map 5 Polarity
+rlive.shaper	222	Map 5 Amount
+rlive.shaper	223	Map 5 Min
+rlive.shaper	224	Map 5 Max
+rlive.shaper	225	Map 6 Mod
+rlive.shaper	226	Map 6 Polarity
+rlive.shaper	227	Map 6 Amount
+rlive.shaper	228	Map 6 Min
+rlive.shaper	229	Map 6 Max
+rlive.shaper	230	Map 7 Mod
+rlive.shaper	231	Map 7 Polarity
+rlive.shaper	232	Map 7 Amount
+rlive.shaper	233	Map 7 Min
+rlive.shaper	234	Map 7 Max
+rlive.shaper	235	Map 8 Mod
+rlive.shaper	236	Map 8 Polarity
+rlive.shaper	237	Map 8 Amount
+rlive.shaper	238	Map 8 Min
+rlive.shaper	239	Map 8 Max
+rlive.envelope_midi	0	Attack
+rlive.envelope_midi	1	Decay
+rlive.envelope_midi	2	Sustain
+rlive.envelope_midi	3	Release
+rlive.envelope_midi	4	Attack Slope
+rlive.envelope_midi	5	Decay Slope
+rlive.envelope_midi	6	Release Slope
+rlive.envelope_midi	7	Loop Mode
+rlive.envelope_midi	8	Sync Rate
+rlive.envelope_midi	9	Global Time
+rlive.envelope_midi	10	Env Echo Time
+rlive.envelope_midi	11	Env Feedback
+rlive.envelope_midi	12	Amount
+rlive.envelope_midi	13	Velocity
+rlive.envelope_midi	14	Sustain On
+rlive.envelope_midi	200	Map 1 Mod
+rlive.envelope_midi	201	Map 1 Polarity
+rlive.envelope_midi	202	Map 1 Amount
+rlive.envelope_midi	203	Map 1 Min
+rlive.envelope_midi	204	Map 1 Max
+rlive.envelope_midi	205	Map 2 Mod
+rlive.envelope_midi	206	Map 2 Polarity
+rlive.envelope_midi	207	Map 2 Amount
+rlive.envelope_midi	208	Map 2 Min
+rlive.envelope_midi	209	Map 2 Max
+rlive.envelope_midi	210	Map 3 Mod
+rlive.envelope_midi	211	Map 3 Polarity
+rlive.envelope_midi	212	Map 3 Amount
+rlive.envelope_midi	213	Map 3 Min
+rlive.envelope_midi	214	Map 3 Max
+rlive.envelope_midi	215	Map 4 Mod
+rlive.envelope_midi	216	Map 4 Polarity
+rlive.envelope_midi	217	Map 4 Amount
+rlive.envelope_midi	218	Map 4 Min
+rlive.envelope_midi	219	Map 4 Max
+rlive.envelope_midi	220	Map 5 Mod
+rlive.envelope_midi	221	Map 5 Polarity
+rlive.envelope_midi	222	Map 5 Amount
+rlive.envelope_midi	223	Map 5 Min
+rlive.envelope_midi	224	Map 5 Max
+rlive.envelope_midi	225	Map 6 Mod
+rlive.envelope_midi	226	Map 6 Polarity
+rlive.envelope_midi	227	Map 6 Amount
+rlive.envelope_midi	228	Map 6 Min
+rlive.envelope_midi	229	Map 6 Max
+rlive.envelope_midi	230	Map 7 Mod
+rlive.envelope_midi	231	Map 7 Polarity
+rlive.envelope_midi	232	Map 7 Amount
+rlive.envelope_midi	233	Map 7 Min
+rlive.envelope_midi	234	Map 7 Max
+rlive.envelope_midi	235	Map 8 Mod
+rlive.envelope_midi	236	Map 8 Polarity
+rlive.envelope_midi	237	Map 8 Amount
+rlive.envelope_midi	238	Map 8 Min
+rlive.envelope_midi	239	Map 8 Max
+rlive.shaper_midi	0	Rate
+rlive.shaper_midi	1	Time Mode
+rlive.shaper_midi	2	Sync Rate
+rlive.shaper_midi	3	Depth
+rlive.shaper_midi	4	Offset
+rlive.shaper_midi	5	Jitter
+rlive.shaper_midi	6	Smooth
+rlive.shaper_midi	7	Velocity
+rlive.shaper_midi	8	Loop
+rlive.shaper_midi	9	Echo
+rlive.shaper_midi	10	Time
+rlive.shaper_midi	11	Grid
+rlive.shaper_midi	12	Snap
+rlive.shaper_midi	200	Map 1 Mod
+rlive.shaper_midi	201	Map 1 Polarity
+rlive.shaper_midi	202	Map 1 Amount
+rlive.shaper_midi	203	Map 1 Min
+rlive.shaper_midi	204	Map 1 Max
+rlive.shaper_midi	205	Map 2 Mod
+rlive.shaper_midi	206	Map 2 Polarity
+rlive.shaper_midi	207	Map 2 Amount
+rlive.shaper_midi	208	Map 2 Min
+rlive.shaper_midi	209	Map 2 Max
+rlive.shaper_midi	210	Map 3 Mod
+rlive.shaper_midi	211	Map 3 Polarity
+rlive.shaper_midi	212	Map 3 Amount
+rlive.shaper_midi	213	Map 3 Min
+rlive.shaper_midi	214	Map 3 Max
+rlive.shaper_midi	215	Map 4 Mod
+rlive.shaper_midi	216	Map 4 Polarity
+rlive.shaper_midi	217	Map 4 Amount
+rlive.shaper_midi	218	Map 4 Min
+rlive.shaper_midi	219	Map 4 Max
+rlive.shaper_midi	220	Map 5 Mod
+rlive.shaper_midi	221	Map 5 Polarity
+rlive.shaper_midi	222	Map 5 Amount
+rlive.shaper_midi	223	Map 5 Min
+rlive.shaper_midi	224	Map 5 Max
+rlive.shaper_midi	225	Map 6 Mod
+rlive.shaper_midi	226	Map 6 Polarity
+rlive.shaper_midi	227	Map 6 Amount
+rlive.shaper_midi	228	Map 6 Min
+rlive.shaper_midi	229	Map 6 Max
+rlive.shaper_midi	230	Map 7 Mod
+rlive.shaper_midi	231	Map 7 Polarity
+rlive.shaper_midi	232	Map 7 Amount
+rlive.shaper_midi	233	Map 7 Min
+rlive.shaper_midi	234	Map 7 Max
+rlive.shaper_midi	235	Map 8 Mod
+rlive.shaper_midi	236	Map 8 Polarity
+rlive.shaper_midi	237	Map 8 Amount
+rlive.shaper_midi	238	Map 8 Min
+rlive.shaper_midi	239	Map 8 Max
 rlive.gate	0	Threshold
 rlive.gate	1	Return
 rlive.gate	2	Attack
@@ -1745,6 +2009,18 @@ rlive.auto_shift	43	Volume Mod Source
 rlive.auto_shift	44	Volume Mod Depth
 rlive.auto_shift	45	Pan Mod Source
 rlive.auto_shift	46	Pan Mod Depth
+rlive.external_audio_effect	0	Gain Out
+rlive.external_audio_effect	1	Gain In
+rlive.external_audio_effect	2	Dry/Wet
+rlive.external_audio_effect	3	Invert
+rlive.external_audio_effect	4	Latency Mode
+rlive.external_audio_effect	5	Hardware Latency
+rlive.external_audio_effect	6	Hardware Latency Samples
+rlive.external_instrument	0	Gain
+rlive.external_instrument	1	Latency Mode
+rlive.external_instrument	2	Hardware Latency
+rlive.external_instrument	3	Hardware Latency Samples
+rlive.external_instrument	4	Internal Latency
 rlive.simpler	0	Mode
 rlive.simpler	1	Sample Start
 rlive.simpler	2	Sample End
@@ -3932,3 +4208,57 @@ rlive.collision	160	Voices
 rlive.collision	161	Retrig.
 rlive.collision	162	Structure
 rlive.collision	163	Volume
+rlive.ds_kick	0	Pitch
+rlive.ds_kick	1	Drive
+rlive.ds_kick	2	OT
+rlive.ds_kick	3	Attack
+rlive.ds_kick	4	Click
+rlive.ds_kick	5	Decay
+rlive.ds_kick	6	Env
+rlive.ds_kick	7	Volume
+rlive.ds_snare	0	Color
+rlive.ds_snare	1	Tone
+rlive.ds_snare	2	Filter Type
+rlive.ds_snare	3	Decay
+rlive.ds_snare	4	Tune
+rlive.ds_snare	5	Volume
+rlive.ds_clap	0	Sloppy
+rlive.ds_clap	1	Tail
+rlive.ds_clap	2	Spread
+rlive.ds_clap	3	Tone
+rlive.ds_clap	4	Tune
+rlive.ds_clap	5	Decay
+rlive.ds_clap	6	Volume
+rlive.ds_tom	0	Pitch
+rlive.ds_tom	1	Color
+rlive.ds_tom	2	Tone
+rlive.ds_tom	3	Bend
+rlive.ds_tom	4	Decay
+rlive.ds_tom	5	Volume
+rlive.ds_hh	0	Noise
+rlive.ds_hh	1	Tone
+rlive.ds_hh	2	Filter
+rlive.ds_hh	3	Attack
+rlive.ds_hh	4	Pitch
+rlive.ds_hh	5	Decay
+rlive.ds_hh	6	Volume
+rlive.ds_cymbal	0	Tone
+rlive.ds_cymbal	1	Pitch
+rlive.ds_cymbal	2	Decay
+rlive.ds_cymbal	3	Volume
+rlive.ds_fm	0	Tone
+rlive.ds_fm	1	Feedb.
+rlive.ds_fm	2	Amnt
+rlive.ds_fm	3	Mod
+rlive.ds_fm	4	Pitch
+rlive.ds_fm	5	Decay
+rlive.ds_fm	6	Volume
+rlive.ds_clang	0	Tone A
+rlive.ds_clang	1	Tone B
+rlive.ds_clang	2	Filter
+rlive.ds_clang	3	Noise
+rlive.ds_clang	4	Clave
+rlive.ds_clang	5	Repeat
+rlive.ds_clang	6	Pitch
+rlive.ds_clang	7	Decay
+rlive.ds_clang	8	Volume

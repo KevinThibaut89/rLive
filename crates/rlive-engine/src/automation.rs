@@ -10,6 +10,7 @@
 //! at a step depends only on which clip is under the playhead.
 
 use crate::clip::{ClipCurve, EnvCurve};
+use crate::modulation::{ModBus, ModRoute};
 use crate::params::{CellIx, ParamBus};
 use rlive_core::param::{rack, ModMode};
 use rlive_core::ParamRange;
@@ -161,6 +162,8 @@ pub struct TrackRoutes {
     session_clips: Box<[(u32, ClipRoutes)]>,
     /// The envelopes of each Arrangement clip, sorted by where it starts.
     lane_clips: Box<[(u64, ClipRoutes)]>,
+    /// What modulators on this or any other track do to this track's cells, one per cell.
+    mods: Box<[ModRoute]>,
 }
 
 impl TrackRoutes {
@@ -175,7 +178,18 @@ impl TrackRoutes {
             macros: Box::default(),
             session_clips: Box::default(),
             lane_clips: Box::default(),
+            mods: Box::default(),
         }
+    }
+
+    /// These routes with what modulators do to the track's cells.
+    pub fn with_mods(mut self, mods: Vec<ModRoute>) -> Self {
+        self.mods = mods.into_boxed_slice();
+        self
+    }
+
+    pub fn mods(&self) -> &[ModRoute] {
+        &self.mods
     }
 
     /// These routes with the envelopes of the track's clips, by Session slot and by the tick an
@@ -246,6 +260,7 @@ impl TrackRoutes {
             && self.macros.is_empty()
             && self.session_clips.is_empty()
             && self.lane_clips.is_empty()
+            && self.mods.is_empty()
     }
 
     /// Step 2 of the resolve order: write every lane's value for this tick.
@@ -264,8 +279,38 @@ impl TrackRoutes {
         }
     }
 
+    /// Step 3 of the resolve order for modulators, and step 1 for a Remote Control. `at` is how
+    /// far into the block this control step is, in `0.0..=1.0`.
+    pub(crate) fn run_mods(&self, mods: &ModBus, at: f32, bus: &mut ParamBus) {
+        for route in self.mods.iter() {
+            let Some(value) = mods.value(route.value(), at) else {
+                bus.modulate_by(route.target(), 0.0);
+                bus.release_macro(route.target());
+                continue;
+            };
+            if mods.flag(route.mode()) {
+                bus.modulate_by(route.target(), 0.0);
+                if let Some(spec) = bus.spec(route.target()) {
+                    let norm = f64::from(value).clamp(0.0, 1.0);
+                    bus.write_macro(route.target(), spec.range.from_normalized(norm));
+                }
+            } else {
+                bus.release_macro(route.target());
+                bus.modulate_by(route.target(), value);
+            }
+        }
+    }
+
     /// Hand the cells that `next` no longer automates back to their knobs.
     pub(crate) fn release_dropped(&self, next: &TrackRoutes, bus: &mut ParamBus) {
+        for route in self.mods.iter() {
+            if !next.mods.iter().any(|m| m.target() == route.target()) {
+                bus.modulate_by(route.target(), 0.0);
+                if !next.macros.iter().any(|m| m.target == route.target()) {
+                    bus.release_macro(route.target());
+                }
+            }
+        }
         for route in self.macros.iter() {
             if !next.macros.iter().any(|m| m.target == route.target) {
                 bus.release_macro(route.target);

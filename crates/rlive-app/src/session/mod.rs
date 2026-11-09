@@ -21,6 +21,7 @@ mod clips;
 mod consolidate;
 mod devices;
 mod export;
+mod external;
 mod freeze;
 mod graph;
 mod grooves;
@@ -28,6 +29,7 @@ mod info;
 mod io;
 mod launch;
 mod launch_log;
+mod modulators;
 mod presets;
 mod rack_edit;
 mod racks;
@@ -60,11 +62,15 @@ mod clip_envelope_tests;
 #[cfg(test)]
 mod compensation_tests;
 #[cfg(test)]
+mod external_tests;
+#[cfg(test)]
 mod golden;
 #[cfg(test)]
 mod io_tests;
 #[cfg(test)]
 mod launch_tests;
+#[cfg(test)]
+mod modulator_tests;
 #[cfg(test)]
 mod preset_tests;
 #[cfg(test)]
@@ -202,6 +208,18 @@ pub struct Session {
     bus_shape: timing::BusShape,
     /// Which plug-ins have their extra buses in use.
     wiring: build::PluginWiring,
+    /// Where each modulator publishes on the engine's bus.
+    mod_slots: modulators::ModSlots,
+    /// Every mapping of every modulator, as last compiled.
+    mod_plan: modulators::ModPlan,
+    /// What the engine has been told drives each track's cells.
+    sent_mods: HashMap<ChainRef, Vec<rlive_engine::ModRoute>>,
+    /// Devices moved or went: mappings have to be looked at again.
+    mods_dirty: bool,
+    /// What the engine has been told about each External Instrument's MIDI port.
+    sent_device_outputs: HashMap<DeviceId, external::DeviceOutput>,
+    /// The Map button waiting for a parameter to be clicked: the modulator and its output.
+    armed_mod_map: Option<(DeviceId, usize)>,
     /// Keys held on the crossfader's left, centre and right positions.
     crossfader_keys: io::CrossfaderKeys,
     /// A file waiting to be previewed once it has loaded.
@@ -273,6 +291,12 @@ impl Session {
             timing: timing::Timing::default(),
             bus_shape: Vec::new(),
             wiring: build::PluginWiring::default(),
+            mod_slots: Default::default(),
+            mod_plan: Default::default(),
+            sent_mods: HashMap::new(),
+            mods_dirty: true,
+            sent_device_outputs: HashMap::new(),
+            armed_mod_map: None,
             crossfader_keys: io::CrossfaderKeys::default(),
             pending_preview: None,
             library: None,
@@ -325,6 +349,7 @@ impl Session {
     }
 
     fn builder(&mut self) -> (Builder<'_>, &Project) {
+        self.mod_plan = modulators::ModPlan::of(&self.project);
         (
             Builder {
                 sample_rate: self.engine.sample_rate,
@@ -332,6 +357,8 @@ impl Session {
                 plugins: &self.plugins,
                 samples: &mut self.samples,
                 wiring: &self.wiring,
+                mod_slots: &mut self.mod_slots,
+                mod_plan: &self.mod_plan,
                 chain_shared: Some(&mut self.chain_shared),
                 edge_fade: self
                     .edge_fades
@@ -346,6 +373,8 @@ impl Session {
 
     /// Re-create every engine object from the project (load, new, sample-rate change).
     pub fn rebuild(&mut self) {
+        self.sent_device_outputs.clear();
+        self.mods_dirty = true;
         self.abandon_takes();
         self.recording = None;
         self.automation.abandon();
@@ -511,6 +540,10 @@ impl Session {
 
     /// Call every UI frame: frees engine garbage and services plugin callbacks.
     pub fn idle(&mut self) {
+        if self.mods_dirty {
+            self.sync_mod_routes();
+            self.sync_device_outputs();
+        }
         self.poll_remote();
         self.engine.collect_garbage();
         self.poll_samples();

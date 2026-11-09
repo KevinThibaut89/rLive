@@ -86,6 +86,7 @@ impl DeviceViewState {
 /// What every device draws with.
 pub(crate) struct DrawCx<'a> {
     session: &'a Session,
+    hardware: &'a crate::session::AudioHardware,
     views: &'a mut ViewStore,
     queue: &'a mut ActionQueue,
     dt: f32,
@@ -150,12 +151,14 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         strip_resp.context_menu(|ui| {
             rack::device_navigator(ui, &mut queue, root, session.devices(root), &mut Vec::new());
         });
+        let remote = session.remote_controlled();
         let input = PlanInput {
             root: session.devices(root),
             runtimes: &session.runtimes,
             show_all: &state.devices.show_all,
             open_chains: &state.devices.open_chains,
             racks: &state.devices.rack_views,
+            remote: &remote,
         };
         let nodes = tree::plan_chain(chain, session.devices(chain), &input, height);
         let keyboard_free =
@@ -182,6 +185,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         }
         let mut cx = DrawCx {
             session,
+            hardware: &state.hardware,
             views: &mut state.devices.views,
             queue: &mut queue,
             dt,
@@ -682,7 +686,11 @@ fn device_menu(
         cx.queue.push(chain, Action::Fold(dev.id, !dev.expanded));
         ui.close();
     }
-    if is_plugin {
+    let external_instrument = matches!(
+        &dev.kind,
+        DeviceKind::Builtin { type_id, .. } if type_id == "rlive.external_instrument"
+    );
+    if is_plugin || external_instrument {
         let on = dev.mpe.is_some();
         if ui.selectable_label(on, "Enable MPE Mode").clicked() {
             let out = (!on).then(rlive_core::MpeOutput::default);
@@ -802,7 +810,7 @@ fn controls(
     for slot in 0..rt.sample_slots {
         sample_row(&mut bu, cx, chain, dev, slot, body.width());
     }
-    if rt.sidechain_input && !is_plugin {
+    if tree::has_sidechain_chooser(dev, rt) && !is_plugin {
         let mut picked = None;
         let current = super::in_out::sidechain_label(cx.session, dev.id);
         let response = egui::ComboBox::from_id_salt(("sidechain", dev.id))
@@ -952,7 +960,8 @@ fn item(
                 on.then(|| cx.views.reader(dev.id, rt)).flatten(),
                 cx.queue,
                 cx.dt,
-            );
+            )
+            .with_session(cx.session, cx.hardware);
             panels::draw(name, ui, &mut panel);
         }
         Item::Row(_) => {} // Flattened into its children when planned.
@@ -972,7 +981,8 @@ fn param_control(
 ) {
     let base = param_value(dev, rt, prm);
     let owned = plan.macro_owned.contains(&ParamId(prm.id));
-    let disabled = owned || prm.flags.contains(ParamFlags::READ_ONLY);
+    let disabled =
+        owned || prm.flags.contains(ParamFlags::READ_ONLY) || latency_is_disabled(cx, dev, prm);
     let effective = cx.session.effective_norm(chain, dev.id, prm.id);
     let cell = cx.session.device_cell(chain, dev.id, prm.id);
     let cell_state = cell.map_or(Default::default(), |c| cx.session.cell_state(chain, c));
@@ -1001,7 +1011,10 @@ fn param_control(
         Item::Knob(_) => widgets::knob(ui, prm, shown, &text, state),
         Item::Slider(_) => widgets::slider(ui, prm, shown, &text, state),
         Item::Toggle(_) => widgets::toggle(ui, prm, shown, state),
-        Item::Menu(_) => widgets::menu(ui, prm, shown, state),
+        Item::Menu(_) => {
+            ui.push_id(dev.id, |ui| widgets::menu(ui, prm, shown, state))
+                .inner
+        }
         _ => None,
     };
     if let Some(v) = changed {
@@ -1021,6 +1034,38 @@ fn param_control(
             .push((rect, chain, rlive_core::param::EnvTarget::Param(target)));
     }
     rack::map_overlay(ui, cx, chain, rect, target);
+}
+
+/// Hardware Latency is greyed out with Delay Compensation off, and when an External Instrument
+/// is routed inside the Set (manual pp. 611, 742).
+fn latency_is_disabled(cx: &DrawCx, dev: &Device, prm: &ParamInfo) -> bool {
+    use rlive_devices::devices::b2::{lfo, shaper};
+    use rlive_devices::devices::b9::{external_audio_effect as eae, external_instrument as ei};
+    let DeviceKind::Builtin { type_id, .. } = &dev.kind else {
+        return false;
+    };
+    let value = |id: u32| dev.params.get(&id).copied().unwrap_or(0.0);
+    match type_id.as_str() {
+        // Some waves can't be shaped or stepped (manual p. 844).
+        "rlive.lfo" if prm.id == lfo::SHAPE => return matches!(value(lfo::WAVEFORM) as u32, 5..=8),
+        "rlive.lfo" if prm.id == lfo::STEPS => return matches!(value(lfo::WAVEFORM) as u32, 4..=6),
+        // Retrigger does nothing while synced to the song (manual p. 847).
+        "rlive.shaper" if prm.id == shaper::RETRIGGER => return value(shaper::TIME_MODE) >= 0.5,
+        _ => {}
+    }
+    let latency_param = match type_id.as_str() {
+        "rlive.external_audio_effect" => {
+            prm.id == eae::LATENCY_MS
+                || prm.id == eae::LATENCY_SAMPLES
+                || prm.id == eae::LATENCY_MODE
+        }
+        "rlive.external_instrument" => {
+            prm.id == ei::LATENCY_MS || prm.id == ei::LATENCY_SAMPLES || prm.id == ei::LATENCY_MODE
+        }
+        _ => false,
+    };
+    latency_param
+        && (!cx.session.project.delay_compensation || cx.session.external_is_internal(dev.id))
 }
 
 /// The knob position of a parameter: its project value, the plugin's own, or its default.

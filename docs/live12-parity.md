@@ -73,7 +73,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[x]` Presets stored outside Sets; Racks save multi-device combinations [L]
 - `[ ]` In/Out patchbay: external, track-to-track, device routing, resampling, group submix [L]
 - `[ ]` Monitoring modes for inputs [M]
-- `[ ]` External Audio Effect and External Instrument [M HW-optional]
+- `[~]` External Audio Effect and External Instrument [M HW-optional]
 - `[ ]` Arm, multi-arm, Exclusive Arm, auto-arm on instrument insert [S]
 - `[ ]` Arrangement Record: one new clip per armed track per take [M]
 - `[ ]` Session Record into selected scene; second press stops and launches; quantized [M] → launch quantization
@@ -457,7 +457,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[x]` Draw Mode freehand, grid steps, momentary [M]
 - `[ ]` Live devices with MPE and Push 2 poly aftertouch [L HW] → instruments
 - `[ ]` Plug-in MPE: state in default config, MPE out from plug-ins [M] → VST3/CLAP/AU hosting
-- `[ ]` MPE/Multi-channel dialog from External Instrument, mixer I/O, plug-in menu [M]
+- `[~]` MPE/Multi-channel dialog from External Instrument, mixer I/O, plug-in menu [M]
 - `[~]` Output zones lower/upper, channel count; global channels 1 and 16; one zone per track; zones output-only [M]
 - `[x]` Multi-channel mode with arbitrary range for multitimbral targets [S]
 
@@ -599,7 +599,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[x]` MIDI output to another track, targeting Track In or a specific device directly. M
 - `[x]` No Input type hides Arm. S
 - `[ ]` Multi-output instruments appear as sources. Tapping an Impulse slot removes it from Impulse's mix; plug-ins do not do this. M
-- `[ ]` Multi-timbral plug-ins: MIDI by channel, aux outputs by track or via External Instrument. M
+- `[~]` Multi-timbral plug-ins: MIDI by channel, aux outputs by track or via External Instrument. M
 - `[~]` Plug-in sidechain inputs as routing targets; built-in devices have their own sidechain choosers. M
 - `[x]` MIDI tapped from another track is taken after MIDI effects and before the instrument. S
 
@@ -885,7 +885,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 | EQ Eight (606-608) | Stereo, L/R, M/S; 8 responses; Adaptive Q; audition; oversampling; expanded view | 8 bands, scale, analyzer | Biquads, FFT analyzer | M | `[~]` |
 | EQ Three (608-609) | 24 or 48 dB | 3 gains to -inf, crossovers, LEDs | Analog-style crossover with deliberate colouring | S [P] | `[~]` |
 | Erosion (609-610) | Sine to noise blend; Legacy for pre-12.4 Sets | Freq, amount, width, stereo | Short delay modulated by sine and filtered noise | S | `[~]` |
-| External Audio Effect (610-611) | ms or samples latency | Out, In, gains, invert, dry/wet | Hardware insert, manual PDC | M [H] | `[ ]` |
+| External Audio Effect (610-611) | ms or samples latency | Out, In, gains, invert, dry/wet | Hardware insert, manual PDC | M [H] | `[~]` |
 | Filter Delay (612) | 3 taps; sync | Filters X-Y, time, feedback, pan, dry | Delay plus filters in feedback | S | `[x]` |
 | Gate (613-615) | Flip; lookahead 0/1/10 ms | Threshold, return, attack, hold, release, floor, sidechain | Hysteresis gate, lookahead | S | `[~]` |
 | Glue Compressor (615-617) | Auto release; soft clip; oversampling | Threshold, ratio, attack, release, range, makeup, sidechain | VCA bus model, dual-time release | L [P] | `[~]` |
@@ -1014,7 +1014,7 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 - `[x]` Global: voices, tuning, stretch, bend and per-note bend.
 
 **External Instrument (741-742)** [M] {HW optional}
-- `[ ]` Not stated. Routing utility: MIDI to port or multitimbral plug-in, audio returned.
+- `[~]` Not stated. Routing utility: MIDI to port or multitimbral plug-in, audio returned.
 - `[ ]` Gain; manual hardware latency in ms or samples.
 - `[ ]` Depends on delay compensation, routing, plug-in host.
 
@@ -1099,28 +1099,28 @@ All pitch-related controls support scale degrees through Use Current Scale. Edit
 Listed as editable with Suite or Standard plus add-on; otherwise editions not stated. All can be native, no Max needed. No proprietary algorithm is claimed.
 
 **Instruments (8):** each has a preview click, decay and volume.
-- `[ ]` DS Clang (831) [S]: two tones, noise, filter, clave repeats
-- `[ ]` DS Clap (832) [S]: noise plus impulse through panned delays; Sloppy, Tail, Spread
-- `[ ]` DS Cymbal (833) [S]: sine and pulse plus high-passed noise
-- `[ ]` DS FM (834) [S]: FM with feedback, modulation-type blend
-- `[ ]` DS HH (835) [S]: noise and sine; white/pink; 12/24 dB HP
-- `[ ]` DS Kick (836) [S]: modulated sine, drive, overtones, click, pitch env
-- `[ ]` DS Snare (837) [S]: oscillator plus filtered noise
-- `[ ]` DS Tom (838) [S]: impulse plus oscillators, band-pass resonances, pitch bend env
+- `[~]` DS Clang (831) [S]: two tones, noise, filter, clave repeats
+- `[~]` DS Clap (832) [S]: noise plus impulse through panned delays; Sloppy, Tail, Spread
+- `[~]` DS Cymbal (833) [S]: sine and pulse plus high-passed noise
+- `[~]` DS FM (834) [S]: FM with feedback, modulation-type blend
+- `[~]` DS HH (835) [S]: noise and sine; white/pink; 12/24 dB HP
+- `[~]` DS Kick (836) [S]: modulated sine, drive, overtones, click, pitch env
+- `[~]` DS Snare (837) [S]: oscillator plus filtered noise
+- `[~]` DS Tom (838) [S]: impulse plus oscillators, band-pass resonances, pitch bend env
 
 **Audio effects (4):**
 - `[x]` Align Delay (839) [S]: time, samples or distance with temperature; per-channel or linked
-- `[ ]` Envelope Follower (840-842) [M]: gain, rise, fall, delay, sidechain with mix
-- `[ ]` LFO (843-845) [M]: 9 waves, shape, steps, jitter, smooth, depth, offset, phase, hold, retrigger
-- `[ ]` Shaper (846-848) [M]: breakpoint envelope, curves, grid, 6 presets, scope; Loop, 1-Shot, Manual
+- `[~]` Envelope Follower (840-842) [M]: gain, rise, fall, delay, sidechain with mix
+- `[~]` LFO (843-845) [M]: 9 waves, shape, steps, jitter, smooth, depth, offset, phase, hold, retrigger
+- `[~]` Shaper (846-848) [M]: breakpoint envelope, curves, grid, 6 presets, scope; Loop, 1-Shot, Manual
 
 **MIDI effects (6):**
-- `[ ]` Envelope MIDI (848-850) [M]: ADSR with Free, Sync, Loop, Echo; velocity, slopes
+- `[~]` Envelope MIDI (848-850) [M]: ADSR with Free, Sync, Loop, Echo; velocity, slopes
 - `[~]` Expression Control (851-852) [M]: 5 slots from 10 sources incl. Increment and Random; curves, smoothing
 - `[~]` MIDI Monitor (853-854) [S]: note, flow, MPE views; freeze
 - `[~]` MPE Control (855-860) [M]: per-source curves and smoothing; pressure to aftertouch, slide to CC1, note bend to global; Abs/Rel/Onset slide, Centered, pitch range
 - `[x]` Note Echo (861-862) [S]: synced or ms echoes with pitch, velocity, feedback, MPE feedback
-- `[ ]` Shaper MIDI (862-864) [M]: note-triggered breakpoints, sustain point, velocity, loop, echo
+- `[~]` Shaper MIDI (862-864) [M]: note-triggered breakpoints, sustain point, velocity, loop, echo
 
 **Shared modulator core [L]:** map any automatable parameter, up to 8 targets; Modulation (base plus bipolar/unipolar depth) or Remote Control (min/max override). Depends on the parameter graph and parameter locking in the UI.
 

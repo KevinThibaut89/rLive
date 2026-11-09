@@ -21,6 +21,9 @@ pub struct MapFrame {
     labels: HashMap<MapTarget, String>,
     clicked: Option<MapTarget>,
     delete: Option<usize>,
+    /// A modulator's Map button is waiting for a parameter.
+    mod_armed: bool,
+    mod_clicked: Option<ParamRef>,
 }
 
 fn frame_id() -> Id {
@@ -38,6 +41,8 @@ pub fn begin_frame(ctx: &egui::Context, session: &Session) {
         f.mode = mode;
         f.selected = session.map_target();
         f.clicked = None;
+        f.mod_armed = session.armed_mod_map().is_some();
+        f.mod_clicked = None;
         f.labels.clear();
         if let Some(mode) = mode {
             for row in session.mapping_rows(mode) {
@@ -53,6 +58,9 @@ pub fn begin_frame(ctx: &egui::Context, session: &Session) {
 
 /// Call at the end of a frame: applies a click on an overlay.
 pub fn end_frame(ctx: &egui::Context, session: &mut Session) {
+    if let Some(target) = with_frame(ctx, |f| f.mod_clicked.take()) {
+        session.finish_mod_map(target);
+    }
     if let Some(target) = with_frame(ctx, |f| f.clicked.take()) {
         session.select_map_target(Some(target));
     }
@@ -74,6 +82,21 @@ fn map_color(mode: MapMode) -> Color32 {
 
 /// Marks `rect` as mappable to `target`. Does nothing outside the map modes.
 pub fn overlay(ui: &egui::Ui, rect: Rect, target: MapTarget) {
+    if let MapTarget::Param(param) = target {
+        if with_frame(ui.ctx(), |f| f.mod_armed) {
+            let id = ui.scope_id().with(("mod_overlay", target));
+            let resp = ui.interact(rect, id, Sense::click());
+            ui.painter_at(rect.expand(1.0)).rect_filled(
+                rect,
+                2.0,
+                pal().accent.gamma_multiply(0.3),
+            );
+            if resp.clicked() {
+                with_frame(ui.ctx(), |f| f.mod_clicked = Some(param));
+            }
+            return;
+        }
+    }
     let info = with_frame(ui.ctx(), |f| {
         f.mode
             .map(|m| (m, f.selected, f.labels.get(&target).cloned()))

@@ -6,48 +6,6 @@
 
 use crate::BuiltinInfo;
 
-/// Declares a stub: a device in the registry that passes everything through and is hidden from
-/// the browser. MIDI effects forward their events; audio effects and instruments leave the audio
-/// alone, so an instrument adds silence and an effect is transparent.
-macro_rules! stub_device {
-    ($id:literal, $name:literal, $category:literal, $role:ident $(, mod_out: [$($m:literal),*])?) => {
-        /// The passthrough for this stub.
-        #[derive(Default)]
-        pub struct Stub;
-
-        impl rlive_core::Processor for Stub {
-            fn activate(&mut self, _: f64, _: usize) {}
-
-            fn process(&mut self, ctx: &mut rlive_core::ProcessContext) {
-                if $crate::DeviceRole::$role == $crate::DeviceRole::MidiEffect {
-                    ctx.events_out.extend(ctx.events);
-                }
-            }
-
-            fn set_param(&mut self, _: u32, _: f64) {}
-        }
-
-        pub static INFO: $crate::BuiltinInfo = $crate::BuiltinInfo {
-            id: $id,
-            name: $name,
-            role: $crate::DeviceRole::$role,
-            category: $category,
-            status: rlive_core::Status::Stub,
-            desc: || rlive_core::DeviceDesc {
-                ports: rlive_core::Ports {
-                    midi_out: $crate::DeviceRole::$role == $crate::DeviceRole::MidiEffect,
-                    mod_out: vec![$($($m),*)?],
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            create: |_| Box::<Stub>::default(),
-        };
-    };
-}
-
-pub(crate) use stub_device;
-
 pub mod b1;
 pub mod b10;
 pub mod b11;

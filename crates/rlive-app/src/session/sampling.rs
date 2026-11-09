@@ -48,6 +48,9 @@ fn state_resource(type_id: &str, text: &str) -> Option<Resource> {
             map: ZoneMap::parse(Some(text)),
         })),
         "rlive.operator" => Some(Arc::new(ParsedWaves::parse(Some(text)))),
+        "rlive.shaper" | "rlive.shaper_midi" => Some(Arc::new(
+            rlive_devices::devices::b2::breakpoints::ParsedShape::parse(Some(text)),
+        )),
         _ => None,
     }
 }

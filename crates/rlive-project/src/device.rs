@@ -1,5 +1,5 @@
 use crate::defaults::{is_default, yes};
-use crate::FileRef;
+use crate::{ExternalRoute, FileRef};
 use rlive_core::param::rack::MACRO_COUNT;
 use rlive_core::param::ParamRef;
 use rlive_core::{ChainId, DeviceId, PluginFormat, TrackId};
@@ -277,6 +277,12 @@ pub struct Device {
     /// The device's A/B states (manual pp. 454-457). `None` until they differ.
     #[serde(default, skip_serializing_if = "is_default")]
     pub compare: Option<Box<DeviceCompare>>,
+    /// What a modulator device is mapped to: at most one target per output.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub modulations: Vec<ModMapping>,
+    /// Where External Audio Effect or External Instrument connects.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub external: Option<ExternalIo>,
 }
 
 /// Which of a device's two states is showing.
@@ -303,6 +309,53 @@ pub struct DeviceCompare {
     pub selected: CompareSlot,
     /// The state that isn't selected.
     pub other: DeviceState,
+}
+
+/// One target of a modulator device: output `slot` drives `target`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModMapping {
+    pub slot: u8,
+    pub target: ParamRef,
+}
+
+/// Where a device that talks to the outside world connects (manual pp. 611, 741-742).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ExternalIo {
+    /// The hardware outputs the signal goes to.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub audio_to: Option<ExternalRoute>,
+    /// Where the processed or played signal comes back from.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub audio_from: Option<ExternalReturn>,
+    /// External Instrument: where its MIDI goes.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub midi_to: Option<ExternalMidi>,
+}
+
+/// Where External Audio Effect or External Instrument gets its audio back from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExternalReturn {
+    /// Inputs of the audio interface.
+    Hardware(ExternalRoute),
+    /// An auxiliary output of a multitimbral plug-in on another track.
+    Aux {
+        track: TrackId,
+        device: DeviceId,
+        output: u8,
+    },
+}
+
+/// Where External Instrument sends its MIDI.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExternalMidi {
+    /// A physical port, by name.
+    Port { port: String, channel: u8 },
+    /// A multitimbral plug-in on another track.
+    Track {
+        track: TrackId,
+        device: Option<DeviceId>,
+        channel: u8,
+    },
 }
 
 /// The source a device's sidechain input is set to, as its built-in chooser shows it.
@@ -345,6 +398,8 @@ impl Device {
             sidechain: None,
             mpe: None,
             compare: None,
+            modulations: Vec::new(),
+            external: None,
         }
     }
 

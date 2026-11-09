@@ -61,6 +61,14 @@ pub(crate) enum Action {
     CompareSwitch(DeviceId),
     /// The Hot-Swap Preset, Sample or chain button.
     HotSwap(crate::session::SwapTarget),
+    /// A modulator's Map button was pressed or let go.
+    ArmModMap(DeviceId, usize, bool),
+    /// A modulator's output stops driving what it drove.
+    UnmapMod(DeviceId, usize),
+    /// A Drum Synth's display was clicked.
+    PreviewDevice(DeviceId),
+    /// An External device was connected differently.
+    SetExternal(DeviceId, rlive_project::ExternalIo),
 }
 
 /// The actions of one frame, in the order they happened.
@@ -97,6 +105,16 @@ fn apply(
         Action::Fold(id, expanded) => session.set_device_expanded(chain, id, expanded),
         Action::Param(id, p, v) => session.set_param(chain, id, p, v),
         Action::DeviceState(id, text) => session.set_device_state(chain, id, text),
+        Action::ArmModMap(id, slot, armed) => {
+            session.arm_mod_map(armed.then_some((id, slot)));
+        }
+        Action::UnmapMod(id, slot) => session.unmap_modulator(id, slot),
+        Action::PreviewDevice(id) => session.preview_device(chain, id),
+        Action::SetExternal(id, io) => {
+            if !session.set_external_io(chain, id, io) {
+                *status = "That route would make a feedback loop".to_string();
+            }
+        }
         Action::Sampling(id, command) => session.sampling_command(chain, id, command),
         Action::ReEnable(id, p) => {
             if let Some(cell) = session.device_cell(chain, id, p) {

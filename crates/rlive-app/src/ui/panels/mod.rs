@@ -13,16 +13,20 @@ mod collision_display;
 mod compressor_display;
 mod corpus_display;
 mod drift_display;
+mod ds_display;
 mod echo_tunnel;
 mod electric_display;
 mod eq_eight_display;
 mod eq_three_leds;
+mod external_io;
 mod gain_reduction;
 mod gate_display;
 mod hybrid_algo_view;
 mod hybrid_ir_view;
 mod looper_transport;
 mod midi_monitor;
+mod mod_map;
+mod modulator_scope;
 mod multiband_display;
 mod operator_display;
 mod plot;
@@ -30,6 +34,7 @@ mod roar_matrix;
 mod sample_ui;
 mod sampler_panels;
 mod scale_matrix;
+mod shaper_editor;
 mod simpler_panels;
 mod spectrogram;
 mod spectrum_display;
@@ -57,6 +62,10 @@ pub struct PanelCtx<'a> {
     queue: &'a mut ActionQueue,
     /// How long the last frame took, in seconds.
     pub dt: f32,
+    /// The session, for panels that show what's around the device.
+    pub session: Option<&'a crate::session::Session>,
+    /// The audio channels the choosers can offer.
+    pub hardware: Option<&'a crate::session::AudioHardware>,
 }
 
 // The Compressor's panel only reads a view. These are what a panel that shows or changes
@@ -78,7 +87,53 @@ impl<'a> PanelCtx<'a> {
             view,
             queue,
             dt,
+            session: None,
+            hardware: None,
         }
+    }
+
+    /// What panels that show the device's surroundings read.
+    pub(super) fn with_session(
+        mut self,
+        session: &'a crate::session::Session,
+        hardware: &'a crate::session::AudioHardware,
+    ) -> Self {
+        self.session = Some(session);
+        self.hardware = Some(hardware);
+        self
+    }
+
+    /// Arms or disarms one of this device's Map buttons.
+    pub fn arm_mod_map(&mut self, slot: usize, armed: bool) {
+        self.queue
+            .push(self.chain, Action::ArmModMap(self.device.id, slot, armed));
+    }
+
+    /// Lets go of what one of this device's outputs drives.
+    pub fn unmap_mod(&mut self, slot: usize) {
+        self.queue
+            .push(self.chain, Action::UnmapMod(self.device.id, slot));
+    }
+
+    /// Fires this device with a short note.
+    pub fn preview_note(&mut self) {
+        self.queue
+            .push(self.chain, Action::PreviewDevice(self.device.id));
+    }
+
+    /// Changes where an External device connects.
+    pub fn set_external(&mut self, io: rlive_project::ExternalIo) {
+        self.queue
+            .push(self.chain, Action::SetExternal(self.device.id, io));
+    }
+
+    /// A parameter of this device by name.
+    pub fn runtime_param(&self, name: &str) -> Option<ParamId> {
+        self.runtime
+            .params
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.param_id())
     }
 
     /// A parameter of this device, unless it's hidden or gone.
@@ -212,6 +267,12 @@ pub const PANELS: &[PanelDef] = &[
     auto_shift_display::PANEL,
     spectrogram::TIME,
     spectrogram::RESONATOR,
+    mod_map::PANEL,
+    mod_map::EXPRESSION,
+    modulator_scope::PANEL,
+    shaper_editor::PANEL,
+    ds_display::PANEL,
+    external_io::PANEL,
 ];
 
 /// What a panel takes up when the table has no entry for it.

@@ -37,6 +37,7 @@ pub(super) fn routes_for(
     owner: ChainRef,
     layout: &BusLayout,
     clips: (&[Option<Clip>], &[ArrangementClip]),
+    mods: impl FnOnce(&HashSet<CellIx>) -> Vec<rlive_engine::ModRoute>,
 ) -> Arc<TrackRoutes> {
     let lanes = envelopes
         .iter()
@@ -51,6 +52,7 @@ pub(super) fn routes_for(
         .collect();
     let mut macros = Vec::new();
     collect_macro_routes(devices, owner, layout, &mut macros);
+    let macro_cells: HashSet<CellIx> = macros.iter().map(|m| m.target()).collect();
     let session = clips
         .0
         .iter()
@@ -68,6 +70,7 @@ pub(super) fn routes_for(
     Arc::new(
         TrackRoutes::new(lanes)
             .with_macros(macros)
+            .with_mods(mods(&macro_cells))
             .with_clips(session, lane),
     )
 }
@@ -406,14 +409,18 @@ impl Session {
         }
     }
 
-    fn compiled_routes(&self, track: TrackRef) -> Option<Arc<TrackRoutes>> {
+    pub(super) fn compiled_routes(&self, track: TrackRef) -> Option<Arc<TrackRoutes>> {
         let owner = owner_of(track);
+        let layout = self.layouts.get(&owner)?;
+        let plan = super::modulators::ModPlan::of(&self.project);
+        let mut slots = self.mod_slots.clone();
         Some(routes_for(
             self.envelopes(track)?,
             self.track_devices(track)?,
             owner,
-            self.layouts.get(&owner)?,
+            layout,
             self.track_clips(track),
+            |macros| plan.routes(owner, layout, &mut slots, macros),
         ))
     }
 

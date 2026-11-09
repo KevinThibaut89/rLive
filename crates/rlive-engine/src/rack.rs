@@ -460,6 +460,8 @@ impl ChainNode {
                     buses: &mut *at.buses,
                     direct: at.direct,
                     merge: &mut *at.merge,
+                    mods: &mut *at.mods,
+                    midi_sink: &mut *at.midi_sink,
                 };
                 run_chain(
                     &mut self.devices,

@@ -129,6 +129,10 @@ pub struct RenderPlan {
     pub io: Vec<TrackIo>,
     /// Tracks heard through hardware outputs of their own.
     pub hardware: Vec<HardwareOut>,
+    /// Devices' extra outputs that go straight to hardware outputs.
+    pub hardware_sends: Vec<HardwareSend>,
+    /// Hardware inputs that feed devices' sidechain inputs.
+    pub hardware_returns: Vec<HardwareReturn>,
     /// The hardware the Main output goes to.
     pub main_out: OutputPair,
     /// The output that Cue switches go to, when Solo/Cue is set to Cue.
@@ -269,6 +273,9 @@ pub struct SidechainIn {
     pub read: BusRead,
     /// The bus the device reads, holding the signal after its delay.
     pub feed: u32,
+    /// Reads a track that renders after the device's own, so it can only hear the past. Adds no
+    /// dependency between the two.
+    pub feedback: bool,
 }
 
 /// MIDI from one track to another, taken after MIDI effects and before any instrument.
@@ -319,6 +326,25 @@ impl Default for OutputPair {
     }
 }
 
+/// A tap bus that plays straight out of a hardware output, as External Audio Effect sends do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HardwareSend {
+    pub bus: u32,
+    pub out: OutputPair,
+}
+
+/// Hardware inputs read into the sidechain input of a device, through an A11 input path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HardwareReturn {
+    pub device: DeviceId,
+    /// The track holding the device.
+    pub to: u32,
+    pub channel: u16,
+    pub stereo: bool,
+    /// The bus the device reads.
+    pub feed: u32,
+}
+
 /// A track whose output goes to its own hardware output instead of the Main output.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HardwareOut {
@@ -338,6 +364,8 @@ impl RenderPlan {
             midi: Vec::new(),
             io: Vec::new(),
             hardware: Vec::new(),
+            hardware_sends: Vec::new(),
+            hardware_returns: Vec::new(),
             main_out: OutputPair::default(),
             cue: None,
             crossfade_curve: CrossfadeCurve::default(),
@@ -391,8 +419,14 @@ impl RenderPlan {
             (level.start == end && level.end >= level.start).then_some(level.end)
         });
         let bus_ok = |b: u32| b < self.buses;
-        let wired = self.tap_outs.len() + self.sidechains.len() == self.buses as usize
+        let wired = self.tap_outs.len() + self.sidechains.len() + self.hardware_returns.len()
+            == self.buses as usize
             && self.tap_outs.iter().all(|t| bus_ok(t.bus))
+            && self.hardware_sends.iter().all(|h| bus_ok(h.bus))
+            && self
+                .hardware_returns
+                .iter()
+                .all(|h| bus_ok(h.feed) && (h.to as usize) < tracks)
             && self
                 .sidechains
                 .iter()
@@ -461,7 +495,10 @@ impl RenderPlan {
         };
         inputs_fit
             && self.midi.iter().all(|m| before(m.from, m.to))
-            && self.sidechains.iter().all(|s| before(s.from, s.to))
+            && self.sidechains.iter().all(|s| {
+                ((s.from as usize) < tracks && (s.to as usize) < tracks)
+                    && (s.feedback || before(s.from, s.to))
+            })
             && self.tap_outs.iter().all(|t| (t.track as usize) < tracks)
             && self
                 .hardware
@@ -485,6 +522,10 @@ impl RenderPlan {
 
     pub(crate) fn sidechains_into(&self, track: u32) -> impl Iterator<Item = &SidechainIn> {
         self.sidechains.iter().filter(move |s| s.to == track)
+    }
+
+    pub(crate) fn returns_into(&self, track: u32) -> impl Iterator<Item = &HardwareReturn> {
+        self.hardware_returns.iter().filter(move |s| s.to == track)
     }
 
     pub(crate) fn input_of(&self, track: usize) -> InputSource {

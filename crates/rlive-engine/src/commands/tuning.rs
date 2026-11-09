@@ -1,8 +1,9 @@
 //! Tuning systems and MPE output, per track.
 
-use crate::track::{DeviceBody, DeviceSlot};
+use crate::midi_out::PortRoute;
+use crate::track::{find_device, DeviceBody, DeviceSlot};
 use crate::{retire, Engine, Garbage};
-use rlive_core::{KeyLayout, MpeEncoder, TrackId, TuningTable, TUNING_SLOT};
+use rlive_core::{DeviceId, KeyLayout, MpeEncoder, TrackId, TuningTable, TUNING_SLOT};
 use std::sync::Arc;
 
 pub enum TuningCmd {
@@ -18,6 +19,13 @@ pub enum TuningCmd {
     SetOutput {
         track: TrackId,
         port: Option<u16>,
+        encoder: Option<Box<MpeEncoder>>,
+    },
+    /// Where an External Instrument's MIDI goes and how it is spread over channels.
+    SetDeviceOutput {
+        track: TrackId,
+        device: DeviceId,
+        route: Option<PortRoute>,
         encoder: Option<Box<MpeEncoder>>,
     },
 }
@@ -86,6 +94,31 @@ impl Engine {
                     t.midi_tap = true;
                 }
                 if let Some(old) = std::mem::replace(&mut t.mpe_out, encoder) {
+                    retire(&mut self.garbage, Garbage::Boxed(old));
+                }
+            }
+            TuningCmd::SetDeviceOutput {
+                track,
+                device,
+                route,
+                encoder,
+            } => {
+                let found = self
+                    .tracks
+                    .iter_mut()
+                    .find(|t| t.id == track)
+                    .and_then(|t| find_device(&mut t.devices, device));
+                let Some(d) = found else {
+                    if let Some(e) = encoder {
+                        retire(&mut self.garbage, Garbage::Boxed(e));
+                    }
+                    return;
+                };
+                if d.midi_port != route {
+                    d.release_midi(&mut self.midi_sink, 0);
+                }
+                d.midi_port = route;
+                if let Some(old) = std::mem::replace(&mut d.midi_encoder, encoder) {
                     retire(&mut self.garbage, Garbage::Boxed(old));
                 }
             }

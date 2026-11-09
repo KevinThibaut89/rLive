@@ -254,6 +254,7 @@ pub struct KeyMapping {
 impl Project {
     /// Drops the mappings whose target no longer exists. Returns how many went.
     pub fn prune_mappings(&mut self) -> usize {
+        self.prune_modulations();
         if self.midi_mappings.is_empty()
             && self.key_mappings.is_empty()
             && self.surface_locks.is_empty()
@@ -267,6 +268,39 @@ impl Project {
         self.surface_locks
             .retain(|(_, d)| known.devices.contains(d));
         before - self.midi_mappings.len() - self.key_mappings.len()
+    }
+
+    /// Drops a modulator's mapping when what it drove has gone.
+    fn prune_modulations(&mut self) {
+        let any = self
+            .tracks
+            .iter()
+            .chain(&self.returns)
+            .chain(std::iter::once(&self.master))
+            .any(|t| {
+                t.devices.iter().any(|d| {
+                    let mut mapped = false;
+                    d.for_each(&mut |d| mapped |= !d.modulations.is_empty());
+                    mapped
+                })
+            });
+        if !any {
+            return;
+        }
+        let known = KnownTargets::of(self);
+        for t in self
+            .tracks
+            .iter_mut()
+            .chain(self.returns.iter_mut())
+            .chain(std::iter::once(&mut self.master))
+        {
+            for d in &mut t.devices {
+                d.for_each_mut(&mut |d| {
+                    d.modulations
+                        .retain(|m| known.has(MapTarget::Param(m.target)));
+                });
+            }
+        }
     }
 
     /// Moves mappings on scenes and slots as scenes move. `old_to_new` says where each old scene

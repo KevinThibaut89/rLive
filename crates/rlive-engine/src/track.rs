@@ -7,6 +7,8 @@ use crate::clip::{BlockTime, ClipData, ClipPlayer};
 use crate::delay::{offer_line, FadingDelay, StereoLine, TapLines};
 use crate::graph::{BusIn, InputGate, Tap, TrackIo};
 use crate::lane::{ArrangementLane, LanePlayer};
+use crate::midi_out::{HeldNotes, MidiOutSink, PortRoute};
+use crate::modulation::{ModBus, NO_MOD_BASE};
 use crate::params::{mix_cell, MAX_SENDS};
 use crate::params::{
     BusLayout, CellIx, ControlHooks, ControlStep, ParamBus, TrackRoutes, CONTROL_STEP,
@@ -51,6 +53,8 @@ pub struct DeviceSlot {
     pub latency: Arc<AtomicU32>,
     /// One value per declared modulation source. Holds its value between blocks.
     pub mod_out: Box<[f32]>,
+    /// Where `mod_out` goes on the engine's [`ModBus`], or [`NO_MOD_BASE`].
+    pub mod_base: u32,
     /// Where the device's view data goes. `None` for a device with nothing to show.
     pub view: Option<Arc<ViewChannel>>,
     /// What this device was fed, so bypassing it can keep its timing: a bypassed effect is out
@@ -63,6 +67,12 @@ pub struct DeviceSlot {
     pub(crate) aux_taps: [Option<u32>; MAX_AUX_OUTS],
     /// The bus its sidechain input reads, when something is routed to it.
     pub(crate) sidechain: Option<u32>,
+    /// The hardware port what this device hears also goes to.
+    pub(crate) midi_port: Option<PortRoute>,
+    /// Spreads it over channels, when the device is in MPE Mode.
+    pub(crate) midi_encoder: Option<Box<MpeEncoder>>,
+    /// The notes it has started on that port.
+    pub(crate) midi_held: HeldNotes,
 }
 
 impl DeviceSlot {
@@ -76,12 +86,16 @@ impl DeviceSlot {
             midi_effect: false,
             latency: Arc::new(AtomicU32::new(0)),
             mod_out: Box::default(),
+            mod_base: NO_MOD_BASE,
             view: None,
             bypass_line: None,
             bypass_delay: FadingDelay::default(),
             aux: Vec::new(),
             aux_taps: [None; MAX_AUX_OUTS],
             sidechain: None,
+            midi_port: None,
+            midi_encoder: None,
+            midi_held: HeldNotes::default(),
         }
     }
 
@@ -194,6 +208,57 @@ impl DeviceSlot {
             for chain in r.chains.iter_mut().chain(r.returns.iter_mut()) {
                 chain.taps = TapSlots::default();
                 chain.devices.iter_mut().for_each(|d| d.clear_routing());
+            }
+        }
+    }
+
+    /// Modulators here have stopped, or are about to start: nothing of theirs is current.
+    fn silence_mods(&self, mods: &mut ModBus) {
+        if self.mod_base != NO_MOD_BASE {
+            mods.switch_off(self.mod_base, self.mod_out.len());
+        }
+        if let DeviceBody::Rack(r) = &self.body {
+            for d in r
+                .chains
+                .iter()
+                .chain(r.returns.iter())
+                .flat_map(|c| c.devices.iter())
+            {
+                d.silence_mods(mods);
+            }
+        }
+    }
+
+    /// A device arrived: whatever used its place on the bus before it is forgotten.
+    pub(crate) fn reset_mods(&self, mods: &mut ModBus) {
+        if self.mod_base != NO_MOD_BASE {
+            mods.clear(self.mod_base, self.mod_out.len());
+        }
+        if let DeviceBody::Rack(r) = &self.body {
+            for d in r
+                .chains
+                .iter()
+                .chain(r.returns.iter())
+                .flat_map(|c| c.devices.iter())
+            {
+                d.reset_mods(mods);
+            }
+        }
+    }
+
+    /// End the notes this device and anything in it has held on a hardware port.
+    pub(crate) fn release_midi(&mut self, sink: &mut MidiOutSink, offset: u32) {
+        if let Some(route) = self.midi_port {
+            sink.release(route, &mut self.midi_held, offset);
+        }
+        if let Some(encoder) = &mut self.midi_encoder {
+            encoder.reset();
+        }
+        if let DeviceBody::Rack(r) = &mut self.body {
+            for chain in r.chains.iter_mut().chain(r.returns.iter_mut()) {
+                for d in chain.devices.iter_mut() {
+                    d.release_midi(sink, offset);
+                }
             }
         }
     }
@@ -731,6 +796,10 @@ pub(crate) struct Stretch<'a> {
     pub tuning: Option<&'a TuningTable>,
     /// Room to write MIDI with the tuning applied.
     pub tuned: &'a mut EventQueue,
+    /// Where modulators publish what they computed.
+    pub mods: &'a mut ModBus,
+    /// Where MIDI bound for hardware ports goes.
+    pub midi_sink: &'a mut MidiOutSink,
 }
 
 /// One stretch of a block running through a device chain.
@@ -779,6 +848,10 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
         if dev.bypass && !flush {
             let (from, to) = (at.from as usize, at.from as usize + left.len());
             dev.silence_taps(at.buses, from, to);
+            dev.silence_mods(at.mods);
+            if dev.midi_port.is_some() {
+                dev.release_midi(at.midi_sink, at.from);
+            }
             continue;
         }
         let aux_count = dev.aux.len().min(MAX_AUX_OUTS);
@@ -873,6 +946,23 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
                 };
                 processor.process(&mut ctx);
                 dev.latency.store(processor.latency(), Ordering::Relaxed);
+                if dev.mod_base != NO_MOD_BASE {
+                    at.mods.publish(dev.mod_base, &dev.mod_out);
+                }
+                if let Some(route) = dev.midi_port.filter(|_| !flush) {
+                    let (sink, held, from) = (&mut *at.midi_sink, &mut dev.midi_held, at.from);
+                    match dev.midi_encoder.as_deref_mut() {
+                        // What it hears already has the track's tuning on each note.
+                        Some(encoder) => encoder.encode(heard, &mut |e| {
+                            sink.send_encoded(route, held, e.message, from + e.offset);
+                        }),
+                        None => {
+                            for e in heard {
+                                sink.send(route, held, e.message, from + e.offset);
+                            }
+                        }
+                    }
+                }
                 for (i, bus) in dev.aux.iter().enumerate() {
                     let Some(tap) = dev.aux_taps[i] else {
                         continue;
@@ -900,6 +990,8 @@ pub(crate) fn run_chain(devices: &mut [Box<DeviceSlot>], run: ChainRun<'_, '_>) 
                     merge: &mut *at.merge,
                     tuning: at.tuning,
                     tuned: &mut *at.tuned,
+                    mods: &mut *at.mods,
+                    midi_sink: &mut *at.midi_sink,
                 };
                 rack.run(
                     &mut left[..0],
@@ -957,8 +1049,12 @@ fn run_writers(
     index: u32,
     offset: usize,
     ctx: &BlockCtx,
+    mods: &ModBus,
 ) {
     let tick = ctx.tick_at(offset);
+    // How far through its ramp this step is: the block's last step lands on the published value.
+    let steps = ctx.frames.div_ceil(CONTROL_STEP).max(1);
+    let ramp = (index as f32 + 1.0) / steps as f32;
     let Some(hooks) = hooks else {
         if automate {
             routes.automate(tick, bus);
@@ -966,6 +1062,7 @@ fn run_writers(
         if let Some((clip, local)) = clip {
             clip.run(local, bus);
         }
+        routes.run_mods(mods, ramp, bus);
         routes.run_macros(bus);
         return;
     };
@@ -982,6 +1079,8 @@ fn run_writers(
     if let Some((clip, local)) = clip {
         clip.run(local, bus);
     }
+    // Ahead of the macros, so a modulator on a macro's knob is heard at this step.
+    routes.run_mods(mods, ramp, bus);
     // After automation, so a macro's own automated knob is heard at this step.
     routes.run_macros(bus);
     hooks.automation(step, bus);
@@ -1056,6 +1155,8 @@ pub struct TrackNode {
     pub(crate) midi_out: Vec<MidiEvent>,
     /// MIDI addressed to one device in this track this block.
     pub(crate) direct: Vec<(DeviceId, MidiEvent)>,
+    /// A preview note waiting for the next block.
+    pending_direct: Vec<(DeviceId, MidiMessage)>,
     merge: EventQueue,
     /// The tuning system this track plays, if it plays one.
     pub(crate) tuning: Option<Arc<TuningTable>>,
@@ -1142,6 +1243,7 @@ impl TrackNode {
             midi_tap: false,
             midi_out: Vec::with_capacity(MAX_EVENTS),
             direct: Vec::with_capacity(MAX_EVENTS),
+            pending_direct: Vec::with_capacity(16),
             merge: EventQueue::with_capacity(MAX_EVENTS),
             tuning: None,
             key_layout: None,
@@ -1253,6 +1355,9 @@ impl TrackNode {
         self.events.clear();
         self.midi_out.clear();
         self.direct.clear();
+        for (device, message) in self.pending_direct.drain(..) {
+            self.direct.push((device, MidiEvent::new(0, message)));
+        }
 
         if transport.playing {
             if self.follow && !self.lane_muted {
@@ -1442,6 +1547,13 @@ impl TrackNode {
         }
     }
 
+    /// Queue a note straight to a device for the next block.
+    pub(crate) fn queue_direct(&mut self, device: DeviceId, message: MidiMessage) {
+        if self.pending_direct.len() < self.pending_direct.capacity() {
+            self.pending_direct.push((device, message));
+        }
+    }
+
     /// Have a device read its sidechain from a bus.
     pub(crate) fn wire_sidechain(&mut self, device: DeviceId, feed: u32) {
         if let Some(d) = find_device(&mut self.devices, device) {
@@ -1529,6 +1641,8 @@ impl TrackNode {
         to: usize,
         ctx: &BlockCtx,
         buses: &mut [TapBus],
+        mods: &mut ModBus,
+        sink: &mut MidiOutSink,
         on_param: &mut dyn FnMut(TrackId, DeviceId, u32, f64),
     ) {
         let from = self.cursor.frames;
@@ -1567,6 +1681,7 @@ impl TrackNode {
             buses[bus as usize].write(from, &self.left[from..to], &self.right[from..to]);
         }
         let held = if self.frozen {
+            self.devices.iter().for_each(|d| d.silence_mods(mods));
             None
         } else {
             run_chain(
@@ -1591,6 +1706,8 @@ impl TrackNode {
                         merge: &mut self.merge,
                         tuning: self.tuning.as_deref(),
                         tuned: &mut self.tuned,
+                        mods,
+                        midi_sink: sink,
                     },
                 },
             )
@@ -1633,6 +1750,8 @@ impl TrackNode {
         offset: usize,
         ctx: &BlockCtx,
         buses: &mut [TapBus],
+        mods: &mut ModBus,
+        sink: &mut MidiOutSink,
         on_param: &mut dyn FnMut(TrackId, DeviceId, u32, f64),
         on_clip_end: &mut dyn FnMut(CellIx, f64),
     ) {
@@ -1671,10 +1790,11 @@ impl TrackNode {
             index,
             offset,
             ctx,
+            mods,
         );
         let resolved = self.bus.resolve();
         if resolved.activators {
-            self.render_to(offset, ctx, buses, on_param);
+            self.render_to(offset, ctx, buses, mods, sink, on_param);
         }
         let (mix, sends) = (&mut self.mix, &mut self.sends);
         self.bus.deliver_resolved(offset as u32, |control, plain| {
@@ -1764,9 +1884,11 @@ impl TrackNode {
         time: BlockTime,
         ctx: &BlockCtx,
         buses: &mut [TapBus],
+        mods: &mut ModBus,
+        sink: &mut MidiOutSink,
         on_param: &mut dyn FnMut(TrackId, DeviceId, u32, f64),
     ) {
-        self.render_to(time.frames, ctx, buses, on_param);
+        self.render_to(time.frames, ctx, buses, mods, sink, on_param);
         self.bus.end_block();
 
         // Publish clip state.

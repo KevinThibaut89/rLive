@@ -17,6 +17,8 @@ mod commands;
 pub mod delay;
 pub mod graph;
 pub mod lane;
+pub mod midi_out;
+pub mod modulation;
 pub mod params;
 pub mod rack;
 pub mod shared;
@@ -41,10 +43,14 @@ pub use commands::{
 use delay::FadingDelay;
 pub use delay::{StereoLine, TapLines, FADE_FRAMES, MAX_COMPENSATION_FRAMES};
 pub use graph::{
-    AudioIo, BusIn, BusRead, ChainAddr, ChainPath, ChainStep, HardwareOut, InputGate, MidiRoute,
-    OutputPair, RenderPlan, SidechainIn, Step, Tap, TapOut, TrackIo, TrackRef, MAX_RACK_DEPTH,
+    AudioIo, BusIn, BusRead, ChainAddr, ChainPath, ChainStep, HardwareOut, HardwareReturn,
+    HardwareSend, InputGate, MidiRoute, OutputPair, RenderPlan, SidechainIn, Step, Tap, TapOut,
+    TrackIo, TrackRef, MAX_RACK_DEPTH,
 };
 pub use lane::{ArrangementLane, LaneClip, LaneFades};
+use midi_out::MidiOutSink;
+pub use midi_out::{HwMidi, PortRoute};
+pub use modulation::{ModBus, ModRoute, MAX_MOD_VALUES, NO_MOD_BASE};
 pub use params::{
     mix_cell, BusLayout, CellIx, CellSpec, CellState, CellTarget, ControlHooks, ControlStep,
     ParamBus, TrackRoutes, CONTROL_STEP, MAX_SENDS, SEND_MAX_DB, SEND_MIN_DB,
@@ -74,17 +80,6 @@ const MIDI_CAPACITY: usize = 2048;
 const PLAYED_CAPACITY: usize = 2048;
 const REMOTE_CAPACITY: usize = 2048;
 const HW_MIDI_CAPACITY: usize = 4096;
-
-/// A message on its way to a hardware MIDI port.
-#[derive(Debug, Clone, Copy)]
-pub struct HwMidi {
-    pub port: u16,
-    /// When the block it belongs to began.
-    pub block: Instant,
-    /// How far into that block it falls, in seconds.
-    pub offset: f64,
-    pub message: MidiMessage,
-}
 
 /// Mapped controller input, on its way from the MIDI thread straight to the audio thread.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -568,6 +563,10 @@ impl Metronome {
 pub struct Engine {
     sample_rate: f64,
     max_block: usize,
+    /// What every modulator published, a block behind.
+    mods: Box<ModBus>,
+    /// Where MIDI for hardware ports goes.
+    midi_sink: MidiOutSink,
     tracks: Vec<Box<TrackNode>>,
     /// The Main output: a track like any other, rendered last.
     master: Box<TrackNode>,
@@ -650,7 +649,6 @@ pub struct Engine {
     garbage: rtrb::Producer<Garbage>,
     events: rtrb::Producer<EngineEvent>,
     played: rtrb::Producer<PlayedNote>,
-    hw_midi: rtrb::Producer<HwMidi>,
     /// The Set's grooves, as tracks are to read them.
     grooves: Option<Arc<GrooveBank>>,
     midi: rtrb::Consumer<(TrackId, MidiMessage, Instant)>,
@@ -672,6 +670,8 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
     let engine = Engine {
         sample_rate,
         max_block,
+        mods: Box::new(ModBus::new()),
+        midi_sink: MidiOutSink::new(hw_tx, sample_rate),
         tracks: Vec::with_capacity(MAX_TRACKS),
         master: Box::new(TrackNode::master(max_block)),
         plans: Plans {
@@ -737,7 +737,6 @@ pub fn create_engine(sample_rate: f64, max_block: usize) -> (Engine, EngineHandl
         garbage: gb_tx,
         events: ev_tx,
         played: played_tx,
-        hw_midi: hw_tx,
         grooves: None,
         midi: midi_rx,
         remote: remote_rx,
@@ -770,19 +769,12 @@ fn retire(garbage: &mut rtrb::Producer<Garbage>, g: Garbage) {
 impl Engine {
     /// Hands this block's MIDI to the thread that owns the hardware ports.
     fn send_hw_midi(&mut self) {
-        let mut now = None;
         for t in self.tracks.iter() {
             let Some(port) = t.hw_port else {
                 continue;
             };
-            let block = *now.get_or_insert_with(Instant::now);
             for e in t.midi_out.iter() {
-                let _ = self.hw_midi.push(HwMidi {
-                    port,
-                    block,
-                    offset: f64::from(e.offset) / self.sample_rate,
-                    message: e.message,
-                });
+                self.midi_sink.push(port, e.message, e.offset);
             }
         }
     }
@@ -1148,6 +1140,7 @@ impl Engine {
     /// the block reads as silence.
     pub fn process(&mut self, io: AudioIo<'_>) {
         let started = std::time::Instant::now();
+        self.midi_sink.begin_buffer(started);
         let total = io.outputs.iter().map(|o| o.len()).min().unwrap_or(0);
         for (meter, input) in self.shared.input_meters.iter().zip(io.inputs) {
             meter.store_max(input.iter().fold(0f32, |m, s| m.max(s.abs())));
@@ -1227,6 +1220,7 @@ impl Engine {
         loop_end: Option<f64>,
     ) {
         let transport = self.transport();
+        self.midi_sink.begin_block(start);
         let t1 = self.tick + run.advance(frames as f64);
         let time = BlockTime {
             t0: self.tick,
@@ -1308,6 +1302,7 @@ impl Engine {
         self.write_outputs(plan, outputs, start, frames, &time);
         self.send_hw_midi();
         self.plans = plans;
+        self.mods.end_block();
         self.clock += frames as u64;
 
         if self.playing {
@@ -1359,6 +1354,20 @@ impl Engine {
                 sr[..frames].fill(0.0);
                 t.main_into(&mut sl[..frames], &mut sr[..frames], frames);
                 put_output(outputs, start, frames, hw.out, sl, sr, false);
+            }
+        }
+        for send in &plan.hardware_sends {
+            if let Some(bus) = self.buses.get(send.bus as usize) {
+                let input = bus.input(0, frames);
+                put_output(
+                    outputs,
+                    start,
+                    frames,
+                    send.out,
+                    input.left,
+                    input.right,
+                    false,
+                );
             }
         }
         // A preview is heard ahead of the mixer: through the Cue output if there is one, or
@@ -1581,6 +1590,19 @@ impl Engine {
         for sc in plan.sidechains_into(step.track) {
             fetch_sidechain(&mut self.buses, sc, frames);
         }
+        for ret in plan.returns_into(step.track) {
+            let channel = ret.channel as usize;
+            let read = |c: usize| {
+                hw_inputs
+                    .get(c)
+                    .and_then(|s| s.get(start..start + frames))
+                    .unwrap_or(&self.silence[..frames])
+            };
+            let (left, right) = (read(channel), read(channel + ret.stereo as usize));
+            if let Some(bus) = self.buses.get_mut(ret.feed as usize) {
+                bus.write(0, left, right);
+            }
+        }
         let (before, rest) = self.tracks.split_at_mut(to);
         let Some((dest, after)) = rest.split_first_mut() else {
             return;
@@ -1697,6 +1719,8 @@ impl Engine {
                 .unwrap_or((1.0, 1.0));
             let events = &mut self.events;
             let buses = &mut self.buses;
+            let mods = &mut *self.mods;
+            let midi_sink = &mut self.midi_sink;
             for step in steps {
                 let is_master = step.track == master;
                 let t = if is_master {
@@ -1716,6 +1740,8 @@ impl Engine {
                         offset,
                         ctx,
                         buses,
+                        &mut *mods,
+                        &mut *midi_sink,
                         &mut |_, d, p, v| {
                             push_param_changed(&mut sink.borrow_mut(), target, d, p, v)
                         },
@@ -1851,14 +1877,21 @@ impl Engine {
             let Some(t) = t else {
                 continue;
             };
-            t.finish_block(time, ctx, &mut self.buses, &mut |t, d, p, v| {
-                let owner = if is_master {
-                    TrackRef::Master
-                } else {
-                    TrackRef::Track(t)
-                };
-                push_param_changed(events, owner, d, p, v)
-            });
+            t.finish_block(
+                time,
+                ctx,
+                &mut self.buses,
+                &mut self.mods,
+                &mut self.midi_sink,
+                &mut |t, d, p, v| {
+                    let owner = if is_master {
+                        TrackRef::Master
+                    } else {
+                        TrackRef::Track(t)
+                    };
+                    push_param_changed(events, owner, d, p, v)
+                },
+            );
             t.prepare_sends(time.frames, coeff);
             t.cue_into((&mut cue_l[..], &mut cue_r[..]), time.frames, coeff);
             t.apply_mix(time.frames, coeff);

@@ -30,6 +30,22 @@ pub struct PlanInput<'a> {
     pub open_chains: &'a HashMap<DeviceId, ChainId>,
     /// What each rack shows.
     pub racks: &'a HashMap<DeviceId, RackView>,
+    /// Parameters a modulator's Remote Control has.
+    pub remote: &'a [ParamRef],
+}
+
+/// Whether a built-in device gets the sidechain chooser. The External devices use their sidechain
+/// input for what comes back from the hardware, and choose it in their own panel.
+pub fn has_sidechain_chooser(dev: &Device, rt: &DeviceRuntime) -> bool {
+    rt.sidechain_input && rt.plugin.is_none() && !is_external(dev)
+}
+
+fn is_external(dev: &Device) -> bool {
+    matches!(
+        &dev.kind,
+        DeviceKind::Builtin { type_id, .. }
+            if type_id == "rlive.external_audio_effect" || type_id == "rlive.external_instrument"
+    )
 }
 
 /// A device and how it's laid out.
@@ -157,7 +173,7 @@ fn plan_device<'a>(
     let declared: &[Section] = rt.map_or(&[][..], |r| r.layout.as_slice());
     let (auto, truncated) = layout::auto_section(params, input.show_all.contains(&dev.id));
     let auto_truncated = declared.is_empty() && truncated;
-    let extra_h = extra_rows_h(rt, auto_truncated);
+    let extra_h = extra_rows_h(rt, auto_truncated, is_external(dev));
     let body_h = layout::body_height(height, extra_h);
     let sections = if declared.is_empty() {
         vec![layout::plan_section(&auto, body_h, &index)]
@@ -171,6 +187,7 @@ fn plan_device<'a>(
     let device = ParamOwner::Device(dev.id);
     let macro_owned = owned
         .iter()
+        .chain(input.remote)
         .filter(|r| r.owner == device)
         .map(|r| r.id)
         .collect();
@@ -247,13 +264,13 @@ fn plan_rack<'a>(
 }
 
 /// Rows drawn over a device's sections: an error, its sample slots, the "show all" switch.
-fn extra_rows_h(rt: Option<&DeviceRuntime>, truncated: bool) -> f32 {
+fn extra_rows_h(rt: Option<&DeviceRuntime>, truncated: bool, external: bool) -> f32 {
     let mut h = 0.0;
     if rt.is_some_and(|r| r.error.is_some()) {
         h += 34.0;
     }
     h += rt.map_or(0, |r| r.sample_slots) as f32 * 24.0;
-    if rt.is_some_and(|r| r.sidechain_input && r.plugin.is_none()) {
+    if rt.is_some_and(|r| r.sidechain_input && r.plugin.is_none()) && !external {
         h += 22.0;
     }
     if truncated {
@@ -326,6 +343,7 @@ mod tests {
             show_all: &show_all,
             open_chains: &open_chains,
             racks: &racks,
+            remote: &[],
         };
         f(&plan_chain(at, s.devices(at), &input, 200.0))
     }
@@ -498,6 +516,7 @@ mod tests {
             show_all: &show_all,
             open_chains: &open_chains,
             racks: &racks,
+            remote: &[],
         };
         let nodes = plan_chain(at, s.devices(at), &input, 200.0);
         assert!(controls(&nodes[0]).macro_owned.contains(&ParamId(3)));
@@ -505,7 +524,14 @@ mod tests {
 
     #[test]
     fn a_stub_gets_an_empty_auto_panel() {
-        let (_e, s) = session(vec![Device::builtin("rlive.ds_kick", "DS Kick")]);
+        // Stubs go away as devices get built; the last one left will do.
+        let Some(stub) = rlive_devices::builtins()
+            .iter()
+            .find(|b| b.status == rlive_core::Status::Stub)
+        else {
+            return;
+        };
+        let (_e, s) = session(vec![Device::builtin(stub.id, stub.name)]);
         with_plan(&s, |nodes| {
             assert_eq!(controls(&nodes[0]).visible, 0);
             assert_eq!(nodes[0].width, 150.0);
@@ -545,9 +571,9 @@ mod tests {
     fn the_extra_rows_make_room_for_errors_samples_and_the_show_all_switch() {
         let (_e, mut s) = session(vec![Device::builtin("rlive.sampler", "Sampler")]);
         let id = s.devices(root(&s))[0].id;
-        assert_eq!(extra_rows_h(s.runtimes.get(&id), false), 24.0);
+        assert_eq!(extra_rows_h(s.runtimes.get(&id), false, false), 24.0);
         s.runtimes.get_mut(&id).unwrap().error = Some("oops".into());
-        assert_eq!(extra_rows_h(s.runtimes.get(&id), false), 58.0);
-        assert_eq!(extra_rows_h(s.runtimes.get(&id), true), 78.0);
+        assert_eq!(extra_rows_h(s.runtimes.get(&id), false, false), 58.0);
+        assert_eq!(extra_rows_h(s.runtimes.get(&id), true, false), 78.0);
     }
 }

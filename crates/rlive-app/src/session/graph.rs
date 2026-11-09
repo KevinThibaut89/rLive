@@ -10,12 +10,13 @@ use rlive_core::{CrossfadeCurve, DeviceId, TrackId};
 use rlive_devices::DeviceRole;
 use rlive_engine::capture::InputSource;
 use rlive_engine::{
-    mix_cell, BusIn, BusRead, EngineCommand, GraphOp, GraphTxn, HardwareOut, InputGate, MidiRoute,
-    OutputPair, RackOuts, RenderPlan, SidechainIn, Step, Tap as EngineTap, TapOut, TrackIo,
-    MAX_SENDS,
+    mix_cell, BusIn, BusRead, EngineCommand, GraphOp, GraphTxn, HardwareOut, HardwareReturn,
+    HardwareSend, InputGate, MidiRoute, OutputPair, RackOuts, RenderPlan, SidechainIn, Step,
+    Tap as EngineTap, TapOut, TrackIo, MAX_SENDS,
 };
 use rlive_project::{
-    ChainTap, Device, DeviceKind, ExternalRoute, Monitor, Project, Route, Tap, Track, TrackKind,
+    ChainTap, Device, DeviceKind, ExternalMidi, ExternalReturn, ExternalRoute, Monitor, Project,
+    Route, Tap, Track, TrackKind,
 };
 
 /// Whether a device makes sound from MIDI.
@@ -181,6 +182,21 @@ enum Conn {
         tap: Tap,
         /// The source's Audio To points here, so it counts as feeding the device's track.
         via_output: bool,
+        /// Reads what the source made a block ago, so it adds no dependency.
+        feedback: bool,
+    },
+    /// A device's send to a hardware output.
+    HardwareSend {
+        from: usize,
+        device: DeviceId,
+        out: OutputPair,
+    },
+    /// A device's return from hardware inputs.
+    HardwareReturn {
+        to: usize,
+        device: DeviceId,
+        channel: u16,
+        stereo: bool,
     },
     /// Audio tapped by the track `to`, as its input.
     TapIn { from: usize, to: usize, tap: Tap },
@@ -206,8 +222,11 @@ impl Conn {
             Conn::ToMaster { .. } | Conn::ToHardware { .. } => None,
             Conn::ToTrack { from, to }
             | Conn::RackOut { from, to, .. }
-            | Conn::Sidechain { from, to, .. }
             | Conn::TapIn { from, to, .. } => Some((from, to)),
+            Conn::Sidechain {
+                from, to, feedback, ..
+            } => (!feedback).then_some((from, to)),
+            Conn::HardwareSend { .. } | Conn::HardwareReturn { .. } => None,
             Conn::Send {
                 from, to, feedback, ..
             } => (!feedback).then_some((from, to)),
@@ -275,6 +294,7 @@ fn connections(project: &Project, audio: &[bool], skip: Option<(usize, Side)>) -
                             device,
                             tap: Tap::PostMixer,
                             via_output: true,
+                            feedback: false,
                         }),
                         None => conns.push(Conn::ToTrack { from: i, to: dest }),
                     },
@@ -396,8 +416,82 @@ fn connections(project: &Project, audio: &[bool], skip: Option<(usize, Side)>) -
                             device: d.id,
                             tap: src.tap,
                             via_output: false,
+                            feedback: false,
                         });
                     }
+                }
+            });
+        }
+    }
+    // What talks to the outside world, or to another track's multitimbral plug-in.
+    for (i, t) in all.iter().enumerate() {
+        if t.is_frozen() {
+            continue;
+        }
+        for d in &t.devices {
+            d.for_each(&mut |d| {
+                let Some(ext) = &d.external else {
+                    return;
+                };
+                if let Some(out) = ext.audio_to.as_ref().and_then(out_pair) {
+                    conns.push(Conn::HardwareSend {
+                        from: i,
+                        device: d.id,
+                        out,
+                    });
+                }
+                match &ext.audio_from {
+                    Some(ExternalReturn::Hardware(ExternalRoute::Audio { channel, stereo })) => {
+                        conns.push(Conn::HardwareReturn {
+                            to: i,
+                            device: d.id,
+                            channel: *channel,
+                            stereo: *stereo,
+                        });
+                    }
+                    Some(ExternalReturn::Aux {
+                        track,
+                        device,
+                        output,
+                    }) => {
+                        let tap = Tap::Aux {
+                            device: *device,
+                            output: *output,
+                        };
+                        if let Some(from) = index_of(*track).filter(|f| tap_exists(all[*f], tap)) {
+                            conns.push(Conn::Sidechain {
+                                from,
+                                to: i,
+                                device: d.id,
+                                tap,
+                                via_output: false,
+                                feedback: true,
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+                match &ext.midi_to {
+                    // A port is the engine's to reach, without the plan's help.
+                    Some(ExternalMidi::Port { .. }) => {}
+                    Some(ExternalMidi::Track {
+                        track,
+                        device,
+                        channel,
+                    }) => {
+                        if let Some(to) = index_of(*track).filter(|to| *to != i) {
+                            conns.push(Conn::Midi {
+                                route: MidiRoute {
+                                    from: i as u32,
+                                    to: to as u32,
+                                    device: device.filter(|x| device_in(to, *x)),
+                                    channel: Some(*channel),
+                                },
+                                output: false,
+                            });
+                        }
+                    }
+                    None => {}
                 }
             });
         }
@@ -438,7 +532,9 @@ pub(super) fn compile_with(project: &Project, timing: &Timing) -> RenderPlan {
     let mut inputs: Vec<Vec<BusIn>> = vec![Vec::new(); master + 1];
     let mut hardware = Vec::new();
     let mut taps = TapTable::default();
-    let mut sidechains: Vec<(usize, usize, DeviceId, Tap)> = Vec::new();
+    let mut sidechains: Vec<(usize, usize, DeviceId, Tap, bool)> = Vec::new();
+    let mut hardware_sends = Vec::new();
+    let mut hardware_returns: Vec<(usize, DeviceId, u16, bool)> = Vec::new();
     let mut midi: Vec<MidiRoute> = Vec::new();
     let mut output_parents: Vec<Option<u32>> = vec![None; master];
     let mut solo_taps: Vec<(u32, u32)> = Vec::new();
@@ -465,12 +561,23 @@ pub(super) fn compile_with(project: &Project, timing: &Timing) -> RenderPlan {
                 device,
                 tap,
                 via_output,
+                feedback,
             } => {
                 if via_output {
                     output_parents[from] = Some(to as u32);
                 }
-                sidechains.push((from, to, device, tap));
+                sidechains.push((from, to, device, tap, feedback));
             }
+            Conn::HardwareSend { from, device, out } => {
+                let read = taps.read(from, EngineTap::Aux(device, 0));
+                hardware_sends.push(HardwareSend { bus: read.bus, out });
+            }
+            Conn::HardwareReturn {
+                to,
+                device,
+                channel,
+                stereo,
+            } => hardware_returns.push((to, device, channel, stereo)),
             Conn::RackOut { from, to, slot } => {
                 let tap = EngineTap::Aux(DeviceId(0), slot);
                 let read = taps.read(from, tap.clone());
@@ -546,7 +653,7 @@ pub(super) fn compile_with(project: &Project, timing: &Timing) -> RenderPlan {
 
     // Now every signal that gets read is known, and so is each feed.
     let mut sc_inputs: Vec<SidechainIn> = Vec::with_capacity(sidechains.len());
-    for (from, to, device, tap) in sidechains {
+    for (from, to, device, tap, feedback) in sidechains {
         let tap = engine_tap(tap);
         let read = taps.read(from, tap.clone());
         sc_inputs.push(SidechainIn {
@@ -557,12 +664,25 @@ pub(super) fn compile_with(project: &Project, timing: &Timing) -> RenderPlan {
             delay: 0,
             read,
             feed: 0,
+            feedback,
         });
     }
     let tap_buses = taps.outs.len() as u32;
     for (n, sc) in sc_inputs.iter_mut().enumerate() {
         sc.feed = tap_buses + n as u32;
     }
+    let first_return = tap_buses + sc_inputs.len() as u32;
+    let hardware_returns: Vec<HardwareReturn> = hardware_returns
+        .into_iter()
+        .enumerate()
+        .map(|(n, (to, device, channel, stereo))| HardwareReturn {
+            device,
+            to: to as u32,
+            channel,
+            stereo,
+            feed: first_return + n as u32,
+        })
+        .collect();
 
     let mut tap_outs: Vec<TapOut> = taps
         .outs
@@ -601,12 +721,14 @@ pub(super) fn compile_with(project: &Project, timing: &Timing) -> RenderPlan {
     RenderPlan {
         steps,
         levels,
-        buses: tap_buses + sc_inputs.len() as u32,
+        buses: first_return + hardware_returns.len() as u32,
         tap_outs,
         sidechains: sc_inputs,
         midi,
         io,
         hardware,
+        hardware_sends,
+        hardware_returns,
         main_out: match &project.master.routing.output {
             Route::External(ext) => out_pair(ext).unwrap_or_default(),
             _ => OutputPair::default(),
@@ -704,6 +826,13 @@ fn input_gate(t: &Track) -> InputGate {
     }
 }
 
+/// A sidechain that reads the past is a whole block behind, however the plan lines up the rest.
+pub(super) fn set_feedback_delays(plan: &mut RenderPlan, max_block: usize) {
+    for sc in plan.sidechains.iter_mut().filter(|s| s.feedback) {
+        sc.delay = max_block as u32;
+    }
+}
+
 impl Session {
     /// Apply edits to devices and chains, all at once. Only for edits within tracks: the list of
     /// tracks must not change, so the running plan still applies.
@@ -739,7 +868,8 @@ impl Session {
     }
 
     fn send_recompiled(&mut self, mut ops: Vec<GraphOp>, timing: Timing) {
-        let plan = compile_with(&self.project, &timing);
+        let mut plan = compile_with(&self.project, &timing);
+        set_feedback_delays(&mut plan, self.engine.max_block);
         let shape = bus_shape(&plan);
         if shape != self.bus_shape {
             ops.push(buses_op(&shape, self.engine.max_block));

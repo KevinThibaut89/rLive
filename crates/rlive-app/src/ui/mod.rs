@@ -522,7 +522,7 @@ impl RliveApp {
             track_outs.push(connection.flatten());
         }
         *self.track_outs.lock().unwrap() = track_outs;
-        self.session.midi_out_ports = outputs.clone();
+        self.session.set_midi_out_ports(outputs.clone());
         self.session.set_remote_ports(RemotePorts {
             in_names: inputs,
             in_mask,

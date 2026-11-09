@@ -236,7 +236,7 @@ impl Session {
     /// Builds the private engine for a render. Waits for the samples it needs.
     fn open_pass(&mut self, render: Render) -> Result<Pass, String> {
         let Render {
-            project,
+            mut project,
             setup,
             start,
             ticks,
@@ -255,16 +255,21 @@ impl Session {
             }
         }
         let sample_rate = self.engine.sample_rate;
+        super::external::set_internal_latency(&mut project, BLOCK);
         let (mut engine, mut handle) = rlive_engine::create_engine(sample_rate, BLOCK);
         let mut runtimes = HashMap::new();
         let mut layouts = HashMap::new();
         let mut errors = Vec::new();
+        let mod_plan = super::modulators::ModPlan::of(&project);
+        let mut mod_slots = super::modulators::ModSlots::default();
         let mut b = Builder {
             sample_rate,
             max_block: BLOCK,
             plugins: &self.plugins,
             samples: &mut self.samples,
             wiring: &self.wiring,
+            mod_slots: &mut mod_slots,
+            mod_plan: &mod_plan,
             chain_shared: None,
             edge_fade: self
                 .edge_fades
@@ -290,9 +295,12 @@ impl Session {
         let maps = super::build::time_maps(&project);
         let timing = Timing::measure(&project, sample_rate, &RuntimeLatency(&runtimes));
         let mut plan = compile_with(&project, &timing);
+        super::graph::set_feedback_delays(&mut plan, BLOCK);
         // Whatever the hardware is, a render is the Main output on two channels.
         plan.main_out = OutputPair::default();
         plan.cue = None;
+        // A render doesn't reach the hardware.
+        plan.hardware_sends.clear();
         // The render starts this much late, and is this much longer, for the audio that leaves
         // the Master in its first frames.
         let lead_in = plan.output_latency as usize;

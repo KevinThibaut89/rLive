@@ -256,6 +256,7 @@ impl Session {
             slot: MPE_SLOT,
             resource: Arc::new(out),
         }]);
+        self.mods_dirty = true;
         self.mark_edit("MPE Mode");
     }
 }

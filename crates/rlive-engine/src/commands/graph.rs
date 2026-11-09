@@ -10,7 +10,7 @@ use crate::rack::{ChainNode, PreviewNote, Zones};
 use crate::track::bind_chain;
 use crate::track::RackOuts;
 use crate::{retire, DeviceSlot, Engine, Garbage, TrackNode};
-use rlive_core::{ChainId, DeviceId, Resource, TrackId};
+use rlive_core::{ChainId, DeviceId, MidiMessage, Resource, TrackId};
 use std::sync::Arc;
 
 pub enum GraphOp {
@@ -88,6 +88,12 @@ pub enum GraphOp {
         target: ChainAddr,
         device: DeviceId,
         note: PreviewNote,
+    },
+    /// A short note straight to one device, for a preview.
+    DirectNote {
+        target: TrackRef,
+        device: DeviceId,
+        message: MidiMessage,
     },
     /// Whether the Chain Selector filters MIDI other than notes as well.
     SetRackOptions {
@@ -282,6 +288,11 @@ impl Engine {
                 t.wire_sidechain(sc.device, sc.feed);
             }
         }
+        for ret in &plan.hardware_returns {
+            if let Some(t) = self.tracks.get_mut(ret.to as usize) {
+                t.wire_sidechain(ret.device, ret.feed);
+            }
+        }
         for route in &plan.midi {
             if let Some(t) = self.tracks.get_mut(route.from as usize) {
                 t.midi_tap = true;
@@ -358,6 +369,7 @@ impl Engine {
                 if let Some(i) = self.tracks.iter().position(|t| t.id == id) {
                     let mut t = self.tracks.remove(i);
                     for d in t.devices.iter_mut() {
+                        d.release_midi(&mut self.midi_sink, 0);
                         d.stop_processing();
                     }
                     if let Some(p) = t.player.playing.take() {
@@ -384,6 +396,7 @@ impl Engine {
                 if let Some(bus) = self.bus_mut(target.owner) {
                     device.bind_cells(bus);
                 }
+                device.reset_mods(&mut self.mods);
                 match self.chain_mut(target) {
                     Some(chain) if fits && chain.len() < chain.capacity() => {
                         let idx = index.min(chain.len());
@@ -400,6 +413,7 @@ impl Engine {
                 });
                 if let Some(mut slot) = removed {
                     applied.devices = true;
+                    slot.release_midi(&mut self.midi_sink, 0);
                     slot.stop_processing();
                     retire(&mut self.garbage, Garbage::Boxed(slot));
                 }
@@ -481,6 +495,19 @@ impl Engine {
                         c.zones = zones;
                     }
                     rack.invalidate_gates();
+                }
+            }
+            C::DirectNote {
+                target,
+                device,
+                message,
+            } => {
+                let track = match target {
+                    TrackRef::Master => Some(&mut *self.master),
+                    TrackRef::Track(id) => self.track_mut(id),
+                };
+                if let Some(t) = track {
+                    t.queue_direct(device, message);
                 }
             }
             C::PreviewNote {
@@ -672,8 +699,10 @@ impl Engine {
                 mut tracks,
                 mut master,
             } => {
+                self.mods.clear_all();
                 for t in self.tracks.iter_mut() {
                     for d in t.devices.iter_mut() {
+                        d.release_midi(&mut self.midi_sink, 0);
                         d.stop_processing();
                     }
                     if let Some(p) = t.player.playing.take() {

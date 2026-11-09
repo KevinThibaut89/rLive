@@ -313,7 +313,7 @@ impl Timing {
             // A device's sidechain has to meet what the device hears, not the top of its chain.
             let keyed = sidechains
                 .iter()
-                .filter(|s| s.to as usize == track && !exempt(s.from as usize))
+                .filter(|s| s.to as usize == track && !s.feedback && !exempt(s.from as usize))
                 .map(|s| {
                     let from = s.from as usize;
                     let at = self.tap_lateness(from, &s.tap, late_in[from], out[from])
@@ -345,7 +345,10 @@ impl Timing {
                     (arrival - at).clamp(0, MAX) as u32
                 };
             }
-            for sc in sidechains.iter_mut().filter(|s| s.to as usize == track) {
+            for sc in sidechains
+                .iter_mut()
+                .filter(|s| s.to as usize == track && !s.feedback)
+            {
                 let from = sc.from as usize;
                 let at = self.tap_lateness(from, &sc.tap, late_in[from], out[from])
                     - offset(from, &sc.tap, false);
