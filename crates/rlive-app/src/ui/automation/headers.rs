@@ -101,7 +101,11 @@ fn main_lane_header(
     rect: Rect,
     chain: ChainRef,
 ) {
-    let key = LaneKey { chain, slot: None };
+    let key = LaneKey {
+        chain,
+        slot: None,
+        take: None,
+    };
     let target = lane_target(session, key);
     let inner = Rect::from_min_max(
         Pos2::new(rect.left() + 10.0, rect.bottom() - 42.0),
@@ -131,6 +135,7 @@ fn extra_lane_header(
     let key = LaneKey {
         chain,
         slot: Some(slot),
+        take: None,
     };
     let p = ui.painter();
     let selected = state.arr.auto.headers.contains(&key) || state.arr.auto.focus == Some(key);
@@ -203,7 +208,11 @@ fn remove_lane(
     let slots = lanes::slots_to_remove(slot, count, &selected, m, Platform::current());
     session.edit_track_ui(chain, |ui| lanes::remove_lanes(ui, &slots));
     state.arr.auto.headers.clear();
-    state.arr.auto.focus = Some(LaneKey { chain, slot: None });
+    state.arr.auto.focus = Some(LaneKey {
+        chain,
+        slot: None,
+        take: None,
+    });
 }
 
 /// The strip of a lane header that isn't a control: selects it and has the lane's menu.
@@ -246,6 +255,7 @@ fn select_header(state: &mut UiState, key: LaneKey, m: egui::Modifiers) {
                 let k = LaneKey {
                     chain: key.chain,
                     slot: Some(slot),
+                    take: None,
                 };
                 if !auto.headers.contains(&k) {
                     auto.headers.push(k);
@@ -338,6 +348,7 @@ pub(super) fn add_lane_with(
         state.arr.auto.focus = Some(LaneKey {
             chain,
             slot: Some(slot),
+            take: None,
         });
     }
 }
@@ -533,7 +544,11 @@ fn apply_choice(
         None => {
             let mut other = None;
             session.edit_track_ui(chain, |ui| other = lanes::choose_main(ui, choice));
-            state.arr.auto.focus = Some(LaneKey { chain, slot: other });
+            state.arr.auto.focus = Some(LaneKey {
+                chain,
+                slot: other,
+                take: None,
+            });
         }
         Some(slot) => {
             if let Some(target) = choice {

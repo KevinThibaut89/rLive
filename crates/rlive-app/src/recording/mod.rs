@@ -30,6 +30,16 @@ struct Take {
     clip: Option<ArrClipId>,
     /// With Overdub on, what was already on the timeline, by absolute tick.
     base: Vec<NoteData>,
+    /// Passes of the loop that have ended, oldest first, and where the one running began.
+    finished: Vec<FinishedPass>,
+    pass_start: Option<u64>,
+}
+
+/// The notes of one time through the loop, and whether it has gone on the timeline yet.
+struct FinishedPass {
+    start: u64,
+    notes: Vec<NoteData>,
+    placed: bool,
 }
 
 impl Take {
@@ -132,9 +142,20 @@ pub struct Placement {
     pub clip: Clip,
 }
 
+/// A pass of the loop that has finished, ready to be a take.
+pub struct TakePass {
+    pub track: TrackId,
+    pub start: u64,
+    pub clip: Clip,
+}
+
 pub struct Recording {
     start: u64,
     takes: HashMap<TrackId, Take>,
+    /// The clips made from this recording so far, for what happens to them afterwards.
+    placed: Vec<(TrackId, ArrClipId)>,
+    /// Recording has ended: the pass running is finished too.
+    ended: bool,
 }
 
 impl Recording {
@@ -142,6 +163,8 @@ impl Recording {
         Self {
             start,
             takes: HashMap::new(),
+            placed: Vec::new(),
+            ended: false,
         }
     }
 
@@ -194,6 +217,18 @@ impl Recording {
                 .map(|(k, n)| (*k, n.velocity, n.id))
                 .collect();
             take.close_all(from);
+            // Going back is the loop coming round: everything so far is one pass.
+            if to < from && !take.notes.is_empty() {
+                let start = take.pass_start.unwrap_or(self.start);
+                take.finished.push(FinishedPass {
+                    start,
+                    notes: std::mem::take(&mut take.notes),
+                    placed: false,
+                });
+            }
+            if to < from {
+                take.pass_start = Some(to.max(0.0) as u64);
+            }
             for (key, velocity, id) in held {
                 take.open.insert(
                     key,
@@ -212,6 +247,7 @@ impl Recording {
         for take in self.takes.values_mut() {
             take.close_all(tick);
         }
+        self.ended = true;
     }
 
     /// Starts a take for `track` holding what `base` plays, so a new clip keeps it.
@@ -221,7 +257,78 @@ impl Recording {
 
     /// Whether anything has been recorded for this track.
     pub fn has_notes(&self, track: TrackId) -> bool {
-        self.takes.get(&track).is_some_and(|t| !t.notes.is_empty())
+        self.takes
+            .get(&track)
+            .is_some_and(|t| !t.notes.is_empty() || t.finished.iter().any(|p| !p.notes.is_empty()))
+    }
+
+    /// Remembers a clip that this recording made.
+    pub fn note_placed(&mut self, track: TrackId, id: ArrClipId) {
+        self.placed.push((track, id));
+    }
+
+    /// Every clip this recording has made: its takes and their copies on the main lane, or with
+    /// Overdub on, the clip it wrote the notes into.
+    pub fn placed_clips(&self, sig: TimeSignature) -> Vec<(TrackId, ArrClipId)> {
+        let mut out = self.placed.clone();
+        for p in self.placements(sig) {
+            if let Some(id) = p.existing {
+                out.push((p.track, id));
+            }
+        }
+        out
+    }
+
+    /// The passes that have ended and not gone on the timeline yet, as clips of whole bars. Takes
+    /// without notes are left out. Each is handed out once.
+    pub fn take_finished_passes(&mut self, sig: TimeSignature) -> Vec<TakePass> {
+        let bar = sig.ticks_per_bar().max(1);
+        let (ended, start) = (self.ended, self.start);
+        let mut out = Vec::new();
+        for (track, take) in &mut self.takes {
+            if ended && !take.notes.is_empty() {
+                take.finished.push(FinishedPass {
+                    start: take.pass_start.unwrap_or(start),
+                    notes: std::mem::take(&mut take.notes),
+                    placed: false,
+                });
+            }
+            for pass in take.finished.iter_mut().filter(|p| !p.placed) {
+                pass.placed = true;
+                let from = pass.start / bar * bar;
+                let last = pass
+                    .notes
+                    .iter()
+                    .map(|n| n.start + n.length)
+                    .max()
+                    .unwrap_or(from);
+                let length = last.saturating_sub(from).div_ceil(bar).max(1) * bar;
+                let notes = pass
+                    .notes
+                    .iter()
+                    .filter(|n| n.start >= from)
+                    .map(|n| NoteData {
+                        start: n.start - from,
+                        ..n.clone()
+                    })
+                    .collect();
+                out.push(TakePass {
+                    track: *track,
+                    start: from,
+                    clip: Clip {
+                        name: "Recording".into(),
+                        color: [255, 255, 255],
+                        length,
+                        looped: false,
+                        content: ClipContent::midi(notes),
+                        ..Clip::default()
+                    },
+                });
+            }
+        }
+        // Lowest track first for a stable order; a map doesn't keep one.
+        out.sort_by_key(|p| p.track.0);
+        out
     }
 
     /// Remembers which timeline clip a take went into.
@@ -237,20 +344,18 @@ impl Recording {
         let start = self.start / bar * bar;
         self.takes
             .iter()
-            .filter(|(_, t)| !t.notes.is_empty())
+            .filter(|(_, t)| !t.notes.is_empty() || t.finished.iter().any(|p| !p.notes.is_empty()))
             .map(|(track, take)| {
-                let last = take
-                    .notes
-                    .iter()
-                    .map(|n| n.start + n.length)
-                    .max()
-                    .unwrap_or(start);
+                let played = || {
+                    take.finished
+                        .iter()
+                        .flat_map(|p| p.notes.iter())
+                        .chain(take.notes.iter())
+                };
+                let last = played().map(|n| n.start + n.length).max().unwrap_or(start);
                 let length = last.saturating_sub(start).div_ceil(bar).max(1) * bar;
                 let end = start + length;
-                let notes = take
-                    .notes
-                    .iter()
-                    .filter(|n| n.start >= start)
+                let notes = played()
                     .chain(take.base.iter().filter(|n| (start..end).contains(&n.start)))
                     .map(|n| NoteData {
                         start: n.start - start,

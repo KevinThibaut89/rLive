@@ -141,8 +141,12 @@ pub enum When {
     ChainSelected,
     /// There is a time selection in the Arrangement.
     TimeSelection,
-    /// A take lane is selected.
+    /// A take lane is selected, or material on one.
     TakeLane,
+    /// A take lane's header has the keyboard.
+    TakeHeader,
+    /// Time or clip headers are selected on a track with take lanes.
+    TakeArea,
     /// A Drum Rack, pad or Simpler is selected.
     SimilarSwap,
     /// The note editor's insert marker is set.
@@ -266,6 +270,12 @@ pub struct KeyContext {
     pub notes_free: bool,
     /// The browser is in Hot-Swap mode.
     pub hot_swap: bool,
+    /// A take lane or what's on one is selected.
+    pub take_lane: bool,
+    /// A take lane's header has the keyboard.
+    pub take_header: bool,
+    /// Time or clip headers are selected on a track with take lanes.
+    pub take_area: bool,
 }
 
 impl KeyContext {
@@ -285,6 +295,9 @@ impl KeyContext {
             When::SlotSelected => self.slot_selected,
             When::NotesFree | When::NoteInsertMarker => self.notes_free,
             When::HotSwap => self.hot_swap,
+            When::TakeLane => self.take_lane,
+            When::TakeHeader => self.take_header,
+            When::TakeArea => self.take_area,
             // The rest are built by the milestones that need them.
             _ => false,
         }

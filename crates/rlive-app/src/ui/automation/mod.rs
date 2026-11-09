@@ -215,6 +215,7 @@ fn lane_views(
             LaneKey {
                 chain: row.chain,
                 slot: None,
+                take: None,
             },
             main,
             hit,
@@ -226,6 +227,7 @@ fn lane_views(
                 LaneKey {
                     chain: row.chain,
                     slot: Some(n),
+                    take: None,
                 },
                 rect,
                 rect,
@@ -530,6 +532,7 @@ mod tests {
             key: LaneKey {
                 chain: ChainRef::Master,
                 slot: None,
+                take: None,
             },
             target: rlive_core::param::transport::tempo_target(),
             base: vec![Breakpoint::new(0.0, 0.5)],

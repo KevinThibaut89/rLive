@@ -123,7 +123,7 @@ impl Default for TempoAutomation {
     }
 }
 
-/// A lane of alternate takes under a track.
+/// A lane of alternate takes under a track. Only heard while it is being auditioned.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TakeLane {
     pub name: String,
@@ -179,47 +179,72 @@ impl Default for Arrangement {
 }
 
 impl Track {
-    /// Adds a clip to the lane, overwriting whatever it overlaps: neighbours
+    /// Adds a clip to the main lane, overwriting whatever it overlaps: neighbours
     /// are trimmed, split around it, or removed.
     pub fn place_clip(&mut self, new: ArrangementClip) {
-        let (start, end) = (new.start, new.end());
-        let mut lane = Vec::with_capacity(self.arrangement.len() + 2);
-        for c in self.arrangement.drain(..) {
-            if c.end() <= start || c.start >= end {
-                lane.push(c);
-                continue;
-            }
-            if c.start < start {
-                let mut left = c.clone();
-                left.trim_right(start);
-                lane.push(left);
-            }
-            if c.end() > end {
-                let mut right = c;
-                if right.start < start {
-                    right.id = ArrClipId::new();
-                }
-                right.trim_left(end);
-                lane.push(right);
-            }
-        }
-        lane.push(new);
-        lane.sort_by_key(|c| c.start);
-        self.arrangement = lane;
+        place_on(&mut self.arrangement, new);
     }
 
+    /// A clip on the main lane or any take lane.
     pub fn arr_clip(&self, id: ArrClipId) -> Option<&ArrangementClip> {
-        self.arrangement.iter().find(|c| c.id == id)
+        self.all_clips().find(|c| c.id == id)
     }
 
+    /// A clip on the main lane or any take lane.
     pub fn arr_clip_mut(&mut self, id: ArrClipId) -> Option<&mut ArrangementClip> {
-        self.arrangement.iter_mut().find(|c| c.id == id)
+        self.all_clips_mut().find(|c| c.id == id)
     }
 
+    /// Takes a clip off the main lane or a take lane.
     pub fn remove_arr_clip(&mut self, id: ArrClipId) -> Option<ArrangementClip> {
-        let i = self.arrangement.iter().position(|c| c.id == id)?;
-        Some(self.arrangement.remove(i))
+        let lane = self.lane_of(id)?;
+        let clips = self.lane_mut(lane)?;
+        let i = clips.iter().position(|c| c.id == id)?;
+        Some(clips.remove(i))
     }
+
+    /// Every clip on the timeline, main lane first.
+    pub fn all_clips(&self) -> impl Iterator<Item = &ArrangementClip> {
+        self.arrangement
+            .iter()
+            .chain(self.take_lanes.iter().flat_map(|l| &l.clips))
+    }
+
+    /// Every clip on the timeline, main lane first.
+    pub fn all_clips_mut(&mut self) -> impl Iterator<Item = &mut ArrangementClip> {
+        self.arrangement
+            .iter_mut()
+            .chain(self.take_lanes.iter_mut().flat_map(|l| &mut l.clips))
+    }
+}
+
+/// Adds a clip to a lane, overwriting whatever it overlaps: neighbours are trimmed, split around
+/// it, or removed.
+pub fn place_on(clips: &mut Vec<ArrangementClip>, new: ArrangementClip) {
+    let (start, end) = (new.start, new.end());
+    let mut lane = Vec::with_capacity(clips.len() + 2);
+    for c in clips.drain(..) {
+        if c.end() <= start || c.start >= end {
+            lane.push(c);
+            continue;
+        }
+        if c.start < start {
+            let mut left = c.clone();
+            left.trim_right(start);
+            lane.push(left);
+        }
+        if c.end() > end {
+            let mut right = c;
+            if right.start < start {
+                right.id = ArrClipId::new();
+            }
+            right.trim_left(end);
+            lane.push(right);
+        }
+    }
+    lane.push(new);
+    lane.sort_by_key(|c| c.start);
+    *clips = lane;
 }
 
 impl Project {

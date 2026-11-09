@@ -2212,6 +2212,7 @@ pub(super) fn track_menu(
         vec![id]
     };
     super::commands::bounce::track_menu_items(ui, session, state, id);
+    super::arrangement::takes::track_menu_items(ui, session, state, id, &selection);
     if ui.button("Group Tracks   ⌘G").clicked() {
         if let Some(g) = session.group_tracks(&selection) {
             state.selected = Some(ChainRef::Track(g));

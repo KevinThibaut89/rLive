@@ -256,7 +256,13 @@ impl Session {
         changed.extend(t.no_stop.iter().map(|s| *s as usize));
         let automation_changed = t.automation != *s.automation;
         t.automation = (*s.automation).clone();
+        let takes_changed = t.take_lanes != *s.take_lanes;
         t.take_lanes = (*s.take_lanes).clone();
+        // Audition is view state, so undo leaves it, unless its lane has gone.
+        if t.ui.audition_lane.is_some_and(|i| i >= t.take_lanes.len()) {
+            t.ui.audition_lane = None;
+        }
+        let auditioning = t.ui.audition_lane.is_some();
         self.push_mix(id, false);
         if frozen_changed {
             let frozen = s.shell.is_frozen();
@@ -269,7 +275,7 @@ impl Session {
         for slot in changed {
             self.sync_clip(id, slot);
         }
-        if lane_changed {
+        if lane_changed || (takes_changed && auditioning) {
             self.sync_lane(id);
         }
     }

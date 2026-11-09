@@ -85,28 +85,49 @@ impl Session {
         }
     }
 
-    /// Moves or copies clips; returns where they ended up.
+    /// Moves or copies clips, each staying on the lane it's on; returns where they ended up.
     pub fn arr_move(&mut self, moves: &[ArrMove], copy: bool) -> Vec<(TrackId, ArrClipId)> {
-        // Lift everything first so clips can't overwrite each other's old places.
-        let lifted: Vec<(ArrMove, ArrangementClip)> = moves
+        let lanes: Vec<Option<usize>> = moves
             .iter()
-            .filter_map(|m| {
+            .map(|m| {
+                let lane = self.project.track(m.track).and_then(|t| t.lane_of(m.id));
+                (m.track == m.to_track).then(|| lane.flatten()).flatten()
+            })
+            .collect();
+        self.arr_move_to_lanes(moves, &lanes, copy)
+    }
+
+    /// Moves or copies clips onto the lane given for each; returns where they ended up.
+    pub fn arr_move_to_lanes(
+        &mut self,
+        moves: &[ArrMove],
+        lanes: &[Option<usize>],
+        copy: bool,
+    ) -> Vec<(TrackId, ArrClipId)> {
+        let all = self.linked_moves(moves, lanes);
+        // Lift everything first so clips can't overwrite each other's old places.
+        let lifted: Vec<(ArrMove, Option<usize>, bool, ArrangementClip)> = all
+            .into_iter()
+            .filter_map(|(m, to_lane)| {
                 let t = self.project.track_mut(m.track)?;
+                let main = t.lane_of(m.id)?.is_none();
                 let c = if copy {
                     t.arr_clip(m.id).cloned()
                 } else {
                     t.remove_arr_clip(m.id)
                 }?;
-                Some((*m, c))
+                Some((m, to_lane, main, c))
             })
             .collect();
+        // Envelopes go with clips on the lane that plays.
         let spans: Vec<(ArrMove, f64, f64)> = lifted
             .iter()
-            .map(|(m, c)| (*m, c.start as f64, c.end() as f64))
+            .filter(|(.., main, _)| *main)
+            .map(|(m, .., c)| (*m, c.start as f64, c.end() as f64))
             .collect();
         let mut placed = Vec::with_capacity(lifted.len());
         let mut touched = HashSet::new();
-        for (m, mut c) in lifted {
+        for (m, to_lane, _, mut c) in lifted {
             c.start = m.start;
             if copy {
                 c.id = ArrClipId::new();
@@ -116,7 +137,8 @@ impl Session {
             touched.insert(m.to_track);
             if let Some(t) = self.project.track_mut(m.to_track) {
                 c.clip = leaving_frozen_track(c.clip, t);
-                t.place_clip(c);
+                let lane = to_lane.filter(|i| *i < t.take_lanes.len());
+                t.place_on_lane(lane, c);
             }
         }
         self.carry_automation(&spans, copy);
@@ -124,26 +146,35 @@ impl Session {
         placed
     }
 
+    /// Trims a clip, and in step with it the same clips on linked tracks.
     pub fn arr_trim(&mut self, track: TrackId, id: ArrClipId, edge: TrimEdge) {
-        let Some(t) = self.project.track_mut(track) else {
-            return;
-        };
-        let Some(mut c) = t.remove_arr_clip(id) else {
-            return;
-        };
-        match edge {
-            TrimEdge::Left(to) => c.trim_left(to),
-            TrimEdge::Right(to) => c.trim_right(to),
+        let mut touched = HashSet::new();
+        for (track, id) in self.linked_items(&[(track, id)]) {
+            let Some(t) = self.project.track_mut(track) else {
+                continue;
+            };
+            let Some(lane) = t.lane_of(id) else {
+                continue;
+            };
+            let Some(mut c) = t.remove_arr_clip(id) else {
+                continue;
+            };
+            match edge {
+                TrimEdge::Left(to) => c.trim_left(to),
+                TrimEdge::Right(to) => c.trim_right(to),
+            }
+            t.place_on_lane(lane, c);
+            touched.insert(track);
         }
-        t.place_clip(c);
-        t.settle_fades();
-        self.sync_lane(track);
-        self.mark_edit("Trim Clip");
+        if !touched.is_empty() {
+            self.sync_lanes(touched, "Trim Clip");
+        }
     }
 
     pub fn arr_delete(&mut self, items: &[(TrackId, ArrClipId)]) {
+        let items = self.linked_items(items);
         let mut touched = HashSet::new();
-        for (track, id) in items {
+        for (track, id) in &items {
             if let Some(t) = self.project.track_mut(*track) {
                 if t.remove_arr_clip(*id).is_some() {
                     touched.insert(*track);
@@ -210,7 +241,8 @@ impl Session {
 
     /// Sends a track's timeline to the engine.
     pub fn sync_lane(&mut self, track: TrackId) {
-        let Some(clips) = self.project.track(track).map(|t| t.arrangement.clone()) else {
+        // An auditioned take lane plays in the main lane's place.
+        let Some(clips) = self.project.track(track).map(|t| t.playing_lane().to_vec()) else {
             return;
         };
         let frozen = self.is_frozen(track);

@@ -18,6 +18,9 @@ mod clip_files;
 #[cfg(test)]
 mod clip_view_tests;
 mod clips;
+mod comping;
+#[cfg(test)]
+mod comping_tests;
 mod consolidate;
 mod devices;
 mod export;
@@ -93,7 +96,7 @@ mod takes_tests;
 mod tests;
 
 pub use arrange_edit::{
-    edge_fade_ticks, next_locator, prev_locator, quantized_tick, FadeSide, LoopEdit,
+    edge_fade_ticks, next_locator, prev_locator, quantized_tick, FadeSide, LaneSel, LoopEdit,
 };
 pub use arrangement::{ArrMove, TrimEdge};
 pub use automation_edit::{EnvGroup, EnvParam};

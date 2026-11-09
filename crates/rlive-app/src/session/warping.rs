@@ -464,9 +464,10 @@ impl Session {
         };
         let mut changed = Vec::new();
         for track in &mut self.project.tracks {
-            for clip in track.arrangement.iter_mut().map(|c| &mut c.clip) {
+            let id = track.id;
+            for clip in track.all_clips_mut().map(|c| &mut c.clip) {
                 if waiting(clip) && apply_auto_warp(clip, &grid, seconds, ticks_per_bar, found) {
-                    changed.push(track.id);
+                    changed.push(id);
                 }
             }
             for clip in track.clips.iter_mut().flatten() {

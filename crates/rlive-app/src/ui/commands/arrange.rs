@@ -135,6 +135,19 @@ impl RliveApp {
         out
     }
 
+    /// The lanes to work on, or if the selection names none, the main lanes of the tracks selected.
+    fn arrange_lanes(&self) -> Vec<crate::session::LaneSel> {
+        let mut out = self.ui.arr.selected_lanes(&self.session);
+        if out.is_empty() {
+            out = self
+                .selected_track_ids()
+                .into_iter()
+                .map(|t| (t, None))
+                .collect();
+        }
+        out
+    }
+
     fn insert_lanes(&self) -> Vec<LaneKey> {
         self.ui
             .arr
@@ -178,8 +191,8 @@ impl RliveApp {
             Arrange::Split => self.split_selection(),
             Arrange::Crop => {
                 if let Some((a, b)) = self.span() {
-                    let tracks = self.arrange_tracks();
-                    self.session.arr_crop(&tracks, a, b);
+                    let lanes = self.arrange_lanes();
+                    self.session.arr_crop_lanes(&lanes, a, b);
                 }
             }
             Arrange::CutTime => {
@@ -247,8 +260,8 @@ impl RliveApp {
             }
             Arrange::CreateFade => {
                 if let Some((a, b)) = self.span() {
-                    let tracks = self.arrange_tracks();
-                    self.session.arr_fade_from_span(&tracks, a, b);
+                    let lanes = self.arrange_lanes();
+                    self.session.arr_fade_from_lanes(&lanes, a, b);
                 }
             }
             Arrange::DeleteFades => {
@@ -278,6 +291,8 @@ impl RliveApp {
                     self.set_track_folded(t, false);
                 }
             }
+            Arrange::Taller if self.resize_take_header(8.0) => {}
+            Arrange::Shorter if self.resize_take_header(-8.0) => {}
             Arrange::Taller => self.resize_selected(8.0),
             Arrange::Shorter => self.resize_selected(-8.0),
             Arrange::ToggleOverview => self.ui.arr.show_overview = !self.ui.arr.show_overview,
@@ -329,20 +344,26 @@ impl RliveApp {
     }
 
     fn split_selection(&mut self) {
-        let tracks = self.arrange_tracks();
+        let lanes = self.arrange_lanes();
         if let Some(t) = self.ui.arr.time.as_ref().filter(|t| !t.is_point()) {
             let (a, b) = t.ticks();
-            self.session.arr_split(&tracks, &[a, b]);
+            self.session.arr_split_lanes(&lanes, &[a, b]);
             // What was selected is its own clips now, ready to move.
-            self.ui.arr.selection = tracks
+            self.ui.arr.selection = self
+                .session
+                .linked_lanes_of(&lanes)
                 .iter()
-                .filter_map(|id| self.session.project.track(*id))
-                .flat_map(|t| {
-                    t.arrangement
+                .filter_map(|(id, lane)| {
+                    self.session
+                        .project
+                        .track(*id)
+                        .and_then(|t| t.lane(*lane).map(|c| (*id, c)))
+                })
+                .flat_map(|(id, clips)| {
+                    clips
                         .iter()
                         .filter(|c| c.start >= a && c.end() <= b)
-                        .map(|c| (t.id, c.id))
-                        .collect::<Vec<_>>()
+                        .map(move |c| (id, c.id))
                 })
                 .collect();
             return;
@@ -353,7 +374,7 @@ impl RliveApp {
             .time
             .as_ref()
             .map_or(self.session.insert_marker() as u64, |t| t.start as u64);
-        self.session.arr_split(&tracks, &[at]);
+        self.session.arr_split_lanes(&lanes, &[at]);
     }
 
     fn start_insert_silence(&mut self) {
@@ -402,8 +423,8 @@ impl RliveApp {
             return;
         }
         let Some((a, b)) = self.span() else { return };
-        let tracks = self.arrange_tracks();
-        let placed = self.session.arr_move_span(&tracks, a, b, delta);
+        let lanes = self.arrange_lanes();
+        let placed = self.session.arr_move_lanes(&lanes, a, b, delta);
         if let Some(t) = self.ui.arr.time.as_mut() {
             t.start = (t.start + delta as f64).max(0.0);
             t.end = (t.end + delta as f64).max(t.start);
@@ -470,6 +491,7 @@ impl RliveApp {
             LaneKey {
                 chain: crate::session::ChainRef::Track(id),
                 slot: None,
+                take: None,
             },
         ));
         self.ui.selected = Some(crate::session::ChainRef::Track(id));
@@ -531,8 +553,8 @@ impl RliveApp {
             let items = self.ui.arr.selection.clone();
             self.session.arr_toggle_active(&items);
         } else if let Some((a, b)) = self.span() {
-            let tracks = self.arrange_tracks();
-            self.session.arr_toggle_span(&tracks, a, b);
+            let lanes = self.arrange_lanes();
+            self.session.arr_toggle_lanes(&lanes, a, b);
         }
     }
 

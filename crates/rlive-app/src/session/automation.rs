@@ -397,9 +397,10 @@ impl Session {
     pub(super) fn track_clips(&self, track: TrackRef) -> (&[Option<Clip>], &[ArrangementClip]) {
         match track {
             TrackRef::Master => (&[], &[]),
-            TrackRef::Track(id) => self.project.track(id).map_or((&[], &[]), |t| {
-                (t.clips.as_slice(), t.arrangement.as_slice())
-            }),
+            TrackRef::Track(id) => self
+                .project
+                .track(id)
+                .map_or((&[], &[]), |t| (t.clips.as_slice(), t.playing_lane())),
         }
     }
 

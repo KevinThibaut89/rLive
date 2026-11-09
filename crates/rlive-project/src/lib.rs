@@ -24,6 +24,7 @@ mod project;
 mod recording;
 mod routing;
 mod scene;
+pub mod takes;
 mod tempo_leader;
 mod track;
 pub mod tuning;

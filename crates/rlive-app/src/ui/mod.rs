@@ -1278,6 +1278,10 @@ impl RliveApp {
                     .and_then(|r| self.session.clip_at(r))
                     .is_some_and(|c| c.is_midi()),
             hot_swap: self.ui.browser.hot_swap.is_some(),
+            take_lane: self.take_lane_active(),
+            take_header: self.ui.focus == FocusArea::Arrangement
+                && self.ui.arr.take_header.is_some(),
+            take_area: self.take_area_active(),
         }
     }
 

@@ -126,6 +126,7 @@ impl Session {
         }
         let block = self.project.track_block(id);
         let ops: Vec<GraphOp> = block.iter().filter_map(|t| self.forget_track(*t)).collect();
+        self.project.prune_links();
         self.send_track_edits(ops);
         self.update_midi_targets();
         self.mark_edit("Delete Track");
@@ -253,9 +254,11 @@ impl Session {
         self.mark_edit("Change Mixer");
     }
 
+    /// Arms or disarms a track, and any linked with it.
     pub fn set_arm(&mut self, id: TrackId, arm: bool, exclusive: bool) {
+        let linked = self.project.linked_with(id);
         for t in self.project.tracks.iter_mut() {
-            if t.id == id {
+            if linked.contains(&t.id) {
                 t.arm = arm && t.routing.input != Route::None;
             } else if exclusive && arm {
                 t.arm = false;

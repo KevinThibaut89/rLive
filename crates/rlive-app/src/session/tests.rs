@@ -350,6 +350,8 @@ fn loop_recording_overdubs_into_one_clip() {
     let t = silent_project(&mut s);
     s.set_arm(t, true, true);
     s.set_loop(true, 0, 3840); // two seconds at 120 BPM
+                               // Without Overdub each pass becomes a take of its own (manual p. 433).
+    s.set_midi_arrangement_overdub(true);
     commit(&mut s);
     assert!(s.start_recording());
     render(&mut engine, &mut s, 4_096);

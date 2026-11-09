@@ -876,7 +876,7 @@ impl Builder<'_> {
             &track.devices,
             ChainRef::Track(track.id),
             &layout,
-            (&track.clips, &track.arrangement),
+            (&track.clips, track.playing_lane()),
             |macros| plan.routes(ChainRef::Track(track.id), &layout, slots, macros),
         );
         layouts.insert(ChainRef::Track(track.id), layout);
@@ -886,7 +886,7 @@ impl Builder<'_> {
             }
             node.set_launch(i, super::launch::slot_launch(track, i));
         }
-        node.set_lane(self.lane(&track.arrangement));
+        node.set_lane(self.lane(track.playing_lane()));
         self.frozen = false;
         Box::new(node)
     }

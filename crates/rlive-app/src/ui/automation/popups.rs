@@ -322,7 +322,11 @@ pub(super) fn show_control(
     }
     let mut other = None;
     session.edit_track_ui(chain, |ui| other = lanes::choose_main(ui, Some(target)));
-    state.arr.auto.focus = Some(LaneKey { chain, slot: other });
+    state.arr.auto.focus = Some(LaneKey {
+        chain,
+        slot: other,
+        take: None,
+    });
 }
 
 /// Records a right-click on a control that has no context menu of its own, so its automation
@@ -492,7 +496,11 @@ fn reveal(
         session.edit_track_ui(chain, |ui| {
             slot = lanes::show_in_new_lane(ui, chain, target)
         });
-        state.arr.auto.focus = Some(LaneKey { chain, slot });
+        state.arr.auto.focus = Some(LaneKey {
+            chain,
+            slot,
+            take: None,
+        });
     } else {
         show_control(session, state, chain, target);
     }

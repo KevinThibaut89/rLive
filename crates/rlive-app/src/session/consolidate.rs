@@ -20,6 +20,8 @@ enum Piece {
 
 struct Task {
     track: TrackId,
+    /// The take lane this is on. The main lane if none.
+    lane: Option<usize>,
     piece: Piece,
     /// A frozen track has its frozen sound for this stretch rendered too.
     frozen: bool,
@@ -27,11 +29,17 @@ struct Task {
 
 impl Session {
     /// The clips of a track inside a span, without frozen tails.
-    fn span_clips(&self, track: TrackId, start: u64, end: u64) -> Vec<ArrangementClip> {
-        let Some(t) = self.project.track(track) else {
+    fn span_clips(
+        &self,
+        track: TrackId,
+        lane: Option<usize>,
+        start: u64,
+        end: u64,
+    ) -> Vec<ArrangementClip> {
+        let Some(clips) = self.project.track(track).and_then(|t| t.lane(lane)) else {
             return Vec::new();
         };
-        t.copy_span(start, end)
+        rlive_project::arrangement_edit::copy_lane_span(clips, start, end)
             .into_iter()
             .filter(|c| !c.clip.frozen_tail)
             .collect()
@@ -39,18 +47,42 @@ impl Session {
 
     /// Whether there is anything to consolidate in a selection.
     pub fn can_consolidate(&self, tracks: &[TrackId], start: u64, end: u64) -> bool {
+        let lanes: Vec<(TrackId, Option<usize>)> = tracks.iter().map(|t| (*t, None)).collect();
+        self.can_consolidate_lanes(&lanes, start, end)
+    }
+
+    /// Whether there is anything to consolidate on these lanes.
+    pub fn can_consolidate_lanes(
+        &self,
+        lanes: &[(TrackId, Option<usize>)],
+        start: u64,
+        end: u64,
+    ) -> bool {
         end > start
-            && tracks.iter().any(|t| {
+            && lanes.iter().any(|(t, lane)| {
                 self.project
                     .track(*t)
                     .is_some_and(|tr| matches!(tr.kind, TrackKind::Midi | TrackKind::Audio))
-                    && !self.span_clips(*t, start, end).is_empty()
+                    && !self.span_clips(*t, *lane, start, end).is_empty()
             })
     }
 
     /// Consolidates what's in `[start, end)` of each track into one clip. Starts a job.
     pub fn consolidate(&mut self, tracks: &[TrackId], start: u64, end: u64) -> Result<(), String> {
-        let (renders, tasks) = self.plan_consolidate(tracks, start, end)?;
+        let lanes: Vec<(TrackId, Option<usize>)> = tracks.iter().map(|t| (*t, None)).collect();
+        self.consolidate_lanes(&lanes, start, end)
+    }
+
+    /// Consolidates what's in `[start, end)` of each lane, and its linked lanes, into one clip.
+    /// Starts a job.
+    pub fn consolidate_lanes(
+        &mut self,
+        lanes: &[(TrackId, Option<usize>)],
+        start: u64,
+        end: u64,
+    ) -> Result<(), String> {
+        let lanes = self.linked_lanes(lanes);
+        let (renders, tasks) = self.plan_consolidate(&lanes, start, end)?;
         self.start_render_job(
             "Consolidate",
             renders,
@@ -66,8 +98,9 @@ impl Session {
         start: u64,
         end: u64,
     ) -> Result<(), String> {
-        let tracks: Vec<TrackId> = self.project.tracks.iter().map(|t| t.id).collect();
-        let (renders, tasks) = self.plan_consolidate(&tracks, start, end)?;
+        let lanes: Vec<(TrackId, Option<usize>)> =
+            self.project.tracks.iter().map(|t| (t.id, None)).collect();
+        let (renders, tasks) = self.plan_consolidate(&lanes, start, end)?;
         self.start_render_job(
             "Consolidate Time to New Scene",
             renders,
@@ -78,21 +111,21 @@ impl Session {
 
     fn plan_consolidate(
         &mut self,
-        tracks: &[TrackId],
+        lanes: &[(TrackId, Option<usize>)],
         start: u64,
         end: u64,
     ) -> Result<(Vec<Render>, Vec<Task>), String> {
-        if !self.can_consolidate(tracks, start, end) {
+        if !self.can_consolidate_lanes(lanes, start, end) {
             return Err("There are no clips in the selection to consolidate".into());
         }
         self.prepare_render();
         let (mut renders, mut tasks) = (Vec::new(), Vec::new());
         let keep = Keep::Span { start, end };
-        for track in tracks {
+        for (track, lane) in lanes {
             let Some(t) = self.project.track(*track) else {
                 continue;
             };
-            let clips = self.span_clips(*track, start, end);
+            let clips = self.span_clips(*track, *lane, start, end);
             let Some(first) = clips.first() else {
                 continue;
             };
@@ -100,6 +133,12 @@ impl Session {
             let frozen = t.is_frozen();
             let piece = if audio {
                 let mut v = pre_fx_variant(&self.project, &[*track]);
+                // A take lane renders the way an auditioned one plays: in the main lane's place.
+                if let (Some(i), Some(t)) = (lane, v.track_mut(*track)) {
+                    if let Some(l) = t.take_lanes.get(*i) {
+                        t.arrangement = l.clips.clone();
+                    }
+                }
                 keep_material(&mut v, &[*track], &keep);
                 renders.push(Render {
                     project: v,
@@ -128,6 +167,7 @@ impl Session {
             }
             tasks.push(Task {
                 track: *track,
+                lane: *lane,
                 piece,
                 frozen,
             });
@@ -142,7 +182,7 @@ impl Session {
         audio: Vec<Rendered>,
         start: u64,
         end: u64,
-    ) -> Result<Vec<(TrackId, Clip)>, String> {
+    ) -> Result<Vec<(TrackId, Option<usize>, Clip)>, String> {
         let mut audio = audio.into_iter();
         let mut out = Vec::with_capacity(tasks.len());
         let format = (self.record.file_type, self.record.bit_depth);
@@ -181,7 +221,7 @@ impl Session {
                     loop_start: 0,
                 }));
             }
-            out.push((task.track, clip));
+            out.push((task.track, task.lane, clip));
         }
         Ok(out)
     }
@@ -195,15 +235,18 @@ impl Session {
     ) -> Result<(), String> {
         let clips = self.consolidated_clips(tasks, audio, start, end)?;
         self.mark_edit("Consolidate");
-        for (track, clip) in clips {
+        for (track, lane, clip) in clips {
             let Some(t) = self.project.track_mut(track) else {
                 continue;
             };
-            t.delete_span(start, end);
-            t.place_clip(ArrangementClip {
-                length: end - start,
-                ..ArrangementClip::new(clip, start)
-            });
+            t.delete_lane_span(lane, start, end);
+            t.place_on_lane(
+                lane,
+                ArrangementClip {
+                    length: end - start,
+                    ..ArrangementClip::new(clip, start)
+                },
+            );
             t.settle_fades();
             self.sync_lane(track);
         }
@@ -222,7 +265,7 @@ impl Session {
         let Some(scene) = self.insert_scene(below) else {
             return Err("There is no room for another scene".into());
         };
-        for (track, mut clip) in clips {
+        for (track, _, mut clip) in clips {
             clip.launch = self.launch_defaults.settings();
             if let Some(entry) = self
                 .project

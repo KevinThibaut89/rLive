@@ -155,9 +155,10 @@ fn prev_clip<'a>(
     c: &ArrangementClip,
 ) -> Option<&'a ArrangementClip> {
     let t = session.project.track(track)?;
-    let i = t.arrangement.iter().position(|o| o.id == c.id)?;
+    let lane = t.lane(t.lane_of(c.id)?)?;
+    let i = lane.iter().position(|o| o.id == c.id)?;
     i.checked_sub(1)
-        .and_then(|p| t.arrangement.get(p))
+        .and_then(|p| lane.get(p))
         .filter(|p| p.end() == c.start && p.is_audio())
 }
 
@@ -167,9 +168,9 @@ fn next_clip<'a>(
     c: &ArrangementClip,
 ) -> Option<&'a ArrangementClip> {
     let t = session.project.track(track)?;
-    let i = t.arrangement.iter().position(|o| o.id == c.id)?;
-    t.arrangement
-        .get(i + 1)
+    let lane = t.lane(t.lane_of(c.id)?)?;
+    let i = lane.iter().position(|o| o.id == c.id)?;
+    lane.get(i + 1)
         .filter(|n| n.start == c.end() && n.is_audio())
 }
 

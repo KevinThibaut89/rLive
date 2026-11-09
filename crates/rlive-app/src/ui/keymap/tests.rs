@@ -34,6 +34,9 @@ fn cx(focus: FocusArea) -> KeyContext {
         lane_focused: false,
         notes_free: false,
         hot_swap: false,
+        take_lane: false,
+        take_header: false,
+        take_area: false,
     }
 }
 
@@ -781,6 +784,61 @@ fn pending_shortcuts_are_listed_in_the_checklist() {
 }
 
 // ---------------------------------------------------------------- the Arrangement's selection
+
+#[test]
+fn take_lane_keys_go_to_the_take_lane_only_while_one_is_selected() {
+    use super::super::commands::comping::Comp;
+    let arr = cx(FocusArea::Arrangement);
+    let run = |c: KeyContext, ch: Chord| resolve(ch, &c);
+    // Enter belongs to Add Take Area only with a take lane in hand.
+    assert!(!matches!(
+        run(arr, bare(Key::Enter)),
+        Resolution::Run(MenuCommand::Comp(_))
+    ));
+    let on_lane = KeyContext {
+        take_lane: true,
+        ..arr
+    };
+    assert_eq!(
+        run(on_lane, bare(Key::Enter)),
+        Resolution::Run(MenuCommand::Comp(Comp::CopyToMain))
+    );
+    assert_eq!(
+        run(on_lane, bare(Key::T)),
+        Resolution::Run(MenuCommand::Comp(Comp::Audition))
+    );
+    // Cmd+Up and Cmd+Down step through takes on a selection, and reorder a lane in its header.
+    let area = KeyContext {
+        take_area: true,
+        ..arr
+    };
+    assert_eq!(
+        run(area, cmd(Key::ArrowUp)),
+        Resolution::Run(MenuCommand::Comp(Comp::NextTake))
+    );
+    let header = KeyContext {
+        take_header: true,
+        take_lane: true,
+        ..arr
+    };
+    assert_eq!(
+        run(header, cmd(Key::ArrowUp)),
+        Resolution::Run(MenuCommand::Comp(Comp::MoveLaneUp))
+    );
+    assert_eq!(
+        run(header, cmd(Key::D)),
+        Resolution::Run(MenuCommand::Comp(Comp::DuplicateLane))
+    );
+    assert_eq!(
+        run(header, bare(Key::ArrowLeft)),
+        Resolution::Run(MenuCommand::Comp(Comp::FoldToMain))
+    );
+    // Off a header, Cmd+D is Duplicate as ever.
+    assert_eq!(
+        run(area, cmd(Key::D)),
+        Resolution::Run(MenuCommand::Edit(Edit::Duplicate))
+    );
+}
 
 #[test]
 fn arrows_act_on_what_the_arrangement_has_selected() {

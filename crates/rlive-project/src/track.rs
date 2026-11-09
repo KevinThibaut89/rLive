@@ -193,6 +193,8 @@ pub struct TrackUi {
     pub show_take_lanes: bool,
     /// The take lane being auditioned, by index.
     pub audition_lane: Option<usize>,
+    /// Take lane heights in points, by lane, where set by hand. Short of a lane means the default.
+    pub take_lane_heights: Vec<f32>,
     /// Automation lanes on show under the main one, in display order.
     pub automation_lanes: Vec<EnvTarget>,
     /// The main automation lane.

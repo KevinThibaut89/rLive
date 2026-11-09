@@ -661,6 +661,8 @@ fn base_variant(p: &Project) -> Project {
         t.solo = false;
         t.arm = false;
         t.routing.monitor = Monitor::Off;
+        // Auditioning is for listening; renders are of what the Set is.
+        t.ui.audition_lane = None;
     }
     v
 }

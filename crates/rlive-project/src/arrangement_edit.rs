@@ -156,7 +156,7 @@ impl ArrangementClip {
     }
 
     /// The part of the clip inside `[start, end)`, placed relative to `origin`.
-    fn clipped_to(&self, start: u64, end: u64, origin: u64) -> Option<Self> {
+    pub(crate) fn clipped_to(&self, start: u64, end: u64, origin: u64) -> Option<Self> {
         if self.end() <= start || self.start >= end {
             return None;
         }
@@ -175,48 +175,9 @@ impl ArrangementClip {
 impl Track {
     /// After an edit, keeps fades within their limits and drops crossfades with no neighbour.
     pub fn settle_fades(&mut self) {
-        for i in 0..self.arrangement.len() {
-            let prev = i.checked_sub(1).map(|p| self.arrangement[p].end());
-            let c = &mut self.arrangement[i];
-            if !c.is_audio() {
-                c.clip.fades = Default::default();
-                continue;
-            }
-            if prev != Some(c.start) {
-                c.clip.fades.in_tail = 0;
-            }
-            let room = c.fade_room();
-            let f = &mut c.clip.fades;
-            f.in_tail = f.in_tail.min(room.lead);
-            f.out_tail = f.out_tail.min(room.tail);
-            f.fade_in = f.fade_in.min(room.fade_in);
-            f.fade_out = f.fade_out.min(room.fade_out);
-            let length = c.length;
-            let f = &mut c.clip.fades;
-            if f.fade_in + f.fade_out > length {
-                f.fade_out = length.saturating_sub(f.fade_in);
-            }
-            let adjacent = self
-                .arrangement
-                .get(i + 1)
-                .map(|n| n.start == self.arrangement[i].end() && n.is_audio())
-                == Some(true);
-            if !adjacent {
-                self.arrangement[i].clip.fades.out_tail = 0;
-            }
-        }
-        // The two halves of a crossfade describe the one span.
-        for i in 1..self.arrangement.len() {
-            let (ahead, behind) = self.arrangement.split_at_mut(i);
-            let (a, b) = (&mut ahead[i - 1].clip.fades, &mut behind[0].clip.fades);
-            if a.out_tail > 0 || b.in_tail > 0 {
-                let after = a.out_tail.min(b.fade_in);
-                let before = b.in_tail.min(a.fade_out);
-                a.out_tail = after;
-                b.fade_in = after;
-                b.in_tail = before;
-                a.fade_out = before;
-            }
+        settle_lane(&mut self.arrangement);
+        for lane in &mut self.take_lanes {
+            settle_lane(&mut lane.clips);
         }
     }
 
@@ -229,46 +190,25 @@ impl Track {
         after: u64,
         curve: f32,
     ) -> Option<(u64, u64)> {
-        if !self.can_crossfade(i) {
-            return None;
-        }
-        let (a, b) = (&self.arrangement[i], &self.arrangement[i + 1]);
-        let (ra, rb) = (a.fade_room(), b.fade_room());
-        let before = before
-            .min(ra.fade_out)
-            .min(rb.lead)
-            .min(a.length.saturating_sub(a.clip.fades.fade_in));
-        let after = after
-            .min(rb.fade_in)
-            .min(ra.tail)
-            .min(b.length.saturating_sub(b.clip.fades.fade_out));
-        if before == 0 && after == 0 {
-            return None;
-        }
-        let f = &mut self.arrangement[i].clip.fades;
-        f.fade_out = before;
-        f.out_tail = after;
-        f.out_curve = curve;
-        let f = &mut self.arrangement[i + 1].clip.fades;
-        f.fade_in = after;
-        f.in_tail = before;
-        f.in_curve = curve;
-        Some((before, after))
+        set_crossfade(&mut self.arrangement, i, before, after, curve)
     }
 
     /// Takes a clip's fade in off, and with it any crossfade it's part of.
     pub fn delete_fade_in(&mut self, id: ArrClipId) {
-        let Some(i) = self.arrangement.iter().position(|c| c.id == id) else {
+        let Some(lane) = self.lane_of(id).and_then(|l| self.lane_mut(l)) else {
             return;
         };
-        let tail = self.arrangement[i].clip.fades.in_tail > 0;
-        let f = &mut self.arrangement[i].clip.fades;
+        let Some(i) = lane.iter().position(|c| c.id == id) else {
+            return;
+        };
+        let tail = lane[i].clip.fades.in_tail > 0;
+        let f = &mut lane[i].clip.fades;
         f.fade_in = 0;
         f.in_tail = 0;
         f.in_curve = 0.0;
-        if tail || i > 0 && self.arrangement[i - 1].clip.fades.out_tail > 0 {
+        if tail || i > 0 && lane[i - 1].clip.fades.out_tail > 0 {
             if let Some(prev) = i.checked_sub(1) {
-                let f = &mut self.arrangement[prev].clip.fades;
+                let f = &mut lane[prev].clip.fades;
                 f.fade_out = 0;
                 f.out_tail = 0;
             }
@@ -277,21 +217,19 @@ impl Track {
 
     /// Takes a clip's fade out off, and with it any crossfade it's part of.
     pub fn delete_fade_out(&mut self, id: ArrClipId) {
-        let Some(i) = self.arrangement.iter().position(|c| c.id == id) else {
+        let Some(lane) = self.lane_of(id).and_then(|l| self.lane_mut(l)) else {
             return;
         };
-        let tail = self.arrangement[i].clip.fades.out_tail > 0;
-        let f = &mut self.arrangement[i].clip.fades;
+        let Some(i) = lane.iter().position(|c| c.id == id) else {
+            return;
+        };
+        let tail = lane[i].clip.fades.out_tail > 0;
+        let f = &mut lane[i].clip.fades;
         f.fade_out = 0;
         f.out_tail = 0;
         f.out_curve = 0.0;
-        if tail
-            || self
-                .arrangement
-                .get(i + 1)
-                .is_some_and(|n| n.clip.fades.in_tail > 0)
-        {
-            if let Some(next) = self.arrangement.get_mut(i + 1) {
+        if tail || lane.get(i + 1).is_some_and(|n| n.clip.fades.in_tail > 0) {
+            if let Some(next) = lane.get_mut(i + 1) {
                 let f = &mut next.clip.fades;
                 f.fade_in = 0;
                 f.in_tail = 0;
@@ -299,33 +237,28 @@ impl Track {
         }
     }
 
-    /// Splits whatever clip is at `at`, returning the new second half.
+    /// Splits whatever clip is at `at` on the main lane, returning the new second half.
     pub fn split_at(&mut self, at: u64) -> Option<ArrClipId> {
-        let i = self
-            .arrangement
-            .iter()
-            .position(|c| c.start < at && c.end() > at)?;
-        let (left, right) = self.arrangement[i].split(at)?;
-        let id = right.id;
-        self.arrangement[i] = left;
-        self.arrangement.insert(i + 1, right);
-        Some(id)
+        split_lane(&mut self.arrangement, at)
     }
 
-    /// Removes the material in `[start, end)`, leaving a gap.
+    /// Removes the main lane's material in `[start, end)`, leaving a gap.
     pub fn delete_span(&mut self, start: u64, end: u64) {
-        self.split_at(start);
-        self.split_at(end);
-        self.arrangement
-            .retain(|c| c.end() <= start || c.start >= end);
+        delete_lane_span(&mut self.arrangement, start, end);
     }
 
-    /// Copies of what's in `[start, end)`, placed from zero.
+    /// Copies of what's in `[start, end)` of the main lane, placed from zero.
     pub fn copy_span(&self, start: u64, end: u64) -> Vec<ArrangementClip> {
-        self.arrangement
-            .iter()
-            .filter_map(|c| c.clipped_to(start, end, start))
-            .collect()
+        copy_lane_span(&self.arrangement, start, end)
+    }
+
+    /// Crops the main lane or a take lane to `[start, end)`.
+    pub fn crop_lane(&mut self, lane: Option<usize>, start: u64, end: u64) {
+        if let Some(clips) = self.lane_mut(lane) {
+            split_lane(clips, start);
+            split_lane(clips, end);
+            clips.retain(|c| c.start >= start && c.end() <= end);
+        }
     }
 
     /// Whether the clips at `i` and `i + 1` touch and can crossfade.
@@ -337,6 +270,112 @@ impl Track {
     pub fn effective_fades(&self, edge: Option<u64>) -> Vec<EffectiveFades> {
         effective_fades(&self.arrangement, edge)
     }
+}
+
+/// Keeps a lane's fades within their limits and drops crossfades with no neighbour.
+fn settle_lane(clips: &mut [ArrangementClip]) {
+    for i in 0..clips.len() {
+        let prev = i.checked_sub(1).map(|p| clips[p].end());
+        let c = &mut clips[i];
+        if !c.is_audio() {
+            c.clip.fades = Default::default();
+            continue;
+        }
+        if prev != Some(c.start) {
+            c.clip.fades.in_tail = 0;
+        }
+        let room = c.fade_room();
+        let f = &mut c.clip.fades;
+        f.in_tail = f.in_tail.min(room.lead);
+        f.out_tail = f.out_tail.min(room.tail);
+        f.fade_in = f.fade_in.min(room.fade_in);
+        f.fade_out = f.fade_out.min(room.fade_out);
+        let length = c.length;
+        let f = &mut c.clip.fades;
+        if f.fade_in + f.fade_out > length {
+            f.fade_out = length.saturating_sub(f.fade_in);
+        }
+        let adjacent = clips
+            .get(i + 1)
+            .map(|n| n.start == clips[i].end() && n.is_audio())
+            == Some(true);
+        if !adjacent {
+            clips[i].clip.fades.out_tail = 0;
+        }
+    }
+    // The two halves of a crossfade describe the one span.
+    for i in 1..clips.len() {
+        let (ahead, behind) = clips.split_at_mut(i);
+        let (a, b) = (&mut ahead[i - 1].clip.fades, &mut behind[0].clip.fades);
+        if a.out_tail > 0 || b.in_tail > 0 {
+            let after = a.out_tail.min(b.fade_in);
+            let before = b.in_tail.min(a.fade_out);
+            a.out_tail = after;
+            b.fade_in = after;
+            b.in_tail = before;
+            a.fade_out = before;
+        }
+    }
+}
+
+/// Splits whatever clip of the lane is at `at`, returning the new second half.
+pub fn split_lane(clips: &mut Vec<ArrangementClip>, at: u64) -> Option<ArrClipId> {
+    let i = clips.iter().position(|c| c.start < at && c.end() > at)?;
+    let (left, right) = clips[i].split(at)?;
+    let id = right.id;
+    clips[i] = left;
+    clips.insert(i + 1, right);
+    Some(id)
+}
+
+/// Removes the lane's material in `[start, end)`, leaving a gap.
+pub fn delete_lane_span(clips: &mut Vec<ArrangementClip>, start: u64, end: u64) {
+    split_lane(clips, start);
+    split_lane(clips, end);
+    clips.retain(|c| c.end() <= start || c.start >= end);
+}
+
+/// Copies of what's in `[start, end)` of a lane, placed from zero.
+pub fn copy_lane_span(clips: &[ArrangementClip], start: u64, end: u64) -> Vec<ArrangementClip> {
+    clips
+        .iter()
+        .filter_map(|c| c.clipped_to(start, end, start))
+        .collect()
+}
+
+/// Crossfades the lane's clip at `i` into the next, as [`Track::set_crossfade`] does.
+pub fn set_crossfade(
+    clips: &mut [ArrangementClip],
+    i: usize,
+    before: u64,
+    after: u64,
+    curve: f32,
+) -> Option<(u64, u64)> {
+    if !can_crossfade(clips, i) {
+        return None;
+    }
+    let (a, b) = (&clips[i], &clips[i + 1]);
+    let (ra, rb) = (a.fade_room(), b.fade_room());
+    let before = before
+        .min(ra.fade_out)
+        .min(rb.lead)
+        .min(a.length.saturating_sub(a.clip.fades.fade_in));
+    let after = after
+        .min(rb.fade_in)
+        .min(ra.tail)
+        .min(b.length.saturating_sub(b.clip.fades.fade_out));
+    if before == 0 && after == 0 {
+        return None;
+    }
+    let f = &mut clips[i].clip.fades;
+    f.fade_out = before;
+    f.out_tail = after;
+    f.out_curve = curve;
+    let f = &mut clips[i + 1].clip.fades;
+    f.fade_in = after;
+    f.in_tail = before;
+    f.in_curve = curve;
+    Some((before, after))
 }
 
 fn can_crossfade(clips: &[ArrangementClip], i: usize) -> bool {
@@ -410,6 +449,8 @@ pub fn ms_to_ticks(ms: f64, bpm: f64) -> u64 {
 pub struct TimeClip {
     pub length: u64,
     pub lanes: Vec<(TrackId, Vec<ArrangementClip>)>,
+    /// What each track's take lanes held, by lane.
+    pub takes: Vec<(TrackId, usize, Vec<ArrangementClip>)>,
     envelopes: Vec<(TrackId, EnvTarget, RangeClip)>,
     tempo: Option<RangeClip>,
     signatures: Vec<SignatureMarker>,
@@ -483,6 +524,17 @@ impl Project {
             .iter()
             .map(|t| (t.id, t.copy_span(start, end)))
             .collect();
+        let takes = self
+            .tracks
+            .iter()
+            .flat_map(|t| {
+                t.take_lanes
+                    .iter()
+                    .enumerate()
+                    .map(move |(i, l)| (t.id, i, copy_lane_span(&l.clips, start, end)))
+            })
+            .filter(|(_, _, clips)| !clips.is_empty())
+            .collect();
         let mut envelopes = Vec::new();
         for t in self
             .tracks
@@ -514,6 +566,7 @@ impl Project {
         TimeClip {
             length: end - start,
             lanes,
+            takes,
             envelopes,
             tempo,
             signatures,
@@ -542,13 +595,15 @@ impl Project {
         }
         let len = end - start;
         for t in &mut self.tracks {
-            t.delete_span(start, end);
-            for c in &mut t.arrangement {
-                if c.start >= end {
-                    c.start -= len;
+            for clips in t.lanes_mut() {
+                delete_lane_span(clips, start, end);
+                for c in clips.iter_mut() {
+                    if c.start >= end {
+                        c.start -= len;
+                    }
                 }
+                clips.sort_by_key(|c| c.start);
             }
-            t.arrangement.sort_by_key(|c| c.start);
             t.settle_fades();
         }
         let tempo = self.tempo_range();
@@ -598,13 +653,15 @@ impl Project {
             return;
         }
         for t in &mut self.tracks {
-            t.split_at(at);
-            for c in &mut t.arrangement {
-                if c.start >= at {
-                    c.start += len;
+            for clips in t.lanes_mut() {
+                split_lane(clips, at);
+                for c in clips.iter_mut() {
+                    if c.start >= at {
+                        c.start += len;
+                    }
                 }
+                clips.sort_by_key(|c| c.start);
             }
-            t.arrangement.sort_by_key(|c| c.start);
             t.settle_fades();
         }
         let tempo = self.tempo_range();
@@ -660,6 +717,23 @@ impl Project {
                 };
                 placed.push((*id, new.id));
                 t.place_clip(new);
+            }
+            t.settle_fades();
+        }
+        for (id, lane, clips) in &clip.takes {
+            let Some(t) = self.tracks.iter_mut().find(|t| t.id == *id) else {
+                continue;
+            };
+            let Some(l) = t.take_lanes.get_mut(*lane) else {
+                continue;
+            };
+            for c in clips {
+                let new = ArrangementClip {
+                    id: ArrClipId::new(),
+                    start: c.start + at,
+                    ..c.clone()
+                };
+                crate::arrangement::place_on(&mut l.clips, new);
             }
             t.settle_fades();
         }

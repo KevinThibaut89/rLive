@@ -8,6 +8,7 @@ use super::super::commands::arrange::Arrange as Ar;
 use super::super::commands::bounce::Bounce;
 use super::super::commands::browser::Browser as Br;
 use super::super::commands::clip::Clip as Cv;
+use super::super::commands::comping::Comp;
 use super::super::commands::create::Create;
 use super::super::commands::edit::Edit;
 use super::super::commands::file::File;
@@ -459,13 +460,18 @@ pub static BINDINGS: &[Binding] = &[
     a("42.16", Arr, "Focus Mixer", k(ALT_SHIFT, Key::M), p!("C19")),
 
     // 42.17 Comping
-    a("42.17", Arr, "Show take lanes", k(CMD_ALT, Key::U), p!("C6")),
-    b("42.17", Arr, Wh::TakeLane, "Add take area to the main lane", k(NO, Key::Enter), p!("C6")),
-    b("42.17", Arr, Wh::TakeLane, "Audition take lane", k(NO, Key::T), p!("C6")),
-    a("42.17", Arr, "Add take lane", k(ALT_SHIFT, Key::T), p!("C6")),
-    b("42.17", Arr, Wh::TakeLane, "Duplicate take lane", k(CMD, Key::D), p!("C6")),
-    b("42.17", Arr, Wh::TakeLane, "Next take into the main clip", k(CMD, Key::ArrowUp), p!("C6")),
-    b("42.17", Arr, Wh::TakeLane, "Previous take into the main clip", k(CMD, Key::ArrowDown), p!("C6")),
+    a("42.17", Arr, "Show take lanes", k(CMD_ALT, Key::U), L(M::Comp(Comp::ToggleShow))),
+    b("42.17", Arr, Wh::TakeLane, "Add take area to the main lane", k(NO, Key::Enter), L(M::Comp(Comp::CopyToMain))),
+    b("42.17", Arr, Wh::TakeLane, "Audition take lane", k(NO, Key::T), L(M::Comp(Comp::Audition))),
+    a("42.17", Arr, "Add take lane", k(ALT_SHIFT, Key::T), L(M::Comp(Comp::InsertLane))),
+    b("42.17", Arr, Wh::TakeHeader, "Duplicate take lane", k(CMD, Key::D), L(M::Comp(Comp::DuplicateLane))),
+    b("42.17", Arr, Wh::TakeArea, "Next take into the main clip", k(CMD, Key::ArrowUp), L(M::Comp(Comp::NextTake))),
+    b("42.17", Arr, Wh::TakeArea, "Previous take into the main clip", k(CMD, Key::ArrowDown), L(M::Comp(Comp::PreviousTake))),
+    b("rlive", Arr, Wh::TakeHeader, "Move take lane up", k(CMD, Key::ArrowUp), L(M::Comp(Comp::MoveLaneUp))),
+    b("rlive", Arr, Wh::TakeHeader, "Move take lane down", k(CMD, Key::ArrowDown), L(M::Comp(Comp::MoveLaneDown))),
+    b("rlive", Arr, Wh::TakeHeader, "Delete take lane", k(NO, Key::Delete), L(M::Comp(Comp::DeleteLane))),
+    b("rlive", Arr, Wh::TakeHeader, "Rename take lane", k(CMD, Key::R), L(M::Comp(Comp::RenameLane))),
+    b("rlive", Arr, Wh::TakeHeader, "Back to the main lane, folding the take lanes", k(NO, Key::ArrowLeft), L(M::Comp(Comp::FoldToMain))),
 
     // 42.18 Bounce to audio
     a("42.18", All, "Bounce to new track", k(CMD, Key::B), L(M::Bounce(Bounce::ToNewTrack))),

@@ -229,8 +229,8 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[x]` Cut/Paste/Duplicate/Delete Time, Insert Silence, moves signatures too [M]
 - `[x]` Split at point or selection [M]
 - `[x]` Consolidate across tracks: renders pre-effects, includes warp, attenuation, clip envelopes; stored Processed/Consolidate [L] → offline clip renderer
-- `[ ]` Linked tracks: multiple exclusive groups, hover highlight, click selects, add/unlink, group shortcut [L]
-- `[ ]` Linked operations: move, resize, select, time commands, split, consolidate, fades, arm, take lanes [L] → comping (ch. 21)
+- `[~]` Linked tracks: multiple exclusive groups, hover highlight, click selects, add/unlink, group shortcut [L]
+- `[~]` Linked operations: move, resize, select, time commands, split, consolidate, fades, arm, take lanes [L] → comping (ch. 21)
 - `[ ]` Mixer in Arrangement plus Arrangement track controls, shared values, customizable sets; some mixer-only [M]
 
 
@@ -678,18 +678,18 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** C6
 
-- `[ ]` Take lanes on audio and MIDI tracks; Main lane; only audible by Audition. L
-- `[ ]` Show/hide; hidden in Automation Mode; left arrow folds. S
-- `[ ]` Insert, duplicate, delete, Delete All, Delete All Unused. S
-- `[ ]` Lane resize, reorder, rename with Tab; lanes exposed through Live API. M. [X] for API.
-- `[ ]` Auto-created while recording; new lane per overlapping pass; reuse rule after punch-in; last take copied to Main. L
-- `[ ]` Random take colour option. S
+- `[x]` Take lanes on audio and MIDI tracks; Main lane; only audible by Audition. L
+- `[~]` Show/hide; hidden in Automation Mode; left arrow folds. S
+- `[x]` Insert, duplicate, delete, Delete All, Delete All Unused. S
+- `[~]` Lane resize, reorder, rename with Tab; lanes exposed through Live API. M. [X] for API.
+- `[x]` Auto-created while recording; new lane per overlapping pass; reuse rule after punch-in; last take copied to Main. L
+- `[x]` Random take colour option. S
 - `[ ]` Drag samples or MIDI to lanes; Ctrl/Cmd spreads across tracks. S
-- `[ ]` Audition one lane per track (T). M
-- `[ ]` Copy selection to Main (Enter); Ctrl/Cmd+Up/Down swaps take; Draw Mode single-gesture comp; click lane to replace selection. L
-- `[ ]` Main-lane clips are independent copies; take clips edit normally and can move to Session. M
-- `[ ]` Create Fades on Clip Edges gives 4 ms crossfades. S
-- `[ ]` Source highlights and desaturated unused takes; drag highlight edge moves split point. M
+- `[x]` Audition one lane per track (T). M
+- `[~]` Copy selection to Main (Enter); Ctrl/Cmd+Up/Down swaps take; Draw Mode single-gesture comp; click lane to replace selection. L
+- `[x]` Main-lane clips are independent copies; take clips edit normally and can move to Session. M
+- `[x]` Create Fades on Clip Edges gives 4 ms crossfades. S
+- `[~]` Source highlights and desaturated unused takes; drag highlight edge moves split point. M
 
 
 ## 22. Stem Separation (437-444)
@@ -1335,7 +1335,6 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **C17:** Hide/show Sends; Hide/show return tracks; Toggle second window
 - `[ ]` **C18:** Hide/show video window
 - `[ ]` **C19:** Cancel value entry; Confirm value entry; Current scene from the last track; Decrement value; Delete track from title bar; Eight scenes down; Eight scenes up; First track of the scene; Focus Mixer; Increment value; Jump to highlighted track title; Last track of the scene; Move nonadjacent tracks down; Move nonadjacent tracks left; Move nonadjacent tracks right; Move nonadjacent tracks up; Next control; Next field; Next name while renaming; Next neighbouring control; Next track while renaming; Previous control; Previous neighbouring control; Return to default; Scene down; Scene up; Select all clips and slots; Select clip above; Select clip below; Select clip left; Select clip right; Type a value; Value down by an octave or fine step; Value up by an octave or fine step
-- `[ ]` **C6:** Add take area to the main lane; Add take lane; Audition take lane; Duplicate take lane; Next take into the main clip; Previous take into the main clip; Show take lanes
 - `[ ]` **out:** Focus Learn View; Hide/show Learn View
 <!-- pending-shortcuts:end -->
 

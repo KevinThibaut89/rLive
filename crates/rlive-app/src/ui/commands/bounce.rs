@@ -64,9 +64,12 @@ fn selected_span(state: &UiState) -> Option<(u64, u64)> {
 }
 
 /// What the selection would consolidate: its tracks, and the time it covers.
-fn consolidate_range(session: &Session, state: &UiState) -> Option<(Vec<TrackId>, u64, u64)> {
+fn consolidate_range(
+    session: &Session,
+    state: &UiState,
+) -> Option<(Vec<crate::session::LaneSel>, u64, u64)> {
     if let Some((start, end)) = selected_span(state) {
-        return Some((state.arr.selected_tracks(), start, end));
+        return Some((state.arr.selected_lanes(session), start, end));
     }
     let clips: Vec<(TrackId, u64, u64)> = state
         .arr
@@ -79,18 +82,27 @@ fn consolidate_range(session: &Session, state: &UiState) -> Option<(Vec<TrackId>
         .collect();
     let start = clips.iter().map(|c| c.1).min()?;
     let end = clips.iter().map(|c| c.2).max()?;
-    let mut tracks: Vec<TrackId> = clips.iter().map(|c| c.0).collect();
-    tracks.dedup();
-    Some((tracks, start, end))
+    // The clips may be on a take lane: consolidating happens there.
+    let lanes = state.arr.selected_lanes(session);
+    Some((lanes, start, end))
 }
 
 fn paste_target(session: &Session, state: &UiState) -> Option<PasteTarget> {
     let Some(ChainRef::Track(track)) = state.selected else {
         return None;
     };
-    Some(PasteTarget::Main {
-        track,
-        at: session.insert_marker() as u64,
+    let at = session.insert_marker() as u64;
+    // With the insert marker on a take lane, the audio goes there.
+    let lane = state
+        .arr
+        .time
+        .as_ref()
+        .filter(|t| t.is_point())
+        .and_then(|t| t.lanes.first())
+        .and_then(|k| k.take);
+    Some(match lane {
+        Some(lane) => PasteTarget::TakeLane { track, lane, at },
+        None => PasteTarget::Main { track, at },
     })
 }
 
@@ -216,13 +228,13 @@ pub fn arrangement_menu_items(ui: &mut egui::Ui, session: &mut Session, state: &
     let source = source_of(session, state);
     let can_consolidate = range
         .as_ref()
-        .is_some_and(|(t, a, b)| session.can_consolidate(t, *a, *b));
+        .is_some_and(|(t, a, b)| session.can_consolidate_lanes(t, *a, *b));
     if ui
         .add_enabled(can_consolidate, egui::Button::new("Consolidate   ⌘J"))
         .clicked()
     {
         if let Some((tracks, start, end)) = &range {
-            report(state, session.consolidate(tracks, *start, *end));
+            report(state, session.consolidate_lanes(tracks, *start, *end));
         }
         ui.close();
     }
@@ -348,7 +360,7 @@ impl RliveApp {
             }
             Bounce::Consolidate => {
                 if let Some((tracks, start, end)) = consolidate_range(session, state) {
-                    report(state, session.consolidate(&tracks, start, end));
+                    report(state, session.consolidate_lanes(&tracks, start, end));
                 }
             }
             Bounce::ConsolidateToScene => {
@@ -428,7 +440,7 @@ impl RliveApp {
             on(Bounce::Consolidate),
             range
                 .as_ref()
-                .is_some_and(|(t, a, b)| session.can_consolidate(t, *a, *b)),
+                .is_some_and(|(t, a, b)| session.can_consolidate_lanes(t, *a, *b)),
         );
         s.enable(
             on(Bounce::ConsolidateToScene),

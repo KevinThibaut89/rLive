@@ -292,6 +292,7 @@ impl RliveApp {
         }
         match c {
             Edit::Undo | Edit::Redo => self.undo_redo(ctx, c),
+            Edit::Rename if self.rename_take_header() => {}
             Edit::Rename if !self.ui.sel.scenes.is_empty() => {
                 scene_view::rename_selected(&self.session, &mut self.ui);
             }
@@ -448,8 +449,8 @@ impl RliveApp {
 
     /// The material a time selection covers, relative to its start, from every lane it spans.
     fn copy_span(&self, a: u64, b: u64) -> Vec<(TrackId, ArrangementClip)> {
-        let tracks = self.ui.arr.selected_tracks();
-        self.session.arr_copy_span(&tracks, a, b)
+        let lanes = self.ui.arr.selected_lanes(&self.session);
+        self.session.arr_copy_lanes(&lanes, a, b)
     }
 
     /// Delete on what isn't a clip or a span: a fade handle or a marker.
@@ -470,6 +471,9 @@ impl RliveApp {
     }
 
     fn edit_arr_clips(&mut self, c: Edit) {
+        if self.take_header_edit(c) {
+            return;
+        }
         let span = self
             .ui
             .arr
@@ -489,8 +493,8 @@ impl RliveApp {
                 if c == Edit::Cut {
                     match span {
                         Some((a, b)) => {
-                            let tracks = self.ui.arr.selected_tracks();
-                            self.session.arr_delete_span(&tracks, a, b);
+                            let lanes = self.ui.arr.selected_lanes(&self.session);
+                            self.session.arr_delete_lanes(&lanes, a, b);
                         }
                         None => {
                             let items = std::mem::take(&mut self.ui.arr.selection);
@@ -502,7 +506,11 @@ impl RliveApp {
             Edit::Paste => {
                 if let Some(ClipBoard::ArrClips(clips)) = self.ui.clipboard.clone() {
                     let at = self.session.insert_marker() as u64;
-                    self.ui.arr.selection = self.session.arr_paste(&clips, at);
+                    // Pasting with the insert marker on a take lane puts it on that lane.
+                    self.ui.arr.selection = match self.pointed_take_lane() {
+                        Some(lane) => self.session.take_paste(&clips, at, lane),
+                        None => self.session.arr_paste(&clips, at),
+                    };
                 }
                 if let Some(ClipBoard::Slot(clip)) = self.ui.clipboard.clone() {
                     self.paste_slot_on_timeline(*clip);
@@ -510,8 +518,16 @@ impl RliveApp {
             }
             Edit::Duplicate => match span {
                 Some((a, b)) => {
-                    let clips = self.copy_span(a, b);
-                    self.ui.arr.selection = self.session.arr_paste(&clips, b);
+                    // Each lane's material goes after it, on that same lane.
+                    let mut placed = Vec::new();
+                    for (track, lane) in self.ui.arr.selected_lanes(&self.session) {
+                        let clips = self.session.arr_copy_lanes(&[(track, lane)], a, b);
+                        placed.extend(match lane {
+                            Some(n) => self.session.take_paste(&clips, b, n),
+                            None => self.session.arr_paste(&clips, b),
+                        });
+                    }
+                    self.ui.arr.selection = placed;
                     let len = (b - a) as f64;
                     if let Some(t) = self.ui.arr.time.as_mut() {
                         t.start += len;
@@ -529,8 +545,8 @@ impl RliveApp {
                 }
                 match span {
                     Some((a, b)) => {
-                        let tracks = self.ui.arr.selected_tracks();
-                        self.session.arr_delete_span(&tracks, a, b);
+                        let lanes = self.ui.arr.selected_lanes(&self.session);
+                        self.session.arr_delete_lanes(&lanes, a, b);
                     }
                     None => {
                         let items = std::mem::take(&mut self.ui.arr.selection);
@@ -544,11 +560,23 @@ impl RliveApp {
                     .project
                     .tracks
                     .iter()
-                    .flat_map(|t| t.arrangement.iter().map(|c| (t.id, c.id)))
+                    .flat_map(|t| t.all_clips().map(|c| (t.id, c.id)).collect::<Vec<_>>())
                     .collect();
             }
             _ => {}
         }
+    }
+
+    /// The take lane that the insert marker is on, if any.
+    fn pointed_take_lane(&self) -> Option<usize> {
+        self.ui
+            .arr
+            .time
+            .as_ref()
+            .filter(|t| t.is_point())?
+            .lanes
+            .first()?
+            .take
     }
 
     /// Puts a Session clip on the selected track's timeline, at the insert marker.

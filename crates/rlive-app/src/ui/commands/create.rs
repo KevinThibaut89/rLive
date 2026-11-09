@@ -27,6 +27,11 @@ pub const MENU: &[Entry] = &[
     Item("Group Tracks", M::Create(Create::GroupTracks)),
     Item("Ungroup Tracks", M::Create(Create::UngroupTracks)),
     Separator,
+    Item(
+        "Insert Take Lane",
+        M::Comp(super::comping::Comp::InsertLane),
+    ),
+    Separator,
     super::bounce::CONSOLIDATE_TO_SCENE,
 ];
 

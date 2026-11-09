@@ -397,8 +397,9 @@ impl Session {
         }
     }
 
-    /// One clip for the take. A loop recording keeps every pass in its one sample, showing the
-    /// last, and each pass before it is one undo step further back.
+    /// Each pass goes on a take lane of its own and is copied to the main lane, so the last one
+    /// plays. A loop recording keeps every pass in its one sample, and each pass before the last
+    /// is one undo step further back.
     fn place_arrangement_take(&mut self, track: TrackId, take: AudioTake) {
         let frames = take.frames.unwrap_or(0);
         if frames == 0 || take.segments.is_empty() {
@@ -411,23 +412,26 @@ impl Session {
         let total = layout.total_ticks.round().max(1.0) as u64;
         let warp = self.warp_of(layout.markers);
         let mut clip = self.clip_for(track, &take.path, warp, total, false);
-        let id = rlive_core::ArrClipId::new();
+        let mut previous: Option<rlive_core::ArrClipId> = None;
         for (tick, from, to) in layout.passes {
             // The brace is around this pass, so moving it back auditions the ones before.
             clip.start = from.round() as u64;
             clip.loop_start = clip.start;
             clip.length = (to - from).round().max(1.0) as u64;
+            clip.color = self.take_color(track);
             let placed = ArrangementClip {
-                id,
+                id: rlive_core::ArrClipId::new(),
                 start: tick.round().max(0.0) as u64,
                 length: (to - from).round().max(1.0) as u64,
                 offset: from.round() as u64,
                 clip: clip.clone(),
             };
             if let Some(t) = self.project.track_mut(track) {
-                t.remove_arr_clip(id);
-                t.place_clip(placed);
-                t.settle_fades();
+                if let Some(old) = previous {
+                    t.remove_arr_clip(old);
+                }
+                let (_, main) = t.record_take(placed);
+                previous = Some(main);
             }
             self.sync_lane(track);
             self.mark_edit("Record");

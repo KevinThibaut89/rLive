@@ -4,6 +4,7 @@ pub mod fades;
 pub mod grid;
 pub mod ruler;
 pub mod selection;
+pub mod takes;
 pub mod view;
 
 use super::automation::{self, AutomationState, LaneKey};
@@ -95,6 +96,11 @@ pub struct ArrangementState {
     pub selected_locator: Option<usize>,
     pub selected_signature: Option<usize>,
     pub selected_fade: Option<FadeTarget>,
+    /// A take lane's header has the keyboard.
+    pub take_header: Option<(TrackId, usize)>,
+    pub renaming_take: Option<(TrackId, usize, String)>,
+    /// The tracks a pointer over a linked-track indicator lights up.
+    pub linked_hover: Vec<TrackId>,
     fade_drag: Option<FadeDrag>,
     /// F is held, which shows fade handles in Automation Mode.
     pub fades_key: bool,
@@ -163,6 +169,58 @@ impl ArrangementState {
         }
     }
 
+    /// The lanes a command applies to: the time selection's, or the selected clips' lanes.
+    pub fn selected_lanes(&self, session: &Session) -> Vec<LaneSel> {
+        if let Some(t) = &self.time {
+            if !t.lanes.is_empty() {
+                let mut out: Vec<LaneSel> = Vec::new();
+                for k in &t.lanes {
+                    if let ChainRef::Track(id) = k.chain {
+                        if !out.contains(&(id, k.take)) {
+                            out.push((id, k.take));
+                        }
+                    }
+                }
+                return out;
+            }
+        }
+        let mut out: Vec<LaneSel> = Vec::new();
+        for (track, id) in &self.selection {
+            let lane = session
+                .project
+                .track(*track)
+                .and_then(|t| t.lane_of(*id))
+                .flatten();
+            if !out.contains(&(*track, lane)) {
+                out.push((*track, lane));
+            }
+        }
+        out
+    }
+
+    /// Adds to the selection what's linked to it: the same clips and lanes of linked tracks.
+    pub fn link_selection(&mut self, session: &Session) {
+        self.selection = session.linked_items(&self.selection);
+        if let Some(t) = self.time.as_mut() {
+            let mut lanes = t.lanes.clone();
+            for k in &t.lanes {
+                let ChainRef::Track(id) = k.chain else {
+                    continue;
+                };
+                for linked in session.project.linked_with(id) {
+                    let key = LaneKey {
+                        chain: ChainRef::Track(linked),
+                        ..*k
+                    };
+                    if !lanes.contains(&key) {
+                        lanes.push(key);
+                    }
+                }
+            }
+            t.lanes = lanes;
+        }
+    }
+
     /// Selects everything in the loop, the shortcut a click on the brace is.
     pub fn select_loop(&mut self, session: &Session) {
         self.loop_selected = true;
@@ -180,6 +238,7 @@ impl ArrangementState {
                 .map(|&v| LaneKey {
                     chain: ChainRef::Track(session.project.tracks[v].id),
                     slot: None,
+                    take: None,
                 })
                 .collect(),
         });
@@ -229,6 +288,9 @@ impl Default for ArrangementState {
             selected_locator: None,
             selected_signature: None,
             selected_fade: None,
+            take_header: None,
+            renaming_take: None,
+            linked_hover: Vec::new(),
             fade_drag: None,
             fades_key: false,
             show_overview: true,
@@ -249,6 +311,8 @@ impl Default for ArrangementState {
     }
 }
 
+pub use crate::session::LaneSel;
+
 /// One clip on screen this frame.
 #[derive(Clone, Copy)]
 struct Hit {
@@ -267,11 +331,13 @@ pub(super) struct Row {
     pub main_h: f32,
     /// Heights of the additional automation lanes below the clip lane.
     pub extra: Vec<f32>,
+    /// Heights of the take lanes below the clip lane, when they're showing.
+    pub takes: Vec<f32>,
 }
 
 impl Row {
     pub fn bottom(&self) -> f32 {
-        self.top + self.main_h + self.extra.iter().sum::<f32>()
+        self.top + self.main_h + self.extra.iter().sum::<f32>() + self.takes.iter().sum::<f32>()
     }
 }
 
@@ -307,12 +373,18 @@ impl Rows {
             } else {
                 (height(chain), Vec::new())
             };
+            let takes = if auto {
+                Vec::new()
+            } else {
+                takes::row_lanes(session, chain)
+            };
             let row = Row {
                 chain,
                 index,
                 top: *top,
                 main_h,
                 extra,
+                takes,
             };
             *top = row.bottom();
             rows.push(row);
@@ -349,6 +421,32 @@ impl Rows {
         )
     }
 
+    /// Take lane `n` of row `i`, on screen.
+    pub fn take(&self, area: Rect, i: usize, n: usize, scroll_y: f32) -> Rect {
+        let row = &self.rows[i];
+        let top = row.top + row.main_h + row.takes[..n].iter().sum::<f32>();
+        Rect::from_min_size(
+            Pos2::new(area.left(), area.top() + top - scroll_y),
+            Vec2::new(area.width(), row.takes[n]),
+        )
+    }
+
+    /// The take lane of row `i` at a screen height, if it's in one.
+    fn take_at(&self, area: Rect, i: usize, y: f32, scroll_y: f32) -> Option<usize> {
+        let row = &self.rows[i];
+        let mut bottom = area.top() + row.top + row.main_h - scroll_y;
+        if y < bottom {
+            return None;
+        }
+        for (n, h) in row.takes.iter().enumerate() {
+            bottom += h;
+            if y < bottom {
+                return Some(n);
+            }
+        }
+        None
+    }
+
     /// The row at a screen height, if there is one.
     fn row_at(&self, area: Rect, y: f32, scroll_y: f32) -> Option<usize> {
         if y < area.top() {
@@ -365,6 +463,7 @@ impl Rows {
         Some(LaneKey {
             chain: self.rows[i].chain,
             slot: None,
+            take: self.take_at(area, i, y, scroll_y),
         })
     }
 
@@ -372,9 +471,17 @@ impl Rows {
     fn order(&self) -> Vec<LaneKey> {
         self.rows
             .iter()
-            .map(|r| LaneKey {
-                chain: r.chain,
-                slot: None,
+            .flat_map(|r| {
+                std::iter::once(LaneKey {
+                    chain: r.chain,
+                    slot: None,
+                    take: None,
+                })
+                .chain((0..r.takes.len()).map(|n| LaneKey {
+                    chain: r.chain,
+                    slot: None,
+                    take: Some(n),
+                }))
             })
             .collect()
     }
@@ -440,6 +547,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     let last = session
         .project
         .arrangement_end()
+        .max(session.project.takes_end())
         .max(session.project.arrangement.loop_end);
     let content_beats = (last + 16 * bar) as f32 / PPQ as f32;
     let content_w = content_beats * state.arr.px_per_beat;
@@ -475,7 +583,8 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
             pal().overlay(6),
         );
     }
-    let hits = paint_clips(ui, session, state, lanes, &axis, &rows);
+    let mut hits = paint_clips(ui, session, state, lanes, &axis, &rows);
+    takes::paint_lanes(ui, session, state, lanes, &axis, &rows, &mut hits);
     lane_interaction(
         ui,
         session,
@@ -494,6 +603,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         let _ = session.take_touched_control();
     }
     paint_time_selection(ui, state, lanes, &axis, &rows);
+    takes::split_handles(ui, session, state, lanes, &axis, grid_spacing, &rows);
     fades::show(ui, session, state, &axis, &hits, &rows, lanes);
     ruler::show(ui, session, state, ruler, &axis, grid_spacing, bar);
     mode_buttons(
@@ -523,6 +633,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
     }
 
     track_headers(ui, session, state, headers, &rows);
+    takes::headers(ui, session, state, headers, &rows);
     if auto_mode {
         automation::show_headers(ui, session, state, headers, &rows);
     }
@@ -594,6 +705,18 @@ fn wheel(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState, full: Re
     } else if m.alt && (delta.y != 0.0 || zoom != 1.0) {
         let dh = delta.y * 0.2 + (zoom - 1.0) * 80.0;
         let rows = Rows::build(session, state);
+        let take = pointer
+            .and_then(|p| rows.key_at(lanes, p.y, state.arr.scroll.y))
+            .filter(|k| k.take.is_some());
+        if let Some(LaneKey {
+            chain: ChainRef::Track(id),
+            take: Some(n),
+            ..
+        }) = take
+        {
+            takes::resize_lane(session, id, n, dh);
+            return;
+        }
         let targets: Vec<ChainRef> = match state
             .arr
             .time
@@ -741,8 +864,9 @@ fn paint_clips(
                 lanes,
                 axis,
                 selected,
-                t.mute,
+                t.mute || t.auditioned_lane().is_some(),
                 state.arr.wave_zoom,
+                None,
             );
             if c.is_audio() && rect.height() >= fades::MIN_HEIGHT {
                 fades::paint_ramps(&p, rect, c, f, axis, lanes);
@@ -776,8 +900,9 @@ fn paint_clip(
     selected: bool,
     muted: bool,
     wave_zoom: f32,
+    tint: Option<Color32>,
 ) {
-    let mut color = rgb(c.clip.color);
+    let mut color = tint.unwrap_or_else(|| rgb(c.clip.color));
     if muted || !c.clip.active {
         color = theme::darken(color, 0.45);
     }
@@ -1112,6 +1237,7 @@ fn lane_interaction(
         if let Some(pos) = pointer {
             state.arr.loop_selected = false;
             state.arr.header_selected = false;
+            state.arr.take_header = None;
             state.arr.selected_locator = None;
             state.arr.selected_signature = None;
             state.arr.selected_fade = None;
@@ -1119,6 +1245,20 @@ fn lane_interaction(
                 let id = session.project.tracks[i].id;
                 state.selected = Some(ChainRef::Track(id));
                 state.selected_tracks = vec![id];
+            }
+            // In Draw Mode, a click on a take lane drops its take into the selection.
+            if state.arr.auto.draw {
+                let key = rows.key_at(lanes, pos.y, sy);
+                if let Some(LaneKey {
+                    chain: ChainRef::Track(id),
+                    take: Some(n),
+                    ..
+                }) = key
+                {
+                    if takes::fill_main_selection(session, state, id, n) {
+                        return;
+                    }
+                }
             }
             let tick = snap_at(pos.x, &[]) as f64;
             let clicked_clip = hit(pos).copied();
@@ -1130,6 +1270,12 @@ fn lane_interaction(
                         toggle(&mut state.arr.selection, key);
                     } else {
                         state.arr.selection = vec![key];
+                    }
+                    if state.arr.selection.contains(&key) {
+                        state.arr.link_selection(session);
+                    } else {
+                        let gone = session.linked_items(&[key]);
+                        state.arr.selection.retain(|s| !gone.contains(s));
                     }
                     let span = selection::clips_span(session, &state.arr.selection);
                     let lane = rows.key_at(lanes, pos.y, sy);
@@ -1149,6 +1295,7 @@ fn lane_interaction(
                             .flatten()
                             .map(|t| selection::extended(t, tick, lane, &lane_order));
                         state.arr.time = Some(extended.unwrap_or(TimeSel::point(tick, lane)));
+                        state.arr.link_selection(session);
                     }
                     if !m.shift && !session.is_playing() {
                         session.seek(tick);
@@ -1166,6 +1313,7 @@ fn lane_interaction(
             if let Some(h) = hit(pos) {
                 if !state.arr.selection.contains(&(h.track, h.id)) {
                     state.arr.selection = vec![(h.track, h.id)];
+                    state.arr.link_selection(session);
                 }
             }
         }
@@ -1218,6 +1366,7 @@ fn lane_interaction(
                         end: anchor.max(tick),
                         lanes: selection::lanes_between(origin, lane, &lane_order),
                     });
+                    state.arr.link_selection(session);
                 }
             }
             DragKind::Pan => {
@@ -1237,6 +1386,16 @@ fn lane_interaction(
         }
     }
     if resp.drag_stopped() {
+        if state
+            .arr
+            .drag
+            .as_ref()
+            .is_some_and(|d| d.kind == DragKind::Time)
+            && state.arr.auto.draw
+        {
+            // A Draw Mode swipe over a take lane is a comp, all in one gesture.
+            takes::comp_time_selection(session, state);
+        }
         if let Some(d) = state.arr.drag.take() {
             finish_drag(
                 session,
@@ -1318,7 +1477,15 @@ fn create_midi_clip(
     let start = grid::grid_floor(axis.tick(pos.x), grid, bars);
     let placed = ArrangementClip::new(session.new_midi_clip(color, sig), start);
     let clip_id = placed.id;
-    session.arr_place(id, placed);
+    let take = rows
+        .key_at(lanes, pos.y, state.arr.scroll.y)
+        .and_then(|k| k.take);
+    match take {
+        Some(n) => {
+            session.take_place(id, n, placed);
+        }
+        None => session.arr_place(id, placed),
+    }
     state.arr.selection = vec![(id, clip_id)];
     open_clip(state, id, clip_id, true);
 }
@@ -1327,7 +1494,7 @@ fn create_midi_clip(
 fn snap_objects(session: &Session, moving: &[ArrClipId]) -> Vec<u64> {
     let mut objects = Vec::new();
     for t in &session.project.tracks {
-        for c in &t.arrangement {
+        for c in t.all_clips() {
             if !moving.contains(&c.id) {
                 objects.push(c.start);
                 objects.push(c.end());
@@ -1382,6 +1549,9 @@ fn begin_drag(
     if !state.arr.selection.contains(&(h.track, h.id)) {
         state.arr.selection = vec![(h.track, h.id)];
     }
+    // What's linked comes along: with a Move, in the same drag, and for the other drags, their
+    // Session edit carries it across.
+    state.arr.selection = session.linked_items(&state.arr.selection);
     let find = |t: TrackId, id: ArrClipId| session.project.track(t)?.arr_clip(id).cloned();
     let clips: Vec<(TrackId, ArrangementClip)> = if kind == DragKind::Move {
         state
@@ -1416,6 +1586,8 @@ struct Ghost {
     rect: Rect,
     from: TrackId,
     to: TrackId,
+    from_lane: Option<usize>,
+    to_lane: Option<usize>,
     clip: ArrangementClip,
 }
 
@@ -1449,10 +1621,22 @@ fn drag_preview(
         .collect();
     let index = |t: TrackId| tracks.iter().position(|o| o.id == t);
     let mut dlane = 0i32;
+    let sy = state.arr.scroll.y;
+    let target_take = rows.key_at(lanes, pos.y, sy).and_then(|k| k.take);
+    let lane_of = |t: TrackId, id: ArrClipId| {
+        session
+            .project
+            .track(t)
+            .and_then(|t| t.lane_of(id))
+            .flatten()
+    };
+    // A drag of clips from one lane can land on any lane; otherwise each keeps its own.
+    let one_lane = d.clips.iter().all(|(t, c)| {
+        (d.clips.first().map(|f| (f.0, lane_of(f.0, f.1.id)))) == Some((*t, lane_of(*t, c.id)))
+    });
     if d.kind == DragKind::Move {
         let earliest = d.clips.iter().map(|(_, c)| c.start).min().unwrap_or(0) as i64;
         dt = dt.max(-earliest);
-        let sy = state.arr.scroll.y;
         dlane = match (
             rows.row_at(lanes, pos.y, sy),
             rows.row_at(lanes, d.origin.y, sy),
@@ -1478,13 +1662,24 @@ fn drag_preview(
             let i = (index(*t)? as i32 + dlane) as usize;
             let to = tracks.get(i)?.id;
             let mut clip = c.clone();
+            let from_lane = lane_of(*t, c.id);
+            let showing = rows.rows.get(i).map_or(0, |r| r.takes.len());
+            let to_lane = if d.kind == DragKind::Move && one_lane {
+                target_take
+            } else {
+                from_lane
+            }
+            .filter(|n| *n < showing && tracks[i].kind == tracks[index(*t).unwrap_or(i)].kind);
             match d.kind {
                 DragKind::Move => clip.start = (c.start as i64 + dt).max(0) as u64,
                 DragKind::TrimLeft => clip.trim_left((c.start as i64 + dt).max(0) as u64),
                 DragKind::TrimRight => clip.trim_right((c.end() as i64 + dt).max(0) as u64),
                 DragKind::Time | DragKind::Slide | DragKind::Pan => return None,
             }
-            let lane = rows.main(lanes, i, state.arr.scroll.y);
+            let lane = match to_lane {
+                Some(n) => rows.take(lanes, i, n, state.arr.scroll.y),
+                None => rows.main(lanes, i, state.arr.scroll.y),
+            };
             let rect = Rect::from_min_max(
                 Pos2::new(axis.x(clip.start as f64), lane.top() + 1.0),
                 Pos2::new(axis.x(clip.end() as f64), lane.bottom() - 1.0),
@@ -1493,6 +1688,8 @@ fn drag_preview(
                 rect,
                 from: *t,
                 to,
+                from_lane,
+                to_lane,
                 clip,
             })
         })
@@ -1519,12 +1716,12 @@ fn finish_drag(
                 })
                 .collect();
             let unchanged = !copy
-                && preview
-                    .iter()
-                    .zip(&d.clips)
-                    .all(|(g, (_, c))| g.from == g.to && g.clip.start == c.start);
+                && preview.iter().zip(&d.clips).all(|(g, (_, c))| {
+                    g.from == g.to && g.clip.start == c.start && g.from_lane == g.to_lane
+                });
             if !unchanged {
-                state.arr.selection = session.arr_move(&moves, copy);
+                let lanes: Vec<Option<usize>> = preview.iter().map(|g| g.to_lane).collect();
+                state.arr.selection = session.arr_move_to_lanes(&moves, &lanes, copy);
                 state.arr.time = None;
             }
         }
@@ -1573,7 +1770,12 @@ fn clip_context_menu(ui: &mut egui::Ui, session: &mut Session, state: &mut UiSta
         }
         if ui.button("Split").clicked() {
             let at = session.insert_marker() as u64;
-            session.arr_split(&[track], &[at]);
+            let lane = session
+                .project
+                .track(track)
+                .and_then(|t| t.lane_of(id))
+                .flatten();
+            session.arr_split_lanes(&[(track, lane)], &[at]);
             ui.close();
         }
         if ui.button("Deactivate / Activate").clicked() {
@@ -1693,6 +1895,7 @@ fn drops(
     };
     let target = session.project.tracks[i].id;
     let kind = session.project.tracks[i].kind;
+    let take = rows.key_at(lanes, pos.y, sy).and_then(|k| k.take);
     let start = timeline::snap(axis.tick(pos.x), grid, snapping).max(0) as u64;
     let x = axis.x(start as f64);
     let row = session
@@ -1701,7 +1904,10 @@ fn drops(
         .iter()
         .position(|&v| v == i)
         .unwrap_or(0);
-    let lane = rows.main(lanes, row, sy);
+    let lane = match take {
+        Some(n) => rows.take(lanes, row, n, sy),
+        None => rows.main(lanes, row, sy),
+    };
     resp.ctx.layer_painter(resp.layer_id).line_segment(
         [Pos2::new(x, lane.top()), Pos2::new(x, lane.bottom())],
         Stroke::new(2.0, pal().accent),
@@ -1710,7 +1916,7 @@ fn drops(
         match &*item {
             BrowserItem::Sample(path) if kind == TrackKind::Audio => {
                 match session.audio_clip_from_file(path, target) {
-                    Ok(c) => place_new(session, state, target, c, start),
+                    Ok(c) => place_new(session, state, target, take, c, start),
                     Err(e) => state.status = e,
                 }
             }
@@ -1720,7 +1926,7 @@ fn drops(
     if let Some(src) = crate::ui::widgets::released::<ClipDrag>(resp) {
         if let Some(c) = session.clip(src.track, src.slot).cloned() {
             if c.is_midi() == (kind == TrackKind::Midi) {
-                place_new(session, state, target, c, start);
+                place_new(session, state, target, take, c, start);
             } else {
                 state.status = "That clip doesn't fit on this kind of track".into();
             }
@@ -1728,10 +1934,22 @@ fn drops(
     }
 }
 
-fn place_new(session: &mut Session, state: &mut UiState, track: TrackId, clip: Clip, start: u64) {
+fn place_new(
+    session: &mut Session,
+    state: &mut UiState,
+    track: TrackId,
+    lane: Option<usize>,
+    clip: Clip,
+    start: u64,
+) {
     let placed = ArrangementClip::new(clip, start);
     let id = placed.id;
-    session.arr_place(track, placed);
+    match lane {
+        Some(n) => {
+            session.take_place(track, n, placed);
+        }
+        None => session.arr_place(track, placed),
+    }
     state.arr.selection = vec![(track, id)];
     state.selected = Some(ChainRef::Track(track));
 }
@@ -1745,25 +1963,32 @@ fn paint_time_selection(ui: &egui::Ui, state: &UiState, lanes: Rect, axis: &Time
         return;
     }
     let p = ui.painter_at(lanes);
-    for (i, _) in rows.rows.iter().enumerate() {
-        let key = LaneKey {
-            chain: rows.rows[i].chain,
-            slot: None,
-        };
-        if !sel.lanes.contains(&key) {
-            continue;
-        }
-        let lane = rows.main(lanes, i, state.arr.scroll.y);
-        let (x0, x1) = (axis.x(sel.start), axis.x(sel.end));
-        if sel.is_point() {
-            p.line_segment(
-                [Pos2::new(x0, lane.top()), Pos2::new(x0, lane.bottom())],
-                Stroke::new(1.5, pal().select),
-            );
-        } else {
-            let r = Rect::from_min_max(Pos2::new(x0, lane.top()), Pos2::new(x1, lane.bottom()));
-            p.rect_filled(r, 0.0, pal().select.gamma_multiply(0.22));
-            p.rect_stroke(r, 0.0, Stroke::new(1.0, pal().select), StrokeKind::Inside);
+    for (i, row) in rows.rows.iter().enumerate() {
+        for lane_index in std::iter::once(None).chain((0..row.takes.len()).map(Some)) {
+            let key = LaneKey {
+                chain: row.chain,
+                slot: None,
+                take: lane_index,
+            };
+            if !sel.lanes.contains(&key) {
+                continue;
+            }
+            let sy = state.arr.scroll.y;
+            let lane = match lane_index {
+                Some(n) => rows.take(lanes, i, n, sy),
+                None => rows.main(lanes, i, sy),
+            };
+            let (x0, x1) = (axis.x(sel.start), axis.x(sel.end));
+            if sel.is_point() {
+                p.line_segment(
+                    [Pos2::new(x0, lane.top()), Pos2::new(x0, lane.bottom())],
+                    Stroke::new(1.5, pal().select),
+                );
+            } else {
+                let r = Rect::from_min_max(Pos2::new(x0, lane.top()), Pos2::new(x1, lane.bottom()));
+                p.rect_filled(r, 0.0, pal().select.gamma_multiply(0.22));
+                p.rect_stroke(r, 0.0, Stroke::new(1.0, pal().select), StrokeKind::Inside);
+            }
         }
     }
 }
@@ -1775,6 +2000,7 @@ fn track_headers(
     headers: Rect,
     rows: &Rows,
 ) {
+    let hover_was = std::mem::take(&mut state.arr.linked_hover);
     for (row, entry) in rows.rows.iter().enumerate() {
         let (Some(i), ChainRef::Track(id)) = (entry.index, entry.chain) else {
             continue;
@@ -1784,6 +2010,14 @@ fn track_headers(
             continue;
         }
         track_header(ui, session, state, headers, lane, id, i);
+        if hover_was.contains(&id) {
+            ui.painter().rect_stroke(
+                lane,
+                0.0,
+                Stroke::new(1.0, pal().accent),
+                StrokeKind::Inside,
+            );
+        }
     }
 }
 
@@ -2220,6 +2454,7 @@ fn track_header(
                 session.set_arm(id, !arm, exclusive);
                 state.selected = Some(ChainRef::Track(id));
             }
+            takes::header_buttons(&mut bu, session, state, id);
         }
     }
     let fold_rect = Rect::from_min_size(inner.min, Vec2::splat(16.0));
@@ -2236,6 +2471,7 @@ fn track_header(
             set_track_folded(session, id, !folded, cu.input(|i| i.modifiers.alt));
         }
     } else if resp.clicked() {
+        state.arr.take_header = None;
         state.arr.header_selected = true;
         state.arr.selection.clear();
         state.arr.time = None;

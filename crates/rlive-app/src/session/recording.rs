@@ -179,31 +179,69 @@ impl Session {
         let Some(recording) = self.recording.as_ref() else {
             return;
         };
-        let placements = recording.placements(self.project.time_signature);
-        if placements.is_empty() {
+        // Every clip the recording made, on the take lanes and the main lane alike.
+        let placed = recording.placed_clips(self.project.time_signature);
+        if placed.is_empty() {
             return;
         }
         self.commit_now();
-        for p in placements {
-            let Some(t) = self.project.track_mut(p.track) else {
+        for (track, id) in placed {
+            let Some(c) = self
+                .project
+                .track_mut(track)
+                .and_then(|t| t.arr_clip_mut(id))
+            else {
                 continue;
             };
-            let Some(placed) = p.existing.and_then(|id| t.arr_clip_mut(id)) else {
-                continue;
-            };
-            if let Some(notes) = placed.clip.notes_mut() {
+            if let Some(notes) = c.clip.notes_mut() {
                 for n in notes.iter_mut() {
                     n.start = q.apply(n.start);
                 }
             }
-            self.sync_lane(p.track);
+            self.sync_lane(track);
         }
         self.mark_edit("Record Quantization");
         self.commit_now();
     }
 
-    /// Puts what's been recorded so far on the timeline.
+    /// Puts what's been recorded so far on the timeline. With MIDI Arrangement Overdub the notes
+    /// join what is there; otherwise each finished pass of the loop becomes a take of its own.
     pub(super) fn flush_recording(&mut self) {
+        if self.project.midi_arrangement_overdub {
+            self.flush_overdub();
+        } else {
+            self.flush_takes();
+        }
+    }
+
+    /// Places each pass that has finished on a take lane and copies it to the main lane. Each is
+    /// an undo step, as for audio takes.
+    fn flush_takes(&mut self) {
+        let Some(recording) = self.recording.as_mut() else {
+            return;
+        };
+        let passes = recording.take_finished_passes(self.project.time_signature);
+        for pass in passes {
+            let color = self.take_color(pass.track);
+            let Some(t) = self.project.track_mut(pass.track) else {
+                continue;
+            };
+            let mut clip = pass.clip;
+            clip.color = color;
+            let placed = ArrangementClip::new(clip, pass.start);
+            let take = placed.id;
+            let (_, main) = t.record_take(placed);
+            if let Some(r) = self.recording.as_mut() {
+                r.note_placed(pass.track, take);
+                r.note_placed(pass.track, main);
+            }
+            self.sync_lane(pass.track);
+            self.mark_edit("Record");
+            self.commit_now();
+        }
+    }
+
+    fn flush_overdub(&mut self) {
         let Some(recording) = self.recording.as_ref() else {
             return;
         };

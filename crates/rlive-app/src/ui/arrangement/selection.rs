@@ -113,6 +113,7 @@ mod tests {
         LaneKey {
             chain: ChainRef::Track(TrackId(id)),
             slot: None,
+            take: None,
         }
     }
 
@@ -154,6 +155,7 @@ mod tests {
                 LaneKey {
                     chain: ChainRef::Track(TrackId(2)),
                     slot: Some(0),
+                    take: None,
                 },
                 key(1),
             ],

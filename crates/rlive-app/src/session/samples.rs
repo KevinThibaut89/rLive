@@ -126,7 +126,7 @@ impl Session {
                     slots.push((t.id, slot));
                 }
             }
-            if t.arrangement.iter().any(|c| clip_uses(&c.clip, path)) {
+            if t.playing_lane().iter().any(|c| clip_uses(&c.clip, path)) {
                 lanes.push(t.id);
             }
         }

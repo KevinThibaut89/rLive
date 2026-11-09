@@ -15,6 +15,8 @@ const MAX_DUPLICATES: usize = 2;
 pub struct LaneKey {
     pub chain: ChainRef,
     pub slot: Option<usize>,
+    /// A take lane under the track, in place of its clip lane.
+    pub take: Option<usize>,
 }
 
 pub fn main_target(ui: &TrackUi, chain: ChainRef) -> Option<EnvTarget> {
@@ -188,6 +190,7 @@ pub fn navigate(order: &[LaneKey], focus: LaneKey, arrow: Arrow) -> Option<Nav> 
         Arrow::Left if focus.slot.is_some() => Some(Nav::Focus(LaneKey {
             chain: focus.chain,
             slot: None,
+            take: None,
         })),
         Arrow::Left => Some(Nav::HideLanes(focus.chain)),
         Arrow::Right if focus.slot.is_none() => Some(Nav::ShowLanes(focus.chain)),
@@ -333,10 +336,12 @@ mod tests {
         let main = LaneKey {
             chain: c,
             slot: None,
+            take: None,
         };
         let extra = LaneKey {
             chain: c,
             slot: Some(0),
+            take: None,
         };
         let order = [main, extra];
         assert_eq!(navigate(&order, main, Arrow::Down), Some(Nav::Focus(extra)));

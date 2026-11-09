@@ -272,6 +272,40 @@ fn a_loop_recording_keeps_every_pass_and_shows_the_last() {
 }
 
 #[test]
+fn a_loop_recording_makes_one_take_lane_per_pass_and_copies_the_last_to_main() {
+    let mut r = Rig::new("loop-takes");
+    r.arm();
+    r.s.set_loop(true, 0, BAR);
+    r.s.start_recording();
+    r.run(BAR_FRAMES * 3);
+    r.s.stop_recording();
+    r.run(512);
+    r.settle();
+    let t = &r.s.project.tracks[0];
+    assert_eq!(t.take_lanes.len(), 3, "a lane for each pass");
+    for (i, l) in t.take_lanes.iter().enumerate() {
+        let c = &l.clips[0];
+        assert_eq!((c.start, c.length), (0, BAR), "pass {i}");
+        assert_eq!(c.offset, i as u64 * BAR, "its own pass of the one sample");
+    }
+    assert_eq!(t.take_lanes[0].name, "Take 1");
+    assert_eq!(t.arrangement.len(), 1);
+    assert_eq!(
+        t.arrangement[0].offset,
+        2 * BAR,
+        "the last pass is on the main lane"
+    );
+    assert_ne!(
+        t.arrangement[0].id, t.take_lanes[2].clips[0].id,
+        "an independent copy"
+    );
+    assert!(r.s.undo());
+    let t = &r.s.project.tracks[0];
+    assert_eq!(t.take_lanes.len(), 2, "undo takes one pass off");
+    assert_eq!(t.arrangement[0].offset, BAR);
+}
+
+#[test]
 fn undo_unrolls_a_loop_recording_one_pass_at_a_time() {
     let mut r = Rig::new("unroll");
     r.arm();
