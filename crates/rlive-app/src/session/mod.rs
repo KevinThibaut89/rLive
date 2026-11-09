@@ -133,6 +133,10 @@ pub struct Session {
     clip_jobs: clip_files::ClipJobs,
     /// A held scrub on a timeline clip: the song tick to go back to and every how many ticks.
     arr_scrub: Option<(f64, f64)>,
+    /// The tempo automation the Arrangement's leader clips generate, if there are any.
+    leader_points: Vec<rlive_project::Breakpoint>,
+    /// Long samples whose new clips are waiting for beat tracking to finish.
+    auto_warp_waiting: std::collections::HashSet<PathBuf>,
     /// The Record, Warp & Launch options that recording follows.
     pub record: RecordSettings,
     /// Create Fades on Clip Edges, from the settings. Off until the app says otherwise, so a
@@ -205,6 +209,8 @@ impl Session {
             file_manager_target: None,
             clip_jobs: clip_files::ClipJobs::default(),
             arr_scrub: None,
+            leader_points: Vec::new(),
+            auto_warp_waiting: Default::default(),
             record: RecordSettings::default(),
             edge_fades: false,
             recording: None,
@@ -321,6 +327,7 @@ impl Session {
             tracks: Box::new(tracks),
             master,
         }]);
+        self.leader_points = self.project.leader_tempo_points();
         let p = &self.project;
         let rate = self.clip_defaults.update_rate;
         let cmds = [

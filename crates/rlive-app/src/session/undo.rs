@@ -25,6 +25,10 @@ impl Session {
         self.dirty = true;
         self.history.pending.get_or_insert(label);
         self.history.settling = 0;
+        // Leaders' tempo comes from their clips, which any edit can move.
+        if self.project.has_tempo_leader() || !self.leader_points.is_empty() {
+            self.sync_time_maps();
+        }
     }
 
     /// Records that a device changed a parameter by itself.
@@ -152,7 +156,7 @@ impl Session {
         let maps_changed = self.project.arrangement.tempo != target.arrangement.tempo
             || self.project.arrangement.signatures != target.arrangement.signatures;
         self.project.arrangement = (*target.arrangement).clone();
-        if maps_changed {
+        if maps_changed || self.project.has_tempo_leader() || !self.leader_points.is_empty() {
             self.sync_time_maps();
         }
         self.restore_settings(&target.shell);

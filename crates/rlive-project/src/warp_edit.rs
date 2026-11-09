@@ -5,7 +5,7 @@
 //! knows about the Session or the engine; the caller records the undo step and sends the result.
 
 use crate::{TransientEdits, Warp, WarpMarker};
-use rlive_core::warp::{WarpMap, WarpMarker as MapMarker};
+use rlive_core::warp::{BeatGrid, WarpMap, WarpMarker as MapMarker};
 use rlive_core::PPQ;
 
 /// Two markers closer than this in time count as one, in seconds.
@@ -20,6 +20,8 @@ const MIN_MARKER_GAP_SECONDS: f64 = 0.001;
 const LOOP_BARS: [u32; 5] = [1, 2, 4, 8, 16];
 /// A marker on a bar line moves to a transient this close to it, in seconds, or stays put.
 const BAR_SNAP_SECONDS: f64 = 0.06;
+/// How far the first bar of an Auto-Warp reaches for a transient.
+const FIRST_BAR_SNAP_SECONDS: f64 = 0.1;
 
 /// How Warp From... finds its tempo.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -124,6 +126,8 @@ pub struct WarpContext<'a> {
     pub set_bpm: f64,
     /// The clip's transients in seconds, ascending, its own edits applied.
     pub transients: &'a [f64],
+    /// What beat tracking found in the file, if it has been tracked.
+    pub beats: Option<&'a BeatGrid>,
 }
 
 /// Applies `op` and returns whether anything changed. `length` is the clip's loop length, in
@@ -403,15 +407,113 @@ fn one_one_one(warp: &mut Warp, seconds: f64, file_seconds: f64) -> bool {
     !unchanged
 }
 
-/// The tempo of everything from `start` on, as a whole number of bars of the file.
+/// The tempo of everything from `start` on: what beat tracking found, or a whole number of bars
+/// of the file if it hasn't been tracked.
 fn estimate_bpm(start: f64, cx: &WarpContext<'_>) -> f64 {
+    if let Some(grid) = cx.beats {
+        return grid.bpm_from(start);
+    }
     let remaining = (cx.seconds - start).max(1e-3);
     let bars = suggest_bars(remaining, cx.ticks_per_bar, cx.set_bpm);
     bars as f64 * cx.ticks_per_bar as f64 / PPQ as f64 * 60.0 / remaining
 }
 
+/// What Auto-Warp makes of a whole file: a marker on the first beat of each bar, on the transient
+/// there if there is one, and the length that covers the rest of the file at its tempo. `None` if
+/// the grid has no bars in it.
+pub fn auto_warp(
+    grid: &BeatGrid,
+    seconds: f64,
+    ticks_per_bar: u64,
+    transients: &[f64],
+) -> Option<(Vec<WarpMarker>, u64)> {
+    let mut markers: Vec<WarpMarker> = bar_seconds(grid, ticks_per_bar, f64::NEG_INFINITY)
+        .into_iter()
+        .enumerate()
+        .map(|(bar, s)| {
+            // The first bar anchors everything, and a file's start is where tracking is least sure.
+            let reach = if bar == 0 {
+                FIRST_BAR_SNAP_SECONDS
+            } else {
+                BAR_SNAP_SECONDS
+            };
+            let snapped = nearest_transient(transients, s, reach);
+            // An attack at the very start of a file has nothing before it to be detected against.
+            snapped.unwrap_or(if bar == 0 && s < reach { 0.0 } else { s })
+        })
+        .enumerate()
+        .map(|(bar, s)| WarpMarker {
+            seconds: s,
+            tick: (bar as u64 * ticks_per_bar) as f64,
+        })
+        .collect();
+    let last = *markers.last()?;
+    let end_tick = last.tick + (seconds - last.seconds).max(0.0) * grid.bpm / 60.0 * PPQ as f64;
+    if end_tick > last.tick + MIN_MARKER_GAP_TICKS {
+        markers.push(WarpMarker {
+            seconds,
+            tick: end_tick,
+        });
+    }
+    (markers.len() >= 2).then_some((markers, end_tick.ceil().max(1.0) as u64))
+}
+
+/// The moments bars of this meter start at, from `from` on.
+fn bar_seconds(grid: &BeatGrid, ticks_per_bar: u64, from: f64) -> Vec<f64> {
+    let beats_per_bar = (ticks_per_bar as f64 / PPQ as f64).round().max(1.0) as usize;
+    grid.bars(beats_per_bar).filter(|s| *s >= from).collect()
+}
+
+/// Places a marker on each bar of the grid from `seconds` on, and returns the marker list.
+fn warp_from_grid(
+    warp: &Warp,
+    seconds: f64,
+    tick: f64,
+    grid: &BeatGrid,
+    cx: &WarpContext<'_>,
+) -> Vec<WarpMarker> {
+    let mut kept: Vec<WarpMarker> = warp
+        .markers
+        .iter()
+        .copied()
+        .filter(|m| m.seconds < seconds - NEAR_SECONDS)
+        .collect();
+    kept.push(WarpMarker { seconds, tick });
+    let bars = bar_seconds(grid, cx.ticks_per_bar, seconds + NEAR_SECONDS);
+    let mut at_tick = tick;
+    for (i, s) in bars.iter().enumerate() {
+        if *s >= cx.seconds - NEAR_SECONDS {
+            break;
+        }
+        at_tick = tick + ((i as u64 + 1) * cx.ticks_per_bar) as f64;
+        kept.push(WarpMarker {
+            seconds: nearest_transient(cx.transients, *s, BAR_SNAP_SECONDS).unwrap_or(*s),
+            tick: at_tick,
+        });
+    }
+    let last_seconds = kept.last().map_or(seconds, |m| m.seconds);
+    let end_tick =
+        at_tick + (cx.seconds - last_seconds) * grid.bpm_from(seconds) / 60.0 * PPQ as f64;
+    if end_tick > at_tick {
+        kept.push(WarpMarker {
+            seconds: cx.seconds,
+            tick: end_tick,
+        });
+    }
+    kept
+}
+
 fn warp_from(warp: &mut Warp, seconds: f64, how: WarpFrom, cx: &WarpContext<'_>) -> bool {
     let tick = seconds_map(warp).map_or(0.0, |m| m.src_to_tick(seconds));
+    if let (WarpFrom::Auto, Some(grid)) = (how, cx.beats) {
+        let kept = warp_from_grid(warp, seconds, tick, grid, cx);
+        if kept.len() < 2 {
+            return false;
+        }
+        let unchanged = kept == warp.markers;
+        warp.markers = kept;
+        return !unchanged;
+    }
     let bpm = match how {
         WarpFrom::Auto | WarpFrom::Straight => estimate_bpm(seconds, cx),
         WarpFrom::StartAtSetTempo | WarpFrom::SetTempo => cx.set_bpm,
@@ -571,6 +673,7 @@ mod tests {
             ticks_per_bar: BAR,
             set_bpm: 120.0,
             transients,
+            beats: None,
         }
     }
 
@@ -845,6 +948,7 @@ mod tests {
             ticks_per_bar: BAR,
             set_bpm: 120.0,
             transients: &[],
+            beats: None,
         };
         apply(
             &mut w,
@@ -869,6 +973,7 @@ mod tests {
             ticks_per_bar: BAR,
             set_bpm: 120.0,
             transients: &transients,
+            beats: None,
         };
         apply(
             &mut w,
@@ -883,6 +988,88 @@ mod tests {
         assert_eq!(w.markers[2], m(4.02, 7680.0));
         assert_eq!(w.markers[3], m(6.0, 11_520.0), "no transient: on the bar");
         assert_eq!(w.markers.last().unwrap(), &m(8.0, 15_360.0));
+    }
+
+    fn grid() -> BeatGrid {
+        // 120 BPM, starting a beat in, with the bar on the first beat of the list.
+        BeatGrid {
+            bpm: 120.0,
+            beats: (0..32).map(|i| 0.5 + i as f64 * 0.5).collect(),
+            downbeat: 0,
+            confidence: 0.9,
+        }
+    }
+
+    #[test]
+    fn warp_from_here_runs_on_the_tracked_beats_when_there_are_any() {
+        let g = grid();
+        let mut w = warp_of(vec![m(0.0, 0.0), m(16.25, 31_200.0)]);
+        let mut length = 8 * BAR;
+        let c = WarpContext {
+            seconds: 16.25,
+            ticks_per_bar: BAR,
+            set_bpm: 90.0,
+            transients: &[],
+            beats: Some(&g),
+        };
+        apply(
+            &mut w,
+            &WarpOp::WarpFrom {
+                seconds: 0.25,
+                how: WarpFrom::Auto,
+            },
+            &c,
+            &mut length,
+        );
+        // A marker at the start and one on each tracked bar, in whole bars of the clip.
+        assert_eq!(w.markers[0], m(0.0, 0.0), "what's left of it stays");
+        assert_eq!(w.markers[1], m(0.25, 480.0));
+        assert_eq!(w.markers[2], m(0.5, 480.0 + BAR as f64));
+        assert_eq!(w.markers[3], m(2.5, 480.0 + 2.0 * BAR as f64));
+        assert_eq!(w.markers.last().unwrap().seconds, 16.25);
+    }
+
+    #[test]
+    fn straight_uses_the_tracked_tempo_and_start_at_uses_the_set() {
+        let g = grid();
+        let c = WarpContext {
+            seconds: 16.25,
+            ticks_per_bar: BAR,
+            set_bpm: 90.0,
+            transients: &[],
+            beats: Some(&g),
+        };
+        let mut length = 8 * BAR;
+        let mut w = warp_of(vec![m(0.0, 0.0), m(16.25, 31_200.0)]);
+        let op = |how| WarpOp::WarpFrom { seconds: 0.25, how };
+        apply(&mut w, &op(WarpFrom::Straight), &c, &mut length);
+        assert_eq!(w.markers.len(), 3, "the start, and the end of the file");
+        assert!((w.markers[2].tick - (480.0 + 16.0 * 2.0 * PPQ as f64)).abs() < 1e-6);
+        let mut w = warp_of(vec![m(0.0, 0.0), m(16.25, 31_200.0)]);
+        apply(&mut w, &op(WarpFrom::StartAtSetTempo), &c, &mut length);
+        // One bar at the Set's 90 BPM is 2.667 s after the start.
+        let bar_seconds = 4.0 * 60.0 / 90.0;
+        assert!((w.markers[2].seconds - (0.25 + bar_seconds)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn auto_warp_puts_a_marker_on_each_bar_and_covers_the_file() {
+        let g = grid();
+        let (markers, length) = auto_warp(&g, 20.0, BAR, &[]).unwrap();
+        for (i, marker) in markers.iter().take(8).enumerate() {
+            assert_eq!(*marker, m(0.5 + i as f64 * 2.0, (i as u64 * BAR) as f64));
+        }
+        let last = markers.last().unwrap();
+        assert_eq!(last.seconds, 20.0);
+        assert_eq!(length, last.tick.ceil() as u64);
+    }
+
+    #[test]
+    fn auto_warp_pins_bars_to_the_transients_near_them() {
+        let (markers, _) = auto_warp(&grid(), 20.0, BAR, &[2.47, 4.55, 8.0]).unwrap();
+        assert_eq!(markers[1].seconds, 2.47);
+        assert_eq!(markers[2].seconds, 4.55);
+        assert_eq!(markers[3].seconds, 6.5, "nothing near: on the tracked bar");
     }
 
     #[test]

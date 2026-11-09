@@ -65,7 +65,7 @@ impl Session {
                 .tracks
                 .iter()
                 .all(|t| t.arrangement.is_empty() && t.clips.iter().all(Option::is_none))
-            && self.project.arrangement.tempo.points.is_empty();
+            && self.project.tempo_points_in_force().is_empty();
         let tracks: Vec<TrackId> = self.captures.keys().copied().collect();
         let tempo = self.project.tempo;
         let sig = self.project.time_signature;

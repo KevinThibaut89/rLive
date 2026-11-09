@@ -93,9 +93,10 @@ impl Default for SampleSettings {
 }
 
 impl SampleSettings {
-    pub fn loader_config(&self) -> LoaderConfig {
+    pub fn loader_config(&self, auto_warp_long: bool) -> LoaderConfig {
         LoaderConfig {
             create_analysis_files: self.create_analysis_files,
+            auto_warp_long,
             cache: CacheConfig {
                 folder: self
                     .cache_folder
@@ -584,6 +585,7 @@ mod tests {
                 cache_folder: Some(PathBuf::from("/fast/cache")),
             },
             warp: WarpDefaults {
+                auto_warp_long: false,
                 short_samples: ShortSampleMode::WarpedOneShot,
                 mode: WarpMode::RePitch,
             },
@@ -616,7 +618,7 @@ mod tests {
 
     #[test]
     fn sample_settings_become_the_loader_config() {
-        let defaults = SampleSettings::default().loader_config();
+        let defaults = SampleSettings::default().loader_config(true);
         assert!(defaults.create_analysis_files);
         assert_eq!(defaults.cache.maximum_size, Some(20 * 1024 * 1024 * 1024));
         assert_eq!(defaults.cache.folder, LoaderConfig::default_cache_folder());
@@ -627,7 +629,7 @@ mod tests {
             maximum_cache_size_gb: 1.0,
             cache_folder: Some(PathBuf::from("/x")),
         }
-        .loader_config();
+        .loader_config(true);
         assert!(!chosen.create_analysis_files);
         assert_eq!(chosen.cache.minimum_free_space, 1024 * 1024 * 1024);
         assert_eq!(chosen.cache.maximum_size, None, "no limit set");

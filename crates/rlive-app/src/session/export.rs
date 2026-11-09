@@ -123,7 +123,7 @@ impl Session {
                 return Err("engine queue full".into());
             }
         }
-        let seconds = if p.arrangement.tempo.points.is_empty() {
+        let seconds = if p.tempo_points_in_force().is_empty() {
             ticks as f64 / rlive_core::PPQ as f64 * 60.0 / p.tempo
         } else {
             maps.tempo.tick_to_seconds(ticks as f64)

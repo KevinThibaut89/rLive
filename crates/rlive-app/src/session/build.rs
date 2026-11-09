@@ -80,12 +80,12 @@ const CURVED_TEMPO_STEPS: usize = 32;
 
 /// The song's tempo and meter for the engine.
 pub fn time_maps(project: &Project) -> TimeMaps {
-    let tempo = &project.arrangement.tempo.points;
+    let tempo = project.tempo_points_in_force();
     TimeMaps {
         tempo: if tempo.is_empty() {
             TempoMap::constant(project.tempo)
         } else {
-            TempoMap::new(tempo_points(tempo))
+            TempoMap::new(tempo_points(&tempo))
         },
         bars: BarMap::new(
             project.time_signature,
@@ -194,7 +194,7 @@ fn warp_map(warp: &Warp, sample_rate: f64) -> Option<WarpMap> {
 
 /// Where Beats mode slices a clip, in source frames: the transients, or the grid it asks for. A
 /// sample whose transients aren't known yet is sliced on sixteenths, close enough to play until
-/// the analysis finishes.
+/// the analysis finishes. Complex and Complex Pro get the transients alone, which they keep whole.
 fn beats_slices(
     warp: &Warp,
     map: Option<&WarpMap>,
@@ -202,12 +202,19 @@ fn beats_slices(
     length: u64,
     found: Option<&[f64]>,
 ) -> Arc<[f64]> {
-    if warp.mode != ProjectWarpMode::Beats {
+    let is_vocoder = matches!(
+        warp.mode,
+        ProjectWarpMode::Complex | ProjectWarpMode::ComplexPro
+    );
+    if warp.mode != ProjectWarpMode::Beats && !is_vocoder {
         return Arc::from(Vec::new());
     }
     let transients: Vec<f64> = found
         .map(|f| rlive_project::warp_edit::resolve_transients(f, &warp.transients))
         .unwrap_or_default();
+    if is_vocoder {
+        return transients.iter().map(|s| s * sample_rate).collect();
+    }
     let grid = match (warp.params.preserve, map) {
         (BeatsPreserve::Transients, _) if !transients.is_empty() => {
             return transients.iter().map(|s| s * sample_rate).collect();
@@ -1011,6 +1018,23 @@ mod tests {
         let want = segment_value(100.0, 200.0, 0.5, 1.0);
         assert!((maps.tempo.bpm_at(960.0) - want).abs() < 0.5);
         assert_eq!(maps.tempo.bpm_at(1920.0), 200.0);
+    }
+
+    #[test]
+    fn the_vocoder_gets_the_clips_transients_and_the_grains_do_not() {
+        let warp = |mode| Warp {
+            mode,
+            ..Warp::default()
+        };
+        let found = [0.5, 1.5];
+        for mode in [ProjectWarpMode::Complex, ProjectWarpMode::ComplexPro] {
+            let slices = beats_slices(&warp(mode), None, 48_000.0, 960, Some(&found));
+            assert_eq!(&*slices, &[24_000.0, 72_000.0], "{mode:?}");
+        }
+        for mode in [ProjectWarpMode::Tones, ProjectWarpMode::Texture] {
+            let slices = beats_slices(&warp(mode), None, 48_000.0, 960, Some(&found));
+            assert!(slices.is_empty(), "{mode:?}");
+        }
     }
 
     #[test]

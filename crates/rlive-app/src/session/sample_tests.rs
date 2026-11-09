@@ -444,6 +444,7 @@ fn a_compressed_sample_plays_through_the_whole_path() {
     .unwrap();
     let (mut engine, mut s) = session();
     s.samples.configure(rlive_audio_io::LoaderConfig {
+        auto_warp_long: true,
         create_analysis_files: true,
         cache: rlive_audio_io::CacheConfig {
             folder: dir.file("cache"),

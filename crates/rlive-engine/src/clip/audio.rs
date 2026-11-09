@@ -736,9 +736,9 @@ mod tests {
             &mut r,
             &mut bank,
         );
-        // Tick 1920 is frame 12_000 by the map (3840 ticks = 24 000 frames), then 64 frames on
-        // at the native rate: the seam until a stretcher follows the span.
-        assert_eq!(cursor.src, 12_000.0 + 64.0);
+        // Tick 1920 is frame 12_000 by the map (3840 ticks = 24 000 frames), then 64 output
+        // frames on at a quarter of a source frame each: every warp mode follows the timeline.
+        assert_eq!(cursor.src, 12_000.0 + 16.0);
         assert!(l.iter().any(|s| *s != 0.0));
     }
 }

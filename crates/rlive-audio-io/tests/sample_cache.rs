@@ -25,6 +25,7 @@ impl Dir {
     fn config(&self) -> LoaderConfig {
         LoaderConfig {
             create_analysis_files: true,
+            auto_warp_long: true,
             cache: CacheConfig {
                 folder: self.file("cache"),
                 minimum_free_space: 0,

@@ -249,6 +249,22 @@ fn a_transposition_envelope_adds_to_the_clips_and_is_clamped() {
 }
 
 #[test]
+fn a_transposition_envelope_reaches_complex_and_tones() {
+    for mode in [WarpMode::Complex, WarpMode::Tones { grain_size: 30.0 }] {
+        let up = with(
+            warped(tone(220.0), mode, &[]),
+            ClipEnvelopes {
+                transpose: Some(linked_curve(range(-48.0, 48.0), &[(0.0, 12.0)])),
+                ..ClipEnvelopes::default()
+            },
+        );
+        let out = render(&up, 40_000).left;
+        let hz = pitch_hz(&out[12_000..]);
+        assert!((hz - 440.0).abs() < 8.0, "{mode:?}: {hz}");
+    }
+}
+
+#[test]
 fn sample_offset_moves_the_read_only_in_beats_mode() {
     let two_sixteenths = 2.0 * PPQ as f64 / 4.0;
     let offset = linked_curve(range(-8.0, 8.0), &[(0.0, 2.0)]);

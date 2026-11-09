@@ -197,6 +197,9 @@ impl Session {
     /// An envelope's points, or nothing if the parameter isn't automated.
     pub fn env_points(&self, chain: ChainRef, target: EnvTarget) -> &[Breakpoint] {
         if target == transport::tempo_target() {
+            if !self.leader_points.is_empty() {
+                return &self.leader_points;
+            }
             return &self.project.arrangement.tempo.points;
         }
         self.envelopes(chain.into())
@@ -250,7 +253,9 @@ impl Session {
                     .collect()
             })
             .unwrap_or_default();
-        if owner == ChainRef::Master && !self.project.arrangement.tempo.points.is_empty() {
+        if owner == ChainRef::Master
+            && !self.env_points(owner, transport::tempo_target()).is_empty()
+        {
             targets.push(transport::tempo_target());
         }
         targets

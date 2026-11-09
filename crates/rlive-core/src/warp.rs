@@ -133,6 +133,47 @@ impl WarpMode {
     }
 }
 
+/// What beat tracking found in a sample.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BeatGrid {
+    pub bpm: f64,
+    /// Seconds, ascending.
+    pub beats: Vec<f64>,
+    /// The index in `beats` of a beat that starts a bar.
+    pub downbeat: usize,
+    /// How sure the tempo is, 0..1.
+    pub confidence: f32,
+}
+
+impl BeatGrid {
+    /// The beats that start bars of `beats_per_bar`, from the first such beat on.
+    pub fn bars(&self, beats_per_bar: usize) -> impl Iterator<Item = f64> + '_ {
+        let beats_per_bar = beats_per_bar.max(1);
+        let first = self.downbeat % beats_per_bar;
+        self.beats
+            .iter()
+            .skip(first)
+            .step_by(beats_per_bar)
+            .copied()
+    }
+
+    /// The tempo of the beats from `from` on, in BPM, or the whole grid's if too few are left.
+    pub fn bpm_from(&self, from: f64) -> f64 {
+        let i = self.beats.partition_point(|b| *b < from);
+        match self.beats.len() - i {
+            0 | 1 => self.bpm,
+            n => {
+                let span = self.beats[self.beats.len() - 1] - self.beats[i];
+                if span <= 0.0 {
+                    self.bpm
+                } else {
+                    (n - 1) as f64 * 60.0 / span
+                }
+            }
+        }
+    }
+}
+
 /// Which row of a [`StretchBank`] a clip plays through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StretchKind {
@@ -163,10 +204,9 @@ impl StretchKind {
         StretchKind::ComplexPro,
     ];
 
-    /// Whether this kind has a real stretcher, so a clip in it plays where the timeline says.
-    /// The others still read at native speed; A10 adds them here as it builds them.
+    /// Whether a clip in this kind plays where the timeline says, rather than at native speed.
     pub fn follows_timeline(self) -> bool {
-        matches!(self, StretchKind::Beats | StretchKind::RePitch)
+        self != StretchKind::Off
     }
 }
 
@@ -178,7 +218,8 @@ pub struct StretchSpan<'a> {
     /// Semitones.
     pub transpose: f32,
     pub mode: WarpMode,
-    /// Where Beats slices the source, in source frames, ascending. Empty for other modes.
+    /// Where Beats slices the source and where Complex and Complex Pro keep attacks whole, in
+    /// source frames, ascending. Empty for other modes.
     pub slices: &'a [f64],
 }
 

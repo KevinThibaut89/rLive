@@ -32,6 +32,9 @@ impl Session {
         for path in self.samples.poll_transients() {
             self.send_clips_using(&path);
         }
+        for path in self.samples.poll_beats() {
+            self.auto_warp_clips_of(&path);
+        }
     }
 
     fn sample_finished(&mut self, event: SampleEvent) {
@@ -114,7 +117,7 @@ impl Session {
     }
 
     /// Sends every clip that plays `path` to the engine again.
-    fn send_clips_using(&mut self, path: &Path) {
+    pub(super) fn send_clips_using(&mut self, path: &Path) {
         let mut slots = Vec::new();
         let mut lanes = Vec::new();
         for t in self.project.tracks.iter().chain(&self.project.returns) {

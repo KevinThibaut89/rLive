@@ -457,6 +457,10 @@ impl Session {
     /// through, as one undoable edit.
     pub fn set_envelope(&mut self, chain: ChainRef, target: EnvTarget, points: Vec<Breakpoint>) {
         if target == transport::tempo_target() {
+            // What the leaders generate is on show, not for editing.
+            if self.project.has_tempo_leader() {
+                return;
+            }
             if self.project.arrangement.tempo.points != points {
                 self.project.arrangement.tempo.points = points;
                 self.sync_time_maps();
@@ -482,6 +486,7 @@ impl Session {
 
     /// Give the engine the song's tempo and meter as the project has them now.
     pub(super) fn sync_time_maps(&mut self) {
+        self.leader_points = self.project.leader_tempo_points();
         let maps = Arc::new(build::time_maps(&self.project));
         self.send(EngineCommand::Transport(TransportCmd::SetTimeMaps(maps)));
     }

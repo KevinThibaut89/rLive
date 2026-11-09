@@ -1556,6 +1556,22 @@ fn clip_context_menu(ui: &mut egui::Ui, session: &mut Session, state: &mut UiSta
             session.arr_toggle_active(&items);
             ui.close();
         }
+        let leading = session.arr_is_leading(&state.arr.selection);
+        let can_lead = leading || session.arr_can_lead(&state.arr.selection);
+        let label = if leading {
+            "Follow Tempo"
+        } else {
+            "Lead Tempo"
+        };
+        if ui
+            .add_enabled(can_lead, egui::Button::new(label))
+            .on_disabled_hover_text("Only warped audio clips can lead the tempo")
+            .clicked()
+        {
+            let items = state.arr.selection.clone();
+            session.arr_set_tempo_leader(&items, !leading);
+            ui.close();
+        }
         let hint = if session.arr_can_reverse(&state.arr.selection) {
             "Arrives with A9"
         } else {

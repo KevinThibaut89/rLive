@@ -313,11 +313,11 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[ ]` Tempo field coarse and fine, separately mappable, automatable [M]
 - `[ ]` Tap Tempo, mappable; Start Playback with Tap Tempo, four taps in 4/4, Link-aligned [S]
 - `[ ]` Phase Nudge Up/Down [S]
-- `[ ]` Tempo Leader clips (Arrangement): Set follows markers, field disabled, bottom track wins [L]
+- `[~]` Tempo Leader clips (Arrangement): Set follows markers, field disabled, bottom track wins [L]
 - `[ ]` Leader-generated non-editable automation; Unfollow Tempo Automation; overrides Tempo Follower; disabled under EXT [M]
 - `[x]` Warp toggle; beat-synced follow [XL] → stretch engine, tempo map
 - `[~]` Short sample default: Unwarped One Shot, Warped One Shot, Warped Loop, Auto (default) [M]
-- `[ ]` Auto-Warp Long Samples default on; marker on each bar [XL PROP] → tempo/beat tracking
+- `[~]` Auto-Warp Long Samples default on; marker on each bar [XL PROP] → tempo/beat tracking
 - `[x]` Default Warp Mode, Beats initially [S]
 - `[ ]` Import Audio File command [S]
 - `[~]` Warp Markers: add, move, arrow nudge, delete, Shift moves waveform under marker [L]
@@ -333,10 +333,10 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[~]` Warp From Here, Start At, Straight, BPM From Here [M] → Auto-Warp
 - `[x]` Audio quantize: nearest transient to grid, Amount, triplets [M] → transients, markers
 - `[~]` Beats mode: Preserve transients or grid; Loop Off/Forward/Back-and-Forth with zero-crossing; Transient Envelope 0-100 [L PROP]
-- `[ ]` Tones mode: pitch-adaptive grain size [L PROP]
-- `[ ]` Texture mode: grain size, Fluctuation [M PROP]
+- `[~]` Tones mode: pitch-adaptive grain size [L PROP]
+- `[~]` Texture mode: grain size, Fluctuation [M PROP]
 - `[x]` Re-Pitch: rate change, transpose disabled [S]
-- `[ ]` Complex [XL PROP]; Complex Pro: Formants 0-100%, Envelope default 128 [XL PROP]. Exact sound is not reproducible; substitutes are a licensed or open-source stretcher.
+- `[~]` Complex [XL PROP]; Complex Pro: Formants 0-100%, Envelope default 128 [XL PROP]. Exact sound is not reproducible; rLive's is an in-house phase vocoder on `realfft`, not Live's algorithm.
 
 
 ## 10. Editing MIDI (pp. 252-292)

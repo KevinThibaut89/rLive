@@ -6,9 +6,9 @@
 //! 0.01-30 Hz, a Sensitivity reaching at most 64 slices, and a ±5 st pitch bend.
 //!
 //! **Warping.** [`WarpVoice`] is the seam for the warp modes: it plays a source range against
-//! the timeline through `rlive-stretch`. Only Beats and Re-Pitch follow the timeline so far
-//! ([`StretchKind::follows_timeline`]); the others fall back to native-speed reading until
-//! milestone A10 builds them, which only has to add them in [`WarpVoice::stretcher`].
+//! the timeline through `rlive-stretch`, every voice with its own stretchers. A phase vocoder is
+//! expensive to hold, so only the first few voices have one; the rest play Complex and Complex
+//! Pro through Tones, which also keeps pitch.
 
 use super::common::*;
 use crate::dsp::envelope::{Envelope, EnvelopeSettings, LoopMode};
@@ -28,7 +28,7 @@ use rlive_core::{
     BlockStep, DeviceDesc, Item, MidiMessage, ParamId, ParamInfo, ProcessContext, Processor,
     Resource, SampleBuffer, SampleSlot, Section, Status, Tail, ViewId, PPQ,
 };
-use rlive_stretch::{Beats, RePitch};
+use rlive_stretch::{Beats, Flavor, PhaseVocoder, RePitch, Texture, Tones};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -47,6 +47,8 @@ const CONTROL_FRAMES: usize = 32;
 /// The longest voices can be asked for. Spread takes two per note.
 const MAX_NOTES: usize = 24;
 const MAX_VOICES: usize = MAX_NOTES * 2;
+/// How many voices can play Complex and Complex Pro; see the module docs.
+const VOCODER_VOICES: usize = 8;
 
 pub const MODE: u32 = 0;
 pub const START_FLAG: u32 = 1;
@@ -629,6 +631,10 @@ fn adsr(a: f64, d: f64, s: f64, r: f64) -> EnvelopeSettings {
 struct WarpVoice {
     beats: Beats,
     repitch: RePitch,
+    tones: Tones,
+    texture: Texture,
+    /// Complex and Complex Pro, on the voices that have them.
+    vocoders: Option<Box<[PhaseVocoder; 2]>>,
     native: Passthrough,
     kind: Option<StretchKind>,
     tick: f64,
@@ -639,15 +645,35 @@ impl WarpVoice {
     fn prepare(&mut self, sample_rate: f64) {
         self.beats.prepare(sample_rate);
         self.repitch.prepare(sample_rate);
+        self.tones.prepare(sample_rate);
+        self.texture.prepare(sample_rate);
+        if let Some(vocoders) = &mut self.vocoders {
+            for v in vocoders.iter_mut() {
+                v.prepare(sample_rate);
+            }
+        }
         self.native.prepare(sample_rate);
     }
 
-    /// A10: add each new mode's stretcher here, and it follows the timeline from then on.
+    /// Gives this voice its own Complex and Complex Pro.
+    fn with_vocoders(mut self) -> Self {
+        self.vocoders = Some(Box::new([
+            PhaseVocoder::new(Flavor::Complex),
+            PhaseVocoder::new(Flavor::ComplexPro),
+        ]));
+        self
+    }
+
     fn stretcher(&mut self, kind: StretchKind) -> &mut dyn Stretcher {
-        match kind {
-            StretchKind::Beats => &mut self.beats,
-            StretchKind::RePitch => &mut self.repitch,
-            _ => &mut self.native,
+        match (kind, &mut self.vocoders) {
+            (StretchKind::Beats, _) => &mut self.beats,
+            (StretchKind::RePitch, _) => &mut self.repitch,
+            (StretchKind::Tones, _) => &mut self.tones,
+            (StretchKind::Texture, _) => &mut self.texture,
+            (StretchKind::Complex, Some(v)) => &mut v[0],
+            (StretchKind::ComplexPro, Some(v)) => &mut v[1],
+            (StretchKind::Complex | StretchKind::ComplexPro, None) => &mut self.tones,
+            (StretchKind::Off | StretchKind::OffHiQ, _) => &mut self.native,
         }
     }
 }
@@ -754,7 +780,15 @@ impl Simpler {
             slice_count: 0,
             slices_dirty: true,
             alloc: VoiceAllocator::new(MAX_VOICES),
-            voices: (0..MAX_VOICES).map(|_| Voice::default()).collect(),
+            voices: (0..MAX_VOICES)
+                .map(|i| {
+                    let mut voice = Voice::default();
+                    if i < VOCODER_VOICES {
+                        voice.warp = Box::new(WarpVoice::default().with_vocoders());
+                    }
+                    voice
+                })
+                .collect(),
             rng: Rng::new(0x51_b1e2),
             warp_left: Vec::new(),
             warp_right: Vec::new(),
@@ -980,7 +1014,7 @@ impl Values<'_> {
             },
             StretchKind::Complex => WarpMode::Complex,
             StretchKind::ComplexPro => WarpMode::ComplexPro {
-                formants: 1.0,
+                formants: 100.0,
                 envelope: 128.0,
             },
             _ => WarpMode::RePitch,

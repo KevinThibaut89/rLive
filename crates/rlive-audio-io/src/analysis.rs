@@ -11,6 +11,7 @@
 
 use crate::peaks::{Peaks, BASE_BLOCK};
 use crate::Fingerprint;
+use rlive_core::warp::BeatGrid;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -32,6 +33,18 @@ struct StoredWarp {
     detector: u32,
     /// Transients in seconds, ascending.
     seconds: Vec<f64>,
+    /// The beat grid, if the sample has been tracked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    beats: Option<StoredBeats>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredBeats {
+    tracker: u32,
+    bpm: f64,
+    beats: Vec<f64>,
+    downbeat: usize,
+    confidence: f32,
 }
 
 /// Extra analysis data kept with a sample. `warp` holds what the analysis found (see
@@ -53,13 +66,54 @@ impl AnalysisExtras {
     }
 
     pub fn set_transients(&mut self, seconds: &[f64]) {
+        let beats = self.stored_warp().and_then(|w| w.beats);
         let stored = StoredWarp {
             detector: rlive_stretch::DETECTOR_VERSION,
-            // A microsecond is far finer than a sample, and keeps the file short.
-            seconds: seconds.iter().map(|s| (s * 1e6).round() / 1e6).collect(),
+            seconds: rounded(seconds),
+            beats,
         };
         self.warp = serde_json::to_value(stored).ok();
     }
+
+    /// The beat grid of the sample, unless a newer tracker should look again.
+    pub fn beats(&self) -> Option<BeatGrid> {
+        let stored = self.stored_warp()?.beats?;
+        (stored.tracker == rlive_stretch::TRACKER_VERSION).then_some(BeatGrid {
+            bpm: stored.bpm,
+            beats: stored.beats,
+            downbeat: stored.downbeat,
+            confidence: stored.confidence,
+        })
+    }
+
+    pub fn set_beats(&mut self, grid: &BeatGrid) {
+        let (detector, seconds) = match self.stored_warp() {
+            Some(w) => (w.detector, w.seconds),
+            // No transients yet: a detector of 0 is never current, so they are still looked for.
+            None => (0, Vec::new()),
+        };
+        let stored = StoredWarp {
+            detector,
+            seconds,
+            beats: Some(StoredBeats {
+                tracker: rlive_stretch::TRACKER_VERSION,
+                bpm: grid.bpm,
+                beats: rounded(&grid.beats),
+                downbeat: grid.downbeat,
+                confidence: grid.confidence,
+            }),
+        };
+        self.warp = serde_json::to_value(stored).ok();
+    }
+
+    fn stored_warp(&self) -> Option<StoredWarp> {
+        serde_json::from_value(self.warp.as_ref()?.clone()).ok()
+    }
+}
+
+/// A microsecond is far finer than a sample, and keeps the file short.
+fn rounded(seconds: &[f64]) -> Vec<f64> {
+    seconds.iter().map(|s| (s * 1e6).round() / 1e6).collect()
 }
 
 /// What an analysis file holds.
@@ -369,6 +423,47 @@ mod tests {
         assert_eq!(back.extras.default_clip, a.extras.default_clip);
         assert_eq!(back.extras.transients().unwrap(), vec![0.5]);
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn beats_and_transients_share_a_sidecar_without_losing_each_other() {
+        let path = temp("beats");
+        let a = analysis(Peaks::mono(&[0.5; 1_000]));
+        write(&path, &a).unwrap();
+        let grid = BeatGrid {
+            bpm: 124.5,
+            beats: vec![0.5, 0.98, 1.46],
+            downbeat: 1,
+            confidence: 0.7,
+        };
+        update_extras(&path, &a.fingerprint, |e| e.set_transients(&[0.5])).unwrap();
+        update_extras(&path, &a.fingerprint, |e| e.set_beats(&grid)).unwrap();
+        let back = read(&path, &a.fingerprint).unwrap();
+        assert_eq!(back.extras.transients().unwrap(), vec![0.5]);
+        assert_eq!(back.extras.beats().unwrap(), grid);
+        update_extras(&path, &a.fingerprint, |e| e.set_transients(&[0.25])).unwrap();
+        let back = read(&path, &a.fingerprint).unwrap();
+        assert_eq!(
+            back.extras.beats().unwrap(),
+            grid,
+            "transients keep the beats"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_newer_tracker_looks_again() {
+        let mut extras = AnalysisExtras::default();
+        extras.set_beats(&BeatGrid {
+            bpm: 120.0,
+            beats: vec![0.0],
+            downbeat: 0,
+            confidence: 1.0,
+        });
+        let mut value = extras.warp.clone().unwrap();
+        value["beats"]["tracker"] = serde_json::json!(rlive_stretch::TRACKER_VERSION + 1);
+        extras.warp = Some(value);
+        assert!(extras.beats().is_none());
     }
 
     #[test]

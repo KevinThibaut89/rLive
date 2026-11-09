@@ -555,10 +555,96 @@ fn a_warped_clip_with_no_map_plays_like_warp_off() {
 }
 
 #[test]
-fn a_passthrough_mode_still_reads_at_native_speed() {
+fn complex_follows_the_timeline_and_keeps_its_pitch() {
     let c = clip(tone(440.0), WarpMode::Complex, &[]);
     let mut p = Player::new();
     let out = p.play(&c, 8192, 60.0, 512);
-    assert_eq!(p.cursor.src, 8192.0);
+    // Half the tempo reads the source at half speed; the pitch doesn't care.
+    assert_eq!(p.cursor.src, 4096.0);
     assert!((measured_hz(&out[2000..]) / 440.0 - 1.0).abs() < 0.001);
+}
+
+fn a10_modes() -> [WarpMode; 4] {
+    [
+        WarpMode::Tones { grain_size: 30.0 },
+        WarpMode::Texture {
+            grain_size: 30.0,
+            flux: 10.0,
+        },
+        WarpMode::Complex,
+        WarpMode::ComplexPro {
+            formants: 100.0,
+            envelope: 128.0,
+        },
+    ]
+}
+
+#[test]
+fn tones_texture_and_complex_stay_on_the_timeline_through_tempo_changes() {
+    for mode in a10_modes() {
+        let c = clip(tone(440.0), mode, &[]);
+        let mut p = Player::new();
+        let mut played = 0.0;
+        let mut out = Vec::new();
+        for (tempo, frames) in [(120.0, 20_000usize), (90.0, 20_000), (150.0, 20_000)] {
+            out.extend(p.play(&c, frames, tempo, 480));
+            played += frames as f64 * ticks_per_sample(tempo, SR);
+        }
+        // The read head is exactly where the song position puts it, through every change.
+        let map = c.map.as_ref().unwrap();
+        assert!(
+            (p.cursor.src - map.tick_to_src(played)).abs() < 1.0,
+            "{mode:?}: {} against {}",
+            p.cursor.src,
+            map.tick_to_src(played)
+        );
+        // And the sound doesn't drop out when it changes.
+        for chunk in out[2_000..58_000].chunks(4_800) {
+            assert!(rlive_testkit::rms(chunk) > 0.1, "{mode:?}");
+        }
+    }
+}
+
+#[test]
+fn a10_modes_seek_without_clicks_in_the_engine() {
+    for mode in a10_modes() {
+        let c = clip(tone(200.0), mode, &[]);
+        let mut p = Player::new();
+        let mut out = p.play(&c, 8_000, 120.0, 512);
+        p.tick = 1.7 * BEAT;
+        out.extend(p.play(&c, 8_000, 120.0, 512));
+        let nominal = 0.5 * (200.0 / SR as f32) * std::f32::consts::TAU;
+        let jump = max_step(&out);
+        assert!(jump < nominal * 4.0, "{mode:?}: {jump} against {nominal}");
+    }
+}
+
+#[test]
+fn a10_modes_loop_without_clicks_and_with_no_allocation() {
+    for mode in a10_modes() {
+        let positions = [12_000, 36_000, 60_000, 84_000];
+        let mut c = clip(hits(&positions), mode, &positions);
+        c.audio.looped = true;
+        let mut p = Player::new();
+        let (mut l, mut r) = (vec![0.0; 777], vec![0.0; 777]);
+        assert_no_alloc(|| {
+            for block in 0..400 {
+                let tempo = if block % 3 == 0 { 174.0 } else { 88.0 };
+                p.render_into(&c, 777, tempo, &mut l, &mut r);
+                if block % 41 == 40 {
+                    p.tick += 1234.5;
+                }
+            }
+        });
+        assert!(l.iter().chain(&r).all(|v| v.is_finite()), "{mode:?}");
+    }
+}
+
+#[test]
+fn every_mode_with_a_real_stretcher_follows_the_timeline() {
+    use rlive_core::warp::StretchKind;
+    assert!(!StretchKind::Off.follows_timeline());
+    for kind in StretchKind::ALL.iter().filter(|k| **k != StretchKind::Off) {
+        assert!(kind.follows_timeline(), "{kind:?}");
+    }
 }

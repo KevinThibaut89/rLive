@@ -153,6 +153,9 @@ pub struct Warp {
     /// The user's changes to the transients found in the file.
     #[serde(default, skip_serializing_if = "is_default")]
     pub transients: TransientEdits,
+    /// An Arrangement clip whose Warp Markers set the Set's tempo. Ignored in the Session.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub tempo_leader: bool,
 }
 
 /// Changes a clip makes to the transients analysed from its file, in seconds.

@@ -19,6 +19,7 @@ mod project;
 mod recording;
 mod routing;
 mod scene;
+mod tempo_leader;
 mod track;
 pub mod warp_edit;
 

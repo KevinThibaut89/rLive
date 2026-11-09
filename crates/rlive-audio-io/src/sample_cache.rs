@@ -14,8 +14,9 @@ use crate::decode::{DecodeError, DecodedAudio, Decoder};
 use crate::decoding_cache::{CacheConfig, Cleanup, DecodingCache, Stored};
 use crate::fingerprint::{fingerprint, Fingerprint};
 use crate::peaks::Peaks;
+use rlive_core::warp::BeatGrid;
 use rlive_core::SampleBuffer;
-use rlive_stretch::detect_transients;
+use rlive_stretch::{detect_transients, track_beats};
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -24,12 +25,20 @@ use std::sync::{Arc, Mutex, RwLock};
 
 /// More than this many threads only makes the disk the bottleneck.
 const MAX_WORKERS: usize = 4;
+/// Files at least this long count as long samples, which Auto-Warp handles. The manual gives no
+/// figure; this is long enough for 16 bars at any ordinary tempo.
+pub const LONG_SAMPLE_SECONDS: f64 = 60.0;
+/// Bars of this many beats are what the tracker calls downbeats; the clip's own meter is applied
+/// when the markers are placed.
+const TRACKED_BEATS_PER_BAR: usize = 4;
 
 /// How samples are loaded. Takes effect from the next file loaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoaderConfig {
     /// Whether to write an analysis file next to a sample. Existing ones are read either way.
     pub create_analysis_files: bool,
+    /// Whether long samples get beat tracking, as Auto-Warp Long Samples asks.
+    pub auto_warp_long: bool,
     pub cache: CacheConfig,
 }
 
@@ -54,6 +63,7 @@ impl Default for LoaderConfig {
         const GIB: u64 = 1024 * 1024 * 1024;
         Self {
             create_analysis_files: true,
+            auto_warp_long: true,
             cache: CacheConfig {
                 folder: Self::default_cache_folder(),
                 minimum_free_space: 2 * GIB,
@@ -94,6 +104,10 @@ struct Entry {
     fingerprint: Option<Fingerprint>,
     /// In seconds, ascending. `None` until the analysis has finished.
     transients: Option<Arc<Vec<f64>>>,
+    /// `None` until tracking has finished, and for samples it says nothing useful about.
+    beats: Option<Arc<BeatGrid>>,
+    /// A worker is still tracking the beats of this file.
+    tracking: bool,
 }
 
 struct Loaded {
@@ -102,6 +116,8 @@ struct Loaded {
     fingerprint: Fingerprint,
     notices: Vec<String>,
     extras: AnalysisExtras,
+    /// A worker goes on to track the beats of this file.
+    tracking: bool,
 }
 
 enum Report {
@@ -119,6 +135,11 @@ enum Report {
     },
     /// The transients of a sample that had none stored.
     Transients { path: PathBuf, seconds: Vec<f64> },
+    /// Tracking has finished for a sample that had no beats stored.
+    Beats {
+        path: PathBuf,
+        grid: Option<BeatGrid>,
+    },
 }
 
 struct Workers {
@@ -134,6 +155,8 @@ pub struct SampleCache {
     events: Vec<SampleEvent>,
     /// Files whose transients have arrived since the last [`SampleCache::poll_transients`].
     new_transients: Vec<PathBuf>,
+    /// Files whose beats have arrived since the last [`SampleCache::poll_beats`].
+    new_beats: Vec<PathBuf>,
 }
 
 impl Default for SampleCache {
@@ -150,6 +173,7 @@ impl SampleCache {
             workers: None,
             events: Vec::new(),
             new_transients: Vec::new(),
+            new_beats: Vec::new(),
         }
     }
 
@@ -168,6 +192,8 @@ impl SampleCache {
                     peaks: None,
                     fingerprint: None,
                     transients: None,
+                    beats: None,
+                    tracking: false,
                 },
             );
             self.start_workers();
@@ -188,6 +214,8 @@ impl SampleCache {
                 peaks: None,
                 fingerprint: None,
                 transients: None,
+                beats: None,
+                tracking: false,
             },
         );
     }
@@ -248,6 +276,16 @@ impl SampleCache {
     /// Hands back the files whose transients arrived since the last call. Never waits.
     pub fn poll_transients(&mut self) -> Vec<PathBuf> {
         std::mem::take(&mut self.new_transients)
+    }
+
+    /// The beat grid of a file, once it has been tracked.
+    pub fn beats(&self, path: &Path) -> Option<Arc<BeatGrid>> {
+        self.entries.get(path)?.beats.clone()
+    }
+
+    /// Hands back the files whose beats arrived since the last call. Never waits.
+    pub fn poll_beats(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.new_beats)
     }
 
     /// Whether the audio of `path` is here but its transients aren't known yet.
@@ -353,9 +391,9 @@ impl SampleCache {
     pub fn wait_idle(&mut self) {
         let waiting = |c: &Self| {
             c.any_loading()
-                || c.entries
-                    .values()
-                    .any(|e| matches!(e.state, State::Ready(_)) && e.transients.is_none())
+                || c.entries.values().any(|e| {
+                    matches!(e.state, State::Ready(_)) && (e.transients.is_none() || e.tracking)
+                })
         };
         while waiting(self) {
             let Some(report) = self.workers.as_ref().and_then(|w| w.reports.recv().ok()) else {
@@ -394,9 +432,22 @@ impl SampleCache {
                 if let Some(e) = self.entries.get_mut(&path) {
                     e.peaks = Some((peaks, sample_rate));
                     e.fingerprint = Some(fingerprint);
+                    if let Some(grid) = extras.beats() {
+                        e.beats = Some(Arc::new(grid));
+                        self.new_beats.push(path.clone());
+                    }
                     if let Some(seconds) = extras.transients() {
                         e.transients = Some(Arc::new(seconds));
                         self.new_transients.push(path);
+                    }
+                }
+            }
+            Report::Beats { path, grid } => {
+                if let Some(e) = self.entries.get_mut(&path) {
+                    e.tracking = false;
+                    if let Some(grid) = grid {
+                        e.beats = Some(Arc::new(grid));
+                        self.new_beats.push(path);
                     }
                 }
             }
@@ -415,6 +466,7 @@ impl SampleCache {
                         entry.state = State::Ready(loaded.buffer.clone());
                         entry.peaks = Some((loaded.peaks, loaded.buffer.sample_rate));
                         entry.fingerprint = Some(loaded.fingerprint);
+                        entry.tracking = loaded.tracking;
                         SampleEvent {
                             path,
                             result: Ok(loaded.buffer),
@@ -487,13 +539,20 @@ fn worker(
         // A decoder bug on a strange file must not take the whole application down.
         let result = catch_unwind(AssertUnwindSafe(|| load(&path, &config, &report)))
             .unwrap_or_else(|_| Err("the decoder crashed on this file".to_string()));
-        let result = result.map_err(|reason| format!("{}: {reason}", path.display()));
-        // The audio can be played from here on; finding transients doesn't hold that up.
-        let to_analyse = result
-            .as_ref()
-            .ok()
-            .filter(|l| l.extras.transients().is_none())
-            .map(|l| (l.buffer.clone(), l.fingerprint.clone()));
+        let mut result = result.map_err(|reason| format!("{}: {reason}", path.display()));
+        // The audio can be played from here on; analysing it doesn't hold that up.
+        let to_analyse = result.as_mut().ok().map(|l| {
+            let seconds = l.buffer.len() as f64 / l.buffer.sample_rate.max(1.0);
+            let long = seconds >= LONG_SAMPLE_SECONDS;
+            // The manual: long samples aren't analysed with Auto-Warp Long Samples off.
+            l.tracking = l.extras.beats().is_none() && (config.auto_warp_long || !long);
+            (
+                l.buffer.clone(),
+                l.fingerprint.clone(),
+                l.extras.transients().is_none(),
+                l.tracking,
+            )
+        });
         let finished = Report::Finished {
             path: path.clone(),
             result,
@@ -501,7 +560,10 @@ fn worker(
         if report.send(finished).is_err() {
             return;
         }
-        if let Some((buffer, fingerprint)) = to_analyse {
+        let Some((buffer, fingerprint, find_transients, find_beats)) = to_analyse else {
+            continue;
+        };
+        if find_transients {
             let seconds = catch_unwind(AssertUnwindSafe(|| {
                 detect_transients(&buffer.left, Some(&buffer.right), buffer.sample_rate)
             }))
@@ -514,7 +576,30 @@ fn worker(
                     log::debug!("{}: transients not stored: {e}", path.display());
                 }
             }
+            let path = path.clone();
             if report.send(Report::Transients { path, seconds }).is_err() {
+                return;
+            }
+        }
+        if find_beats {
+            let grid = catch_unwind(AssertUnwindSafe(|| {
+                track_beats(
+                    &buffer.left,
+                    Some(&buffer.right),
+                    buffer.sample_rate,
+                    TRACKED_BEATS_PER_BAR,
+                )
+            }))
+            .ok()
+            .flatten();
+            if let (true, Some(grid)) = (config.create_analysis_files, &grid) {
+                let stored =
+                    analysis::update_extras(&path, &fingerprint, |extras| extras.set_beats(grid));
+                if let Err(e) = stored {
+                    log::debug!("{}: beats not stored: {e}", path.display());
+                }
+            }
+            if report.send(Report::Beats { path, grid }).is_err() {
                 return;
             }
         }
@@ -589,6 +674,7 @@ fn load(path: &Path, config: &LoaderConfig, report: &Sender<Report>) -> Result<L
         fingerprint,
         notices,
         extras,
+        tracking: false,
     })
 }
 
@@ -648,6 +734,7 @@ mod tests {
         w.finalize().unwrap();
         let config = LoaderConfig {
             create_analysis_files: true,
+            auto_warp_long: true,
             cache: CacheConfig {
                 folder: dir.join("cache"),
                 minimum_free_space: 0,

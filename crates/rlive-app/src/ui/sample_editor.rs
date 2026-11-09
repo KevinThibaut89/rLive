@@ -965,7 +965,8 @@ fn context_menu(
             if let Some((a, b)) = state.sample.selection {
                 let (from, to) = (a.min(b), a.max(b));
                 ui.menu_button("Warp Selection As", |ui| {
-                    let suggested = warp_edit::suggest_bars(to - from, ticks_per_bar, set_bpm);
+                    let tempo = view.tracked_bpm.unwrap_or(set_bpm);
+                    let suggested = warp_edit::suggest_bars(to - from, ticks_per_bar, tempo);
                     for bars in WARP_AS_BARS {
                         let label = bar_label(bars, bars == suggested);
                         if ui.button(label).clicked() {

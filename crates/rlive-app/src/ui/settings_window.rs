@@ -148,10 +148,11 @@ impl RliveApp {
         self.ui.show_settings = open;
         if self.settings != before {
             self.settings.save();
-            if self.settings.samples != before.samples {
+            let auto_warp = self.settings.warp.auto_warp_long;
+            if self.settings.samples != before.samples || auto_warp != before.warp.auto_warp_long {
                 self.session
                     .samples
-                    .configure(self.settings.samples.loader_config());
+                    .configure(self.settings.samples.loader_config(auto_warp));
             }
             if self.settings.record_session_automation_in != before.record_session_automation_in {
                 let tracks = self.settings.record_session_automation_in;
@@ -820,7 +821,9 @@ fn record_warp_launch_tab(ui: &mut egui::Ui, settings: &mut Settings) {
     ui.add_space(10.0);
     widgets::section_label(ui, "WARP");
     grid(ui, "warp", |ui| {
-        soon_check(ui, "Auto-Warp Long Samples", true, "A10");
+        label(ui, "Auto-Warp Long Samples");
+        ui.checkbox(&mut warp.auto_warp_long, "");
+        ui.end_row();
         ui.label("Loop/Warp Short Samples");
         egui::ComboBox::from_id_salt("short_samples")
             .selected_text(warp.short_samples.label())

@@ -237,7 +237,9 @@ impl RliveApp {
         let sender = handle.take_midi_sender();
         let plugins = PluginCache::load(&PluginCache::default_path());
         let mut session = Session::new(handle, Project::new_default(), plugins);
-        session.samples.configure(settings.samples.loader_config());
+        session
+            .samples
+            .configure(settings.samples.loader_config(settings.warp.auto_warp_long));
         session.send_midi_envelope_auto_reset(settings.midi_envelope_auto_reset);
         session.set_session_automation_in(settings.record_session_automation_in);
         session.set_chase(settings.chase_notes);
@@ -869,17 +871,36 @@ impl RliveApp {
             self.tap_tempo(now);
         }
         let mut tempo = self.session.project.tempo;
-        let r = lu.add_sized(
-            [70.0, h],
-            egui::DragValue::new(&mut tempo)
-                .range(20.0..=999.0)
-                .speed(0.25)
-                .fixed_decimals(2),
-        );
+        let led = self.session.tempo_is_led();
+        let r = lu
+            .add_enabled_ui(!led, |ui| {
+                ui.add_sized(
+                    [70.0, h],
+                    egui::DragValue::new(&mut tempo)
+                        .range(20.0..=999.0)
+                        .speed(0.25)
+                        .fixed_decimals(2),
+                )
+            })
+            .inner;
         if r.changed() {
             self.session.set_tempo(tempo);
         }
+        let field = r.rect;
         info(r, "Tempo (BPM) — drag or double-click to type");
+        // A deactivated field takes no clicks, so the menu is on the place it sits.
+        lu.interact(
+            field,
+            lu.scope_id().with("tempo_menu"),
+            egui::Sense::click(),
+        )
+        .context_menu(|ui| {
+            let unfollow = egui::Button::new("Unfollow Tempo Automation");
+            if ui.add_enabled(led, unfollow).clicked() {
+                self.session.unfollow_tempo_automation();
+                ui.close();
+            }
+        });
         let tick_now = self.session.engine.shared.tick.load();
         let has_markers = !self.session.project.arrangement.signatures.is_empty();
         let mut sig = self.session.project.bar_map().signature_at(tick_now);
