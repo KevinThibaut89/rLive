@@ -8,8 +8,8 @@
 //! and starts where the last grain's waveform would have got to, which is what keeps a held note
 //! from beating against itself. Texture ignores pitch and scatters its grains instead.
 
-use crate::crossfade_frames;
 use crate::interp::Sinc;
+use crate::{crossfade_frames, is_native_rate, source_frame};
 use rlive_core::warp::{StretchSpan, Stretcher, WarpMode};
 use rlive_core::SampleBuffer;
 use std::f64::consts::TAU;
@@ -22,6 +22,9 @@ const WINDOW_POINTS: usize = 1024;
 const DEFAULT_GRAIN_MS: f32 = 30.0;
 /// The range Grain Size means, in milliseconds.
 const GRAIN_MS: (f32, f32) = (2.0, 250.0);
+
+/// A grain long enough that what fades out of the way stays at the top of its window.
+const TAIL_GRAIN_LEN: u32 = 1 << 20;
 
 /// The pitch search works on a copy of the signal at this fraction of the source's rate.
 const PITCH_DECIMATE: usize = 4;
@@ -104,6 +107,17 @@ pub struct Granular {
     seek_to: Option<f64>,
     last: Option<f64>,
     fresh: bool,
+    /// Where the source is being read straight off, at the clip's own tempo. No grains then.
+    straight: Option<Straight>,
+}
+
+/// Reading the source straight off.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Straight {
+    /// The next source frame.
+    frame: f64,
+    /// Frames of fade-in left, when it starts over silence or something else.
+    fade_in: u32,
 }
 
 impl Granular {
@@ -124,6 +138,7 @@ impl Granular {
             seek_to: None,
             last: None,
             fresh: true,
+            straight: None,
         }
     }
 
@@ -341,6 +356,95 @@ impl Granular {
         best
     }
 
+    /// Stops reading straight off, leaving a grain to fade out what was being read.
+    fn leave_straight(&mut self) {
+        if let Some(head) = self.straight.take() {
+            let slot = self.claim();
+            let top = TAIL_GRAIN_LEN / 2;
+            self.grains[slot] = Grain {
+                on: true,
+                pos: head.frame,
+                step: 1.0,
+                age: top,
+                len: TAIL_GRAIN_LEN,
+                release: self.crossfade,
+                fade_in: 0,
+                half: false,
+            };
+        }
+    }
+
+    /// Plays the source as it is, at the clip's own tempo (manual p. 990). Grains exist so a
+    /// stretch can happen between them, and there is no stretch here.
+    fn render_straight(
+        &mut self,
+        s: &SampleBuffer,
+        span: &StretchSpan<'_>,
+        l: &mut [f32],
+        r: &mut [f32],
+    ) {
+        let seek = self.seek_to.take().is_some();
+        let lost = self
+            .straight
+            .is_none_or(|h| (h.frame - span.src_start).abs() >= 1.0);
+        if seek || lost {
+            let sounding = self.last.is_some_and(|p| p < s.len() as f64);
+            let had_any = self.straight.is_some() || self.grains.iter().any(|g| g.on);
+            self.leave_straight();
+            let crossfade = self.crossfade;
+            for g in self.grains.iter_mut().filter(|g| g.on && g.release == 0) {
+                g.release = crossfade;
+            }
+            let fade_in = if had_any && sounding || self.fresh {
+                crossfade
+            } else {
+                0
+            };
+            self.straight = Some(Straight {
+                frame: span.src_start.round(),
+                fade_in,
+            });
+        }
+        self.fresh = false;
+        self.newest = None;
+        self.until_grain = 0;
+        let crossfade = self.crossfade as f32;
+        let windows = self.windows;
+        let Some(mut head) = self.straight else {
+            return;
+        };
+        for (out_l, out_r) in l.iter_mut().zip(r.iter_mut()) {
+            let (mut a, mut b) = source_frame(s, head.frame);
+            head.frame += 1.0;
+            if head.fade_in > 0 {
+                let gain = 1.0 - head.fade_in as f32 / crossfade;
+                a *= gain;
+                b *= gain;
+                head.fade_in -= 1;
+            }
+            for g in self.grains.iter_mut().filter(|g| g.on) {
+                let at = if g.half { g.age + g.len / 2 } else { g.age };
+                if at >= g.len || g.release == 0 {
+                    g.on = false;
+                    continue;
+                }
+                let window = window_value(&windows.hann, at, g.len);
+                let gain = window * g.release as f32 / crossfade;
+                let (x, y) = self.sinc.read(s, g.pos, 0);
+                g.pos += g.step;
+                g.age += 1;
+                g.release -= 1;
+                g.on = g.release > 0;
+                a += x * gain;
+                b += y * gain;
+            }
+            *out_l = a;
+            *out_r = b;
+        }
+        self.straight = Some(head);
+        self.last = Some(span.src_end);
+    }
+
     fn begin_seek(&mut self, s: &SampleBuffer, src: f64, base_len: f64, step: f64) {
         let sounding = self.last.is_some_and(|p| p < s.len() as f64);
         let crossfade = self.crossfade;
@@ -401,6 +505,7 @@ impl Stretcher for Granular {
         self.seek_to = None;
         self.last = None;
         self.fresh = true;
+        self.straight = None;
         self.random = 0x9E37_79B9_7F4A_7C15;
     }
 
@@ -424,7 +529,19 @@ impl Stretcher for Granular {
         let ratio = 2f64.powf(f64::from(span.transpose) / 12.0);
         let step = ratio * s.sample_rate / self.sample_rate;
         let band = Sinc::band_for(step);
-        if let Some(src) = self.seek_to.take() {
+        if is_native_rate(rate) && step == 1.0 {
+            self.render_straight(s, &span, &mut l[..frames], &mut r[..frames]);
+            return;
+        }
+        // Coming off the straight read: start over where the timeline is, with a crossfade.
+        let was_straight = self.straight.is_some();
+        self.leave_straight();
+        let seek = if was_straight {
+            self.seek_to.take().or(Some(span.src_start))
+        } else {
+            self.seek_to.take()
+        };
+        if let Some(src) = seek {
             self.begin_seek(s, src, base_len, step);
         }
         self.fresh = false;

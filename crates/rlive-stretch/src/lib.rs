@@ -34,6 +34,27 @@ fn crossfade_frames(sample_rate: f64) -> u32 {
     ((CROSSFADE_SECS * sample_rate).round() as u32).max(8)
 }
 
+/// How far from one source frame per output frame still counts as native speed.
+const NATIVE_RATE: f64 = 1e-6;
+
+/// Whether reading at `rate` is native speed: a clip at the Set's tempo plays back unstretched.
+fn is_native_rate(rate: f64) -> bool {
+    (rate - 1.0).abs() < NATIVE_RATE
+}
+
+/// A stereo frame of the source exactly as the file has it.
+#[inline]
+fn source_frame(s: &rlive_core::SampleBuffer, frame: f64) -> (f32, f32) {
+    if frame < 0.0 {
+        return (0.0, 0.0);
+    }
+    let at = frame as usize;
+    match (s.left.get(at), s.right.get(at)) {
+        (Some(l), Some(r)) => (*l, *r),
+        _ => (0.0, 0.0),
+    }
+}
+
 /// A stretcher for `kind`. Warp off is a passthrough.
 pub fn stretcher(kind: StretchKind) -> Box<dyn Stretcher> {
     match kind {

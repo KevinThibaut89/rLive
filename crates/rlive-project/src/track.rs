@@ -174,6 +174,14 @@ pub enum MainLane {
     Show(EnvTarget),
 }
 
+/// A frozen track's devices are out of the signal path (manual p. 985).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackFreeze {
+    /// It was frozen in real time, for hardware; Unfreeze throws its files away (p. 987).
+    pub realtime: bool,
+}
+
 /// View state stored with the track. Undo leaves it alone.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -243,6 +251,9 @@ pub struct Track {
         skip_serializing_if = "crate::defaults::is_true"
     )]
     pub keep_monitor_latency: bool,
+    /// Set while the track is frozen.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub freeze: Option<TrackFreeze>,
     /// The user's info text.
     #[serde(default, skip_serializing_if = "is_default")]
     pub info: String,
@@ -277,9 +288,14 @@ impl Track {
             automation: Vec::new(),
             take_lanes: Vec::new(),
             keep_monitor_latency: true,
+            freeze: None,
             info: String::new(),
             ui: TrackUi::default(),
         }
+    }
+
+    pub fn is_frozen(&self) -> bool {
+        self.freeze.is_some()
     }
 
     /// Whether a slot's Clip Stop button is there.

@@ -5,6 +5,7 @@
 
 use super::super::commands::app::App;
 use super::super::commands::arrange::Arrange as Ar;
+use super::super::commands::bounce::Bounce;
 use super::super::commands::clip::Clip as Cv;
 use super::super::commands::create::Create;
 use super::super::commands::edit::Edit;
@@ -413,7 +414,7 @@ pub static BINDINGS: &[Binding] = &[
 
     // 42.16 Arrangement View
     a("42.16", Arr, "Split clip at selection", k(CMD, Key::E), L(M::Arrange(Ar::Split))),
-    a("42.16", Arr, "Consolidate selection", k(CMD, Key::J), p!("A12")),
+    a("42.16", Arr, "Consolidate selection", k(CMD, Key::J), L(M::Bounce(Bounce::Consolidate))),
     a("42.16", Arr, "Crop selected clips", k(CMD_SHIFT, Key::J), L(M::Arrange(Ar::Crop))),
     a("42.16", Arr, "Resize clip at the insert marker", g1("Enter left and right arrow"), W),
     a("42.16", Arr, "Slide waveform", g1("Shift Alt drag"), W),
@@ -463,8 +464,8 @@ pub static BINDINGS: &[Binding] = &[
     b("42.17", Arr, Wh::TakeLane, "Previous take into the main clip", k(CMD, Key::ArrowDown), p!("C6")),
 
     // 42.18 Bounce to audio
-    a("42.18", All, "Bounce to new track", k(CMD, Key::B), p!("A12")),
-    a("42.18", Main, "Paste bounced audio", k(CMD_ALT, Key::V), p!("A12")),
+    a("42.18", All, "Bounce to new track", k(CMD, Key::B), L(M::Bounce(Bounce::ToNewTrack))),
+    a("42.18", Main, "Paste bounced audio", k(CMD_ALT, Key::V), L(M::Bounce(Bounce::PasteBounced))),
 
     // 42.19 Tracks
     a("42.19", All, "Insert audio track", k(CMD, Key::T), L(M::Create(Create::NewAudioTrack))),
@@ -486,7 +487,7 @@ pub static BINDINGS: &[Binding] = &[
     a("42.19", Main, "Solo selected tracks", k(NO, Key::S), L(M::Track(Track::Solo))),
     a("42.19", Brw, "Add device from browser", k(NO, Key::Enter), p!("C12")),
     a("42.19", Main, "Deactivate selected track", k(NO, Key::Num0), L(M::Track(Track::ToggleActivator))),
-    a("42.19", All, "Freeze or unfreeze tracks", k(CMD_ALT_SHIFT, Key::F), p!("A12")),
+    a("42.19", All, "Freeze or unfreeze tracks", k(CMD_ALT_SHIFT, Key::F), L(M::Bounce(Bounce::Freeze))),
     b("42.19", Main, Wh::TrackTitle, "Delete track from title bar", k(NO, Key::Delete), p!("C19")),
 
     // 42.20 Transport

@@ -4,8 +4,8 @@
 //! its own speed, so the attacks in it keep their shape; the next slice starts the moment the
 //! timeline reaches it. What happens when a slice runs out before that is the Transient Loop Mode.
 
-use crate::crossfade_frames;
 use crate::interp::Sinc;
+use crate::{crossfade_frames, is_native_rate, source_frame};
 use rlive_core::warp::{BeatsLoop, StretchSpan, Stretcher, WarpMode};
 use rlive_core::SampleBuffer;
 
@@ -200,6 +200,38 @@ impl Beats {
         middle
     }
 
+    /// Sets up to play the source straight through, as it is at the clip's own tempo: one grain
+    /// on whole source frames that no slice boundary interrupts. Slices only exist so a stretch
+    /// can happen between them, and there is no stretch here (manual p. 990).
+    fn hold_course(&mut self, span: &StretchSpan<'_>, envelope: f32) {
+        let on_course = |g: &Grain| (g.pos - span.src_start).abs() < 1.0;
+        let main = self.grains.iter_mut().find(|g| g.state == State::Main);
+        match main {
+            Some(g) if on_course(g) => {
+                g.pos = g.pos.round();
+                g.step = 1.0;
+                g.slice_end = f64::INFINITY;
+                g.loop_point = None;
+            }
+            // A slice stretched its way somewhere else, so go back to where the timeline is.
+            _ => {
+                self.release_main();
+                let from = span.src_start.round();
+                let fade_in = self.crossfade;
+                self.start_grain(from, from, f64::INFINITY, 1.0, 1.0, envelope, fade_in);
+            }
+        }
+    }
+
+    /// A grain that was playing straight through goes back to being a slice with an end.
+    fn back_to_slices(&mut self, s: &SampleBuffer, slices: &[f64]) {
+        for g in self.grains.iter_mut().filter(|g| g.slice_end.is_infinite()) {
+            let next = slices.partition_point(|b| *b <= g.pos);
+            g.slice_start = next.checked_sub(1).map_or(0.0, |i| slices[i]);
+            g.slice_end = slices.get(next).copied().unwrap_or(s.len() as f64);
+        }
+    }
+
     /// Makes the slice go on past its end, as its loop mode says.
     fn run_past_end(&mut self, i: usize, s: &SampleBuffer, mode: BeatsLoop) {
         let g = self.grains[i];
@@ -252,6 +284,7 @@ impl Beats {
         s: &SampleBuffer,
         mode: BeatsLoop,
         band: usize,
+        unstretched: bool,
     ) -> (f32, f32) {
         let crossfade = self.crossfade as f32;
         let g = &mut self.grains[i];
@@ -277,7 +310,11 @@ impl Beats {
                 gain *= (frames_left / crossfade).max(0.0);
             }
         }
-        let (l, r) = self.sinc.read(s, g.pos, band);
+        let (l, r) = if unstretched && g.state == State::Main {
+            source_frame(s, g.pos)
+        } else {
+            self.sinc.read(s, g.pos, band)
+        };
         g.pos += g.step;
         g.age += 1;
         let is_main = g.state == State::Main;
@@ -343,10 +380,19 @@ impl Stretcher for Beats {
         if let Some(src) = self.seek_to {
             self.begin_seek(s, src, span.slices, rate, step, transient_envelope);
         }
+        // A Transient Envelope below 100 asks for each slice to be faded, whatever the tempo.
+        let unstretched = is_native_rate(rate) && step == 1.0 && transient_envelope >= 100.0;
+        if unstretched {
+            self.hold_course(&span, transient_envelope);
+            let last = span.src_start + (frames - 1) as f64;
+            self.next = span.slices.partition_point(|b| *b <= last);
+        } else {
+            self.back_to_slices(s, span.slices);
+        }
         let fade_in = self.crossfade;
         for i in 0..frames {
             let p = span.src_start + rate * i as f64;
-            while let Some(&b) = span.slices.get(self.next) {
+            while let Some(&b) = span.slices.get(self.next).filter(|_| !unstretched) {
                 if p < b {
                     break;
                 }
@@ -372,7 +418,7 @@ impl Stretcher for Beats {
             let (mut out_l, mut out_r) = (0.0, 0.0);
             for g in 0..GRAINS {
                 if self.grains[g].state != State::Free {
-                    let (a, b) = self.sound_grain(g, s, mode, band);
+                    let (a, b) = self.sound_grain(g, s, mode, band, unstretched);
                     out_l += a;
                     out_r += b;
                 }

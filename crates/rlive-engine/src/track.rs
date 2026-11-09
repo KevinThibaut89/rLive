@@ -1064,6 +1064,8 @@ pub struct TrackNode {
     pub(crate) replacing: bool,
     /// The track is resampling: its own output stays out of what it records.
     pub(crate) silenced: bool,
+    /// Frozen: what plays is already rendered, so the chain doesn't run.
+    frozen: bool,
 }
 
 impl TrackNode {
@@ -1128,6 +1130,7 @@ impl TrackNode {
             lane_muted: false,
             replacing: false,
             silenced: false,
+            frozen: false,
         }
     }
 
@@ -1160,6 +1163,17 @@ impl TrackNode {
     pub fn with_shared(mut self, shared: Arc<TrackShared>) -> Self {
         self.shared = shared;
         self
+    }
+
+    /// Take the devices out of the signal path or put them back. A chain that was running hears
+    /// nothing more of what it had: it comes back silent.
+    pub fn set_frozen(&mut self, frozen: bool) {
+        if frozen && !self.frozen {
+            for d in self.devices.iter_mut() {
+                d.reset();
+            }
+        }
+        self.frozen = frozen;
     }
 
     /// Set a clip on the UI thread before the track is sent to the engine.
@@ -1505,29 +1519,33 @@ impl TrackNode {
         if let Some(bus) = self.taps.pre {
             buses[bus as usize].write(from, &self.left[from..to], &self.right[from..to]);
         }
-        let held = run_chain(
-            &mut self.devices,
-            ChainRun {
-                left: &mut self.left[from..to],
-                right: &mut self.right[from..to],
-                events: segment,
-                midi: &mut self.midi,
-                at: &mut Stretch {
-                    transport: &transport,
-                    param_out: &mut self.param_out,
-                    bus: &mut self.bus,
-                    on_param: &mut |dev, p, v| on_param(id, dev, p, v),
-                    block: ctx,
-                    coeff: self.smooth,
-                    rack_outs: self.rack_outs.as_deref_mut(),
-                    from: from as u32,
-                    to: to as u32,
-                    buses: &mut *buses,
-                    direct: &self.direct,
-                    merge: &mut self.merge,
+        let held = if self.frozen {
+            None
+        } else {
+            run_chain(
+                &mut self.devices,
+                ChainRun {
+                    left: &mut self.left[from..to],
+                    right: &mut self.right[from..to],
+                    events: segment,
+                    midi: &mut self.midi,
+                    at: &mut Stretch {
+                        transport: &transport,
+                        param_out: &mut self.param_out,
+                        bus: &mut self.bus,
+                        on_param: &mut |dev, p, v| on_param(id, dev, p, v),
+                        block: ctx,
+                        coeff: self.smooth,
+                        rack_outs: self.rack_outs.as_deref_mut(),
+                        from: from as u32,
+                        to: to as u32,
+                        buses: &mut *buses,
+                        direct: &self.direct,
+                        merge: &mut self.merge,
+                    },
                 },
-            },
-        );
+            )
+        };
         if let Some(bus) = self.taps.post_fx {
             buses[bus as usize].write(from, &self.left[from..to], &self.right[from..to]);
         }

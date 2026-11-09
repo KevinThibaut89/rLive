@@ -50,7 +50,7 @@ pub(crate) struct AudioCursor {
     /// The stretch voice this cursor plays through.
     voice: usize,
     /// The voice doesn't know where the next render starts.
-    needs_seek: bool,
+    pub(crate) needs_seek: bool,
     /// The voice has rendered for this cursor, so it may be holding sound worth fading out.
     in_progress: bool,
     /// Where the gain envelope has got to, smoothed so a step in it doesn't click. `None` until

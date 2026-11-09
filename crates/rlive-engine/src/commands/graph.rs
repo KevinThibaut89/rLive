@@ -162,6 +162,12 @@ pub enum GraphOp {
         track: TrackId,
         line: Box<StereoLine>,
     },
+    /// Take a track's devices out of its signal path, or put them back. Nothing is built or
+    /// freed: a frozen track simply doesn't run its chain.
+    SetFrozen {
+        track: TrackId,
+        frozen: bool,
+    },
     /// Replace the tap buses, in order, keeping what the old ones held.
     SetBuses(Box<Vec<crate::taps::TapBus>>),
     /// Replace the whole session (project load / sample-rate change).
@@ -625,6 +631,11 @@ impl Engine {
             C::SetClickLine(line) => {
                 let spare = offer_line(&mut self.click.line, Some(line));
                 self.retire_line(spare);
+            }
+            C::SetFrozen { track, frozen } => {
+                if let Some(t) = self.track_mut(track) {
+                    t.set_frozen(frozen);
+                }
             }
             C::SetOwnLine { track, line } => {
                 let spare = match self.track_mut(track) {

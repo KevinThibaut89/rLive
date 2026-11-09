@@ -3,7 +3,7 @@
 use super::Session;
 use rlive_core::{ArrClipId, TrackId};
 use rlive_engine::{ClipCmd, EngineCommand, LaunchCmd, TransportCmd};
-use rlive_project::ArrangementClip;
+use rlive_project::{ArrangementClip, Clip, Track, TrackKind};
 use std::collections::HashSet;
 
 /// One clip's destination when moving or copying on the timeline.
@@ -20,6 +20,22 @@ pub struct ArrMove {
 pub enum TrimEdge {
     Left(u64),
     Right(u64),
+}
+
+/// A clip landing on `track`, which only frozen tracks play frozen. A frozen clip dragged to an
+/// audio track becomes audio (manual p. 986), MIDI clips included.
+pub(super) fn leaving_frozen_track(clip: Clip, track: &Track) -> Clip {
+    if track.is_frozen() || clip.frozen.is_none() {
+        return clip;
+    }
+    if track.kind == TrackKind::Audio {
+        return super::freeze::flatten_clip(&clip).unwrap_or(clip);
+    }
+    Clip {
+        frozen: None,
+        frozen_tail: false,
+        ..clip
+    }
 }
 
 impl Session {
@@ -99,6 +115,7 @@ impl Session {
             touched.insert(m.track);
             touched.insert(m.to_track);
             if let Some(t) = self.project.track_mut(m.to_track) {
+                c.clip = leaving_frozen_track(c.clip, t);
                 t.place_clip(c);
             }
         }
@@ -175,11 +192,13 @@ impl Session {
                 continue;
             };
             let id = ArrClipId::new();
-            t.place_clip(ArrangementClip {
+            let mut copy = ArrangementClip {
                 id,
                 start: c.start + at,
                 ..c.clone()
-            });
+            };
+            copy.clip = leaving_frozen_track(copy.clip, t);
+            t.place_clip(copy);
             placed.push((*track, id));
             touched.insert(*track);
         }
@@ -194,7 +213,9 @@ impl Session {
         let Some(clips) = self.project.track(track).map(|t| t.arrangement.clone()) else {
             return;
         };
+        let frozen = self.is_frozen(track);
         let (mut b, _) = self.builder();
+        b.frozen = frozen;
         let lane = b.lane(&clips);
         self.send(EngineCommand::Clip(ClipCmd::SetLane { track, lane }));
         self.sync_clip_routes(track);

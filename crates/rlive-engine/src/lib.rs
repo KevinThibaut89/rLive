@@ -31,8 +31,8 @@ use capture::{CaptureBlock, CaptureMode, InputSource};
 use clip::BlockTime;
 pub use clip::{
     velocity_gain, AudioClip, ClipCurve, ClipData, ClipEnvelopes, EnvCurve, EnvTiming,
-    EnvelopedClip, ExprPoint, MidiClip, Note, NoteExpression, ProgramChange, SlotLaunch,
-    WarpedClip,
+    EnvelopedClip, ExprPoint, FrozenClip, MidiClip, Note, NoteExpression, ProgramChange,
+    SlotLaunch, WarpedClip,
 };
 pub use commands::{
     ClipCmd, GraphOp, GraphTxn, LaunchCmd, ParamCmd, PreviewCmd, RecordCmd, SceneInfo,

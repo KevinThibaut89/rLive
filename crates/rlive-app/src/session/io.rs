@@ -670,7 +670,9 @@ fn collect_taps(
 /// Whether a track's Arm button is shown: not on tracks with no input.
 pub fn can_arm(project: &Project, id: TrackId) -> bool {
     project.track(id).is_some_and(|t| {
-        matches!(t.kind, TrackKind::Audio | TrackKind::Midi) && t.routing.input != Route::None
+        matches!(t.kind, TrackKind::Audio | TrackKind::Midi)
+            && t.routing.input != Route::None
+            && !t.is_frozen()
     })
 }
 

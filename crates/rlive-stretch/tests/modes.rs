@@ -1,7 +1,7 @@
 //! Tones, Texture, Complex and Complex Pro against the rules every warp mode has to keep.
 
 use realfft::RealFftPlanner;
-use rlive_core::warp::{StretchSpan, Stretcher, WarpMode};
+use rlive_core::warp::{BeatsLoop, StretchSpan, Stretcher, WarpMode};
 use rlive_core::SampleBuffer;
 use rlive_stretch::{stretcher, PhaseVocoder, Texture, Tones};
 use rlive_testkit::{assert_no_alloc, max_step, rms, tone_amplitude};
@@ -282,6 +282,148 @@ fn at_the_clips_own_speed_a_mode_plays_the_source_to_the_sample() {
             .map(|(a, b)| (a - b).abs())
             .fold(0.0, f32::max);
         assert!(worst < 2e-3, "{name}: off by {worst}");
+    }
+}
+
+/// Noise that is different at every frame, so anything out of place shows.
+fn noise(frames: usize) -> SampleBuffer {
+    let mut x = 0x2545_F491_4F6C_DD1Du64;
+    let left: Vec<f32> = (0..frames)
+        .map(|_| {
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            (x >> 40) as f32 / (1u64 << 24) as f32 * 1.6 - 0.8
+        })
+        .collect();
+    let right = left.iter().rev().copied().collect();
+    SampleBuffer {
+        name: "n".into(),
+        left,
+        right,
+        sample_rate: SR,
+    }
+}
+
+/// The modes the Audio Fact Sheet calls neutral at the clip's own tempo (manual p. 990).
+fn neutral_modes() -> Vec<(&'static str, WarpMode)> {
+    let beats = |beats_loop| WarpMode::Beats {
+        preserve: Default::default(),
+        beats_loop,
+        transient_envelope: 100.0,
+    };
+    vec![
+        ("Beats, no loop", beats(BeatsLoop::Off)),
+        ("Beats, forward", beats(BeatsLoop::Forward)),
+        ("Beats, back and forth", beats(BeatsLoop::BackAndForth)),
+        ("Tones", tones_mode()),
+        ("Texture", texture_mode()),
+        (
+            "Texture, fluctuating",
+            WarpMode::Texture {
+                grain_size: 30.0,
+                flux: 80.0,
+            },
+        ),
+        ("Re-Pitch", WarpMode::RePitch),
+    ]
+}
+
+#[test]
+fn unstretched_the_neutral_modes_give_back_the_source_sample_for_sample() {
+    let s = noise(96_000);
+    let slices: Vec<f64> = (1..8).map(|i| (i * 12_000) as f64 + 0.25).collect();
+    for (name, mode) in neutral_modes() {
+        for block in [64, 512, 333] {
+            let mut st = stretcher(mode.kind());
+            st.prepare(SR);
+            let (l, r) = render(&mut *st, &s, mode, 1.0, 0.0, 90_000, block, &slices);
+            // Past the crossfade every mode starts a clip with, it's the file.
+            let settled = 48 + block;
+            for at in settled..90_000 {
+                assert!(
+                    l[at] == s.left[at] && r[at] == s.right[at],
+                    "{name}, block {block}: frame {at} is {} and should be {}",
+                    l[at],
+                    s.left[at]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_transposed_or_resampled_clip_is_not_read_as_unstretched() {
+    let s = sine(440.0, 96_000, 0.5);
+    for (name, mode) in neutral_modes()
+        .into_iter()
+        .filter(|(n, _)| *n != "Re-Pitch")
+    {
+        let mut st = stretcher(mode.kind());
+        st.prepare(SR);
+        let (l, _) = render(&mut *st, &s, mode, 1.0, 12.0, 24_000, 512, &[]);
+        let hz = peak_hz(&l[4_000..], 880.0);
+        let allowed = if name.starts_with("Texture") {
+            160.0
+        } else {
+            30.0
+        };
+        assert!(cents(hz, 880.0).abs() < allowed, "{name} at {hz} Hz");
+    }
+}
+
+#[test]
+fn a_transient_envelope_still_shapes_an_unstretched_slice() {
+    let s = sine(440.0, 96_000, 0.5);
+    let mode = WarpMode::Beats {
+        preserve: Default::default(),
+        beats_loop: BeatsLoop::Off,
+        transient_envelope: 20.0,
+    };
+    let mut st = stretcher(mode.kind());
+    st.prepare(SR);
+    let slices = [12_000.0, 24_000.0];
+    let (l, _) = render(&mut *st, &s, mode, 1.0, 0.0, 24_000, 512, &slices);
+    assert!(rms(&l[10_000..11_900]) < 0.05, "the slice has been faded");
+}
+
+#[test]
+fn leaving_and_returning_to_native_speed_stays_on_the_timeline() {
+    let s = noise(96_000);
+    for (name, mode) in neutral_modes() {
+        let mut st = stretcher(mode.kind());
+        st.prepare(SR);
+        st.reset();
+        st.seek(0.0);
+        let slices = [8_000.0, 16_000.0, 24_000.0, 32_000.0];
+        let mut pos = 0.0f64;
+        let (mut l, mut r) = (vec![0.0f32; 512], vec![0.0f32; 512]);
+        let mut last = Vec::new();
+        for block in 0..60 {
+            let rate = if (10..20).contains(&block) { 1.2 } else { 1.0 };
+            let end = pos + rate * 512.0;
+            st.render(
+                &s,
+                StretchSpan {
+                    src_start: pos,
+                    src_end: end,
+                    transpose: 0.0,
+                    mode,
+                    slices: &slices,
+                },
+                &mut l,
+                &mut r,
+            );
+            if block > 25 {
+                last.push((pos.round() as usize, l.clone()));
+            }
+            pos = end;
+        }
+        for (from, block) in last {
+            for (i, got) in block.iter().enumerate() {
+                assert_eq!(*got, s.left[from + i], "{name} at frame {}", from + i);
+            }
+        }
     }
 }
 

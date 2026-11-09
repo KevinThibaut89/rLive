@@ -97,6 +97,9 @@ impl Session {
     }
 
     pub fn add_device(&mut self, chain: ChainRef, index: Option<usize>, device: Device) {
+        if self.devices_locked(chain) {
+            return;
+        }
         let mut built = HashMap::new();
         let (mut b, _) = self.builder();
         let slot = b.device(&device, chain.depth(), &mut built);
@@ -249,6 +252,9 @@ impl Session {
     }
 
     pub fn remove_device(&mut self, chain: ChainRef, id: DeviceId) {
+        if self.devices_locked(chain) {
+            return;
+        }
         if let Some(devs) = self.chain_mut(chain) {
             if let Some(i) = devs.iter().position(|d| d.id == id) {
                 let mut d = devs.remove(i);
@@ -290,6 +296,9 @@ impl Session {
     }
 
     pub fn move_device(&mut self, chain: ChainRef, id: DeviceId, to: usize) {
+        if self.devices_locked(chain) {
+            return;
+        }
         let Some(devs) = self.chain_mut(chain) else {
             return;
         };
@@ -319,6 +328,9 @@ impl Session {
     }
 
     pub fn set_bypass(&mut self, chain: ChainRef, id: DeviceId, bypass: bool) {
+        if self.devices_locked(chain) {
+            return;
+        }
         if self.is_macro_mapped(chain, device_param(id, rlive_core::ACTIVATOR)) {
             return;
         }
@@ -362,6 +374,9 @@ impl Session {
     }
 
     pub fn set_param(&mut self, chain: ChainRef, id: DeviceId, param: u32, value: f64) {
+        if self.devices_locked(chain) {
+            return;
+        }
         // A Macro owns this one. Only a clip envelope can still move it (manual p. 505).
         if self.is_macro_mapped(chain, device_param(id, ParamId(param))) {
             return;
@@ -483,6 +498,9 @@ impl Session {
         slot: usize,
         path: PathBuf,
     ) {
+        if self.devices_locked(chain) {
+            return;
+        }
         if matches!(self.samples.status(&path), Some(SampleStatus::Failed(_))) {
             // Asking for a file again is a reason to look at it again.
             self.samples.forget(&path);

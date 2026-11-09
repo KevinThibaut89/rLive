@@ -7,6 +7,7 @@ mod arrange_edit;
 mod arrangement;
 mod automation;
 pub mod automation_edit;
+mod bounce;
 mod build;
 mod capture;
 mod clip_edit;
@@ -15,8 +16,10 @@ mod clip_files;
 #[cfg(test)]
 mod clip_view_tests;
 mod clips;
+mod consolidate;
 mod devices;
 mod export;
+mod freeze;
 mod graph;
 mod info;
 mod io;
@@ -25,6 +28,7 @@ mod launch_log;
 mod rack_edit;
 mod racks;
 mod recording;
+mod render;
 mod routing;
 mod samples;
 mod sampling;
@@ -43,6 +47,8 @@ mod arrange_tests;
 mod automation_edit_tests;
 #[cfg(test)]
 mod automation_tests;
+#[cfg(test)]
+mod bounce_tests;
 #[cfg(test)]
 mod clip_envelope_tests;
 #[cfg(test)]
@@ -69,6 +75,7 @@ pub use arrange_edit::{
 };
 pub use arrangement::{ArrMove, TrimEdge};
 pub use automation_edit::{EnvGroup, EnvParam};
+pub use bounce::{BounceSource, PasteTarget};
 pub use build::{descriptor_for, mix_of, time_maps, Builder, DeviceRuntime, PluginWiring};
 pub use clip_edit::{ClipDefaults, MultiClip, SetMarker};
 pub use clips::ClipRef;
@@ -79,6 +86,7 @@ pub use io::{can_arm, AudioHardware, CrossfaderField, CrossfaderKeys, RouteChoic
 pub use launch::{set_follow_on, signature_is_valid, LaunchDefaults};
 pub use rack_edit::PadDrop;
 pub use racks::{ExtractNotes, MacroDisplay, ZoneKind};
+pub use render::JobStatus;
 pub use rlive_audio_io::SampleCache;
 pub use sampling::SamplingCommand;
 pub use warping::{ShortSampleMode, WarpDefaults, WarpView, LONG_SAMPLE_SECONDS};
@@ -156,8 +164,15 @@ pub struct Session {
     captures: HashMap<TrackId, CaptureBuffer>,
     /// Keys held right now for step recording, by track.
     step_keys: HashMap<TrackId, std::collections::BTreeMap<u8, f32>>,
-    /// Recorded files waiting for the Set to be saved.
-    temp_recordings: Vec<PathBuf>,
+    /// New files in the Temporary Folder waiting for the Set to be saved, and which folder under
+    /// Samples/Processed each belongs in: none means Samples/Recorded.
+    temp_recordings: Vec<(PathBuf, Option<render::Processed>)>,
+    /// The bounce, freeze or consolidate being rendered.
+    render_job: Option<Box<render::RenderJob>>,
+    /// Files no step of the history needs any more, to delete with the next save.
+    discarded_files: Vec<PathBuf>,
+    /// Undo or redo is putting things back, which frozen tracks allow.
+    restoring: bool,
     /// Audio the disk couldn't keep up with, in frames.
     pub dropped_frames: u64,
     /// How much a take's ring holds, in seconds of audio.
@@ -222,6 +237,9 @@ impl Session {
             captures: HashMap::new(),
             step_keys: HashMap::new(),
             temp_recordings: Vec::new(),
+            render_job: None,
+            discarded_files: Vec::new(),
+            restoring: false,
             dropped_frames: 0,
             take_ring_seconds: takes::RING_SECONDS,
             automation: automation::AutomationRecorder::default(),
@@ -284,6 +302,7 @@ impl Session {
                 edge_fade: self
                     .edge_fades
                     .then(|| arrange_edit::edge_fade_ticks(self.project.tempo)),
+                frozen: false,
             },
             &self.project,
         )
@@ -365,6 +384,8 @@ impl Session {
     // ------------------------------------------------------------- files
 
     pub fn new_project(&mut self) {
+        self.render_job = None;
+        self.delete_discarded_files();
         self.project = Project::new_default();
         self.samples.forget_failed();
         self.history = History::new(&self.project);
@@ -376,7 +397,10 @@ impl Session {
 
     pub fn load(&mut self, path: &Path) -> Result<(), String> {
         let p = Project::load(path).map_err(|e| e.to_string())?;
+        self.render_job = None;
+        self.delete_discarded_files();
         self.project = p;
+        self.find_relative_paths(path);
         self.samples.forget_failed();
         self.history = History::new(&self.project);
         self.pending_samples.clear();
@@ -422,11 +446,13 @@ impl Session {
         };
         self.adopt_temp_recordings(&path);
         self.adopt_temp_processed(&path);
+        self.note_relative_paths(&path);
         self.project.save(&path).map_err(|e| e.to_string())?;
         self.path = Some(path);
         self.commit_now();
         self.history.mark_saved();
         self.dirty = false;
+        self.delete_discarded_files();
         Ok(())
     }
 
@@ -583,6 +609,7 @@ impl Session {
                 HostNotification::EditorClosed => {}
             }
         }
+        self.step_render(render::SLICE);
         self.poll_disk();
         self.poll_clip_jobs();
         self.poll_external_edits();

@@ -89,6 +89,7 @@ impl Session {
     }
 
     fn after_restore(&mut self) {
+        self.restoring = false;
         self.record_fingerprints();
         self.history.pending = None;
         self.history.was_busy = false;
@@ -124,6 +125,7 @@ impl Session {
 
     /// Brings the project to `target` by applying only what differs.
     fn restore(&mut self, target: &Snapshot) {
+        self.restoring = true;
         let scenes_changed = self.project.scenes != *target.scenes;
         self.project.scenes = (*target.scenes).clone();
         let keep: HashSet<TrackId> = target.tracks.iter().map(|t| t.shell.id).collect();
@@ -197,7 +199,13 @@ impl Session {
             }
         }
         t.clips = s.clips.iter().map(|c| c.as_deref().cloned()).collect();
-        let lane_changed = t.arrangement.len() != s.lane.len()
+        // Freezing changes what a clip plays without changing the clip.
+        let frozen_changed = t.is_frozen() != s.shell.is_frozen();
+        if frozen_changed {
+            changed.extend(0..slots);
+        }
+        let lane_changed = frozen_changed
+            || t.arrangement.len() != s.lane.len()
             || t.arrangement.iter().zip(&s.lane).any(|(a, b)| *a != **b);
         if lane_changed {
             t.arrangement = s.lane.iter().map(|c| (**c).clone()).collect();
@@ -210,6 +218,10 @@ impl Session {
         t.automation = (*s.automation).clone();
         t.take_lanes = (*s.take_lanes).clone();
         self.push_mix(id, false);
+        if frozen_changed {
+            let frozen = s.shell.is_frozen();
+            self.send_ops(vec![GraphOp::SetFrozen { track: id, frozen }]);
+        }
         self.restore_chain(ChainRef::Track(id), &s.devices);
         if automation_changed {
             self.send_routes(TrackRef::Track(id));

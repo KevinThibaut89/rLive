@@ -61,7 +61,8 @@ fn scene_info(scene: &rlive_project::Scene) -> SceneInfo {
 fn fits(track: &Track, clip: &Clip) -> bool {
     match track.kind {
         TrackKind::Midi => clip.is_midi(),
-        TrackKind::Audio => !clip.is_midi(),
+        // A frozen MIDI clip can go to an audio track as its audio (manual p. 986).
+        TrackKind::Audio => !clip.is_midi() || clip.frozen.is_some(),
         _ => false,
     }
 }
@@ -447,7 +448,7 @@ impl Session {
         }
         for ((.., to_t, to_s), clip) in moves.iter().zip(carried) {
             if let Some(track) = self.project.track_mut(*to_t) {
-                track.clips[*to_s] = Some(clip);
+                track.clips[*to_s] = Some(super::arrangement::leaving_frozen_track(clip, track));
             }
             sync.push((*to_t, *to_s));
         }
@@ -489,7 +490,8 @@ impl Session {
                 continue;
             }
             if let Some(t) = self.project.track_mut(*track) {
-                t.clips[slot] = Some(clip.clip.clone());
+                let landed = super::arrangement::leaving_frozen_track(clip.clip.clone(), t);
+                t.clips[slot] = Some(landed);
             }
             self.send_clip(*track, slot);
             placed.push((*track, slot));
@@ -498,11 +500,6 @@ impl Session {
             self.mark_edit("Paste Clips");
         }
         placed
-    }
-
-    /// Consolidate Time to New Scene needs Consolidate, so for now it only makes the scene.
-    pub fn consolidate_time_to_new_scene(&mut self, below: usize) -> Option<usize> {
-        self.insert_scene(below)
     }
 
     /// Files dropped on a slot: down one track, or with `spread` across tracks from there.

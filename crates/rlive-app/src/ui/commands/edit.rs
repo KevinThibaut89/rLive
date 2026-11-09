@@ -32,6 +32,13 @@ pub const MENU: &[Entry] = &[
     Item("Rename", M::Edit(Edit::Rename)),
     Item("Return to Default", M::Edit(Edit::ReturnToDefault)),
     Separator,
+    super::bounce::EDIT_ITEMS[0],
+    super::bounce::EDIT_ITEMS[1],
+    super::bounce::EDIT_ITEMS[2],
+    super::bounce::EDIT_ITEMS[3],
+    super::bounce::EDIT_ITEMS[4],
+    super::bounce::EDIT_ITEMS[5],
+    Separator,
     Item("Select All", M::Edit(Edit::SelectAll)),
     Separator,
     Item("Record Quantize: None", M::Edit(Edit::RecordQuantizeOff)),
@@ -270,6 +277,9 @@ impl RliveApp {
     }
 
     pub(super) fn edit_dispatch(&mut self, ctx: &egui::Context, c: Edit) {
+        if c == Edit::Copy {
+            self.ui.bounce_copy = super::bounce::source_of(&self.session, &self.ui);
+        }
         if let Some(q) = RECORD_QUANTIZE
             .iter()
             .find(|(cmd, _)| *cmd == c)

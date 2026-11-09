@@ -273,6 +273,22 @@ pub struct Fades {
     pub out_tail: u64,
 }
 
+/// The audio a frozen clip plays instead of its content (manual pp. 985-987).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FrozenAudio {
+    pub file: FileRef,
+    /// Clip-local ticks against seconds in the file. A steady tempo needs only two.
+    pub markers: Vec<WarpMarker>,
+    /// How far the rendered audio reaches, in clip-local ticks.
+    pub length: u64,
+    /// Session clips loop, over two cycles of the clip's own loop.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub looped: bool,
+    /// Where that loop starts: after whatever the start marker played before reaching it.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub loop_start: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Clip {
     pub name: String,
@@ -307,6 +323,13 @@ pub struct Clip {
     pub envelopes: Vec<ClipEnvelope>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub fades: Fades,
+    /// On a frozen track: what plays in place of this clip's content.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub frozen: Option<Box<FrozenAudio>>,
+    /// A frozen tail: the sound past the end of a clip, shown as a clip of its own until the
+    /// track is unfrozen.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub frozen_tail: bool,
     /// The user's info text.
     #[serde(default, skip_serializing_if = "is_default")]
     pub info: String,
@@ -331,6 +354,8 @@ impl Default for Clip {
             launch: LaunchSettings::default(),
             envelopes: Vec::new(),
             fades: Fades::default(),
+            frozen: None,
+            frozen_tail: false,
             info: String::new(),
         }
     }

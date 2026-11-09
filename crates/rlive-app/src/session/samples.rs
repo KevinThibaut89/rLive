@@ -122,11 +122,11 @@ impl Session {
         let mut lanes = Vec::new();
         for t in self.project.tracks.iter().chain(&self.project.returns) {
             for (slot, clip) in t.clips.iter().enumerate() {
-                if clip.as_ref().is_some_and(|c| uses(&c.content, path)) {
+                if clip.as_ref().is_some_and(|c| clip_uses(c, path)) {
                     slots.push((t.id, slot));
                 }
             }
-            if t.arrangement.iter().any(|c| uses(&c.clip.content, path)) {
+            if t.arrangement.iter().any(|c| clip_uses(&c.clip, path)) {
                 lanes.push(t.id);
             }
         }
@@ -207,8 +207,10 @@ impl Session {
 
     /// Whether the clip in this slot exists but its audio can't be played yet.
     pub fn clip_waiting_for_sample(&self, track: TrackId, slot: usize) -> bool {
-        self.clip(track, slot)
-            .is_some_and(|c| self.content_waiting_for_sample(&c.content))
+        self.clip(track, slot).is_some_and(|c| match &c.frozen {
+            Some(f) if self.is_frozen(track) => !self.samples.is_ready(&f.file.path),
+            _ => self.content_waiting_for_sample(&c.content),
+        })
     }
 
     /// Whether this content needs a sample that hasn't finished loading or failed to.
@@ -238,6 +240,11 @@ fn fill_file_ref(file: &mut FileRef, fp: &Fingerprint) {
 
 fn uses(content: &ClipContent, path: &Path) -> bool {
     matches!(content, ClipContent::Audio { file, .. } if file.path == path)
+}
+
+/// Whether a clip's content or frozen audio is this file.
+fn clip_uses(clip: &rlive_project::Clip, path: &Path) -> bool {
+    uses(&clip.content, path) || clip.frozen.as_ref().is_some_and(|f| f.file.path == path)
 }
 
 fn sample_slots(device: &Device, path: &Path) -> Vec<u32> {
@@ -285,5 +292,36 @@ fn devices_using(devices: &[Device], path: &Path, out: &mut Vec<DeviceId>) {
         for chain in d.chains() {
             devices_using(&chain.devices, path, out);
         }
+    }
+}
+
+impl Session {
+    /// Writes down where each file is relative to the Set, for when the folder moves.
+    pub(super) fn note_relative_paths(&mut self, project_file: &Path) {
+        let Some(dir) = project_file.parent() else {
+            return;
+        };
+        self.project
+            .for_each_file_ref_mut(&mut |file: &mut FileRef| {
+                file.relative = file.path.strip_prefix(dir).ok().map(Path::to_path_buf);
+            });
+    }
+
+    /// A Set that has moved finds its files through where they were relative to it.
+    pub(super) fn find_relative_paths(&mut self, project_file: &Path) {
+        let Some(dir) = project_file.parent() else {
+            return;
+        };
+        self.project
+            .for_each_file_ref_mut(&mut |file: &mut FileRef| {
+                if file.path.exists() {
+                    return;
+                }
+                if let Some(found) = file.relative.as_ref().map(|r| dir.join(r)) {
+                    if found.exists() {
+                        file.path = found;
+                    }
+                }
+            });
     }
 }

@@ -240,6 +240,9 @@ impl Project {
                 if let ClipContent::Audio { file, .. } = &c.content {
                     f(file);
                 }
+                if let Some(frozen) = &c.frozen {
+                    f(&frozen.file);
+                }
             }
             for c in t
                 .arrangement
@@ -248,6 +251,9 @@ impl Project {
             {
                 if let ClipContent::Audio { file, .. } = &c.clip.content {
                     f(file);
+                }
+                if let Some(frozen) = &c.clip.frozen {
+                    f(&frozen.file);
                 }
             }
             for d in &t.devices {
@@ -274,6 +280,9 @@ impl Project {
                 if let ClipContent::Audio { file, .. } = &mut c.content {
                     f(file);
                 }
+                if let Some(frozen) = &mut c.frozen {
+                    f(&mut frozen.file);
+                }
             }
             for c in t
                 .arrangement
@@ -282,6 +291,9 @@ impl Project {
             {
                 if let ClipContent::Audio { file, .. } = &mut c.clip.content {
                     f(file);
+                }
+                if let Some(frozen) = &mut c.clip.frozen {
+                    f(&mut frozen.file);
                 }
             }
             for d in &mut t.devices {

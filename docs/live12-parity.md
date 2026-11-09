@@ -228,7 +228,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[x]` Grid: adaptive or fixed, narrow, widen, triplets, snap toggle, modifier bypass, spacing display [M]
 - `[x]` Cut/Paste/Duplicate/Delete Time, Insert Silence, moves signatures too [M]
 - `[x]` Split at point or selection [M]
-- `[ ]` Consolidate across tracks: renders pre-effects, includes warp, attenuation, clip envelopes; stored Processed/Consolidate [L] → offline clip renderer
+- `[x]` Consolidate across tracks: renders pre-effects, includes warp, attenuation, clip envelopes; stored Processed/Consolidate [L] → offline clip renderer
 - `[ ]` Linked tracks: multiple exclusive groups, hover highlight, click selects, add/unlink, group shortcut [L]
 - `[ ]` Linked operations: move, resize, select, time commands, split, consolidate, fades, arm, take lanes [L] → comping (ch. 21)
 - `[ ]` Mixer in Arrangement plus Arrangement track controls, shared values, customizable sets; some mixer-only [M]
@@ -262,7 +262,7 @@ Overview chapter; only behaviours stated here or foundational are listed.
 - `[x]` Arrangement Record logs launches, clip property edits, automation, tempo/meter; no new audio [L]
 - `[x]` Stop All Clips [S]
 - `[~]` Drag or paste clips between views; Arrangement to Session lays out top to bottom [M]
-- `[ ]` Consolidate Time to New Scene [M] → Consolidate
+- `[x]` Consolidate Time to New Scene [M] → Consolidate
 
 
 ## 8. Clip View (pp. 200-233)
@@ -665,13 +665,13 @@ Overview chapter; only behaviours stated here or foundational are listed.
 
 **Milestones:** A12
 
-- `[ ]` Bounce Track in Place replaces the track in both views; supersedes Freeze and Flatten. L. Depends on offline render.
-- `[ ]` Bounce to New Track for clips or time selection; mutes source; one new track per source; Ctrl/Cmd+B. M
-- `[ ]` Track bounces are post-FX and pre-mixer; mixer settings are copied. M
-- `[ ]` Session versus Arrangement results differ. S
-- `[ ]` Naming suffix (Bounce), colour inherited, files in Samples/Processed/Bounce. S
-- `[ ]` Bounce Group in Place and to New Track are post-mixer, include internal sends, exclude Main processing. Tracks routed out may produce silence. L
-- `[ ]` Paste Bounced Audio renders source at paste time; converts an empty MIDI track to audio; can target take lanes. M
+- `[x]` Bounce Track in Place replaces the track in both views; supersedes Freeze and Flatten. L. Depends on offline render.
+- `[x]` Bounce to New Track for clips or time selection; mutes source; one new track per source; Ctrl/Cmd+B. M
+- `[x]` Track bounces are post-FX and pre-mixer; mixer settings are copied. M
+- `[x]` Session versus Arrangement results differ. S
+- `[x]` Naming suffix (Bounce), colour inherited, files in Samples/Processed/Bounce. S
+- `[x]` Bounce Group in Place and to New Track are post-mixer, include internal sends, exclude Main processing. Tracks routed out may produce silence. L
+- `[~]` Paste Bounced Audio renders source at paste time; converts an empty MIDI track to audio; can target take lanes. M
 
 
 ## 21. Comping (431-436)
@@ -1214,7 +1214,7 @@ Dependencies: audio clock, launch quantisation; Link and Follower drive tempo.
 - `[ ]` Disable unused I/O channels to save load [S]
 - `[ ]` Idle devices sleep, tail-aware [M]
 - `[ ]` Per-track Performance Impact 6-segment meter [M]
-- `[ ]` Freeze/Unfreeze clips to samples, frozen tails, edit limits while frozen, real-time freeze for external gear, Processed/Freeze folder, frozen-to-new-track drag [L]
+- `[~]` Freeze/Unfreeze clips to samples, frozen tails, edit limits while frozen, real-time freeze for external gear, Processed/Freeze folder, frozen-to-new-track drag [L]
 - `[ ]` RAM Mode; Bounce in Place including groups [M]
 - `[ ]` Overload indicator for Disk/CPU [S]
 
@@ -1228,19 +1228,19 @@ No Ableton hardware, runtime or service is required. This chapter is an acceptan
 
 **Neutral requirements:**
 - `[ ]` Undithered render at matching rate and bit depth or higher [S]
-- `[ ]` Unstretched playback, including Beats, Tones, Texture, Re-Pitch at native tempo, and tempo round-trip [M]
+- `[x]` Unstretched playback, including Beats, Tones, Texture, Re-Pitch at native tempo, and tempo round-trip [M]
 - `[ ]` 64-bit summing at single mix points with 32-bit processing [M]
 - `[ ]` Neutral recording when bit depth is at least the converter, or 32-bit internal [S]
 - `[x]` Bypass removes devices but keeps lookahead delay [S]
 - `[ ]` Routing and clip split are neutral [S]
-- `[ ]` Frozen files are 32-bit; Session freeze is two loop cycles and snapshots parameters; random values get baked [M]
+- `[~]` Frozen files are 32-bit; Session freeze is two loop cycles and snapshots parameters; random values get baked [M]
 
 **Non-neutral by design:**
 - `[ ]` Complex modes always [L] {PM}
 - `[ ]` Sample-rate conversion and transposition; export uses SoX Resampler (LGPL 2.1), available to rLive [S]
 - `[ ]` Per-sample volume automation [S]
 - `[ ]` Dither, once only [S]
-- `[ ]` Consolidate normalises and matches project format [S]
+- `[x]` Consolidate normalises and matches project format [S]
 - `[ ]` Clip fades up to 4 ms [S]
 - `[ ]` Constant-power sinusoidal panning, +3 dB hard panned [S]
 - `[ ]` Grooves [M]
@@ -1328,7 +1328,6 @@ Requirement: Cmd+Shift+F, Cmd+Shift+E, Cmd+I, Cmd+E and Z/X all change meaning b
 Shortcuts declared in the keymap that do nothing yet, by milestone. This list is generated from `crates/rlive-app/src/ui/keymap/bindings.rs`.
 
 <!-- pending-shortcuts:begin -->
-- `[ ]` **A12:** Bounce to new track; Consolidate selection; Freeze or unfreeze tracks; Paste bounced audio
 - `[ ]` **A14:** Focus Groove Pool; Hide/show Groove Pool
 - `[ ]` **A17:** Hide/show plug-in windows; Keep several plug-in windows open
 - `[ ]` **A19:** Next similar sample; Previous similar sample; Return to reference; Save as similarity reference; Show similar-sample swap controls; Similarity search

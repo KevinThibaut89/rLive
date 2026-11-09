@@ -182,7 +182,12 @@ impl Timing {
         let mut timing = Timing::default();
         for t in &all {
             let chain = ChainAddr::track(t.id);
-            let own = walk(&t.devices, chain, 0, source, &mut timing);
+            // A frozen track doesn't run its devices, so they cost it nothing.
+            let own = if t.is_frozen() {
+                0
+            } else {
+                walk(&t.devices, chain, 0, source, &mut timing)
+            };
             let outs = timing.settle_leaving(t);
             timing.rack_outs.push(if on { outs } else { Vec::new() });
             let instruments = &mut timing.instruments;

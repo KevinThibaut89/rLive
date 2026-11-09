@@ -76,13 +76,11 @@ impl Session {
 
     /// Sends a slot's clip to the engine as the project has it, without recording an edit.
     pub(super) fn send_clip(&mut self, track: TrackId, slot: usize) {
-        let clip = self
-            .project
-            .track(track)
-            .and_then(|t| t.clips.get(slot))
-            .cloned()
-            .flatten();
+        let source = self.project.track(track);
+        let frozen = source.is_some_and(rlive_project::Track::is_frozen);
+        let clip = source.and_then(|t| t.clips.get(slot)).cloned().flatten();
         let (mut b, _) = self.builder();
+        b.frozen = frozen;
         let data = clip.and_then(|c| b.clip(&c));
         self.send(EngineCommand::Clip(ClipCmd::SetClip {
             track,

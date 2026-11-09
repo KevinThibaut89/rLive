@@ -7,23 +7,26 @@ use rlive_core::envelope::segment_value;
 use rlive_core::param::{chain as chain_controls, rack as rack_params, ClipParam, EnvTarget};
 use rlive_core::time::{BarMap, TempoMap, TempoPoint, TimeMaps};
 use rlive_core::warp::{self, WarpMap};
-use rlive_core::{ChainId, DeviceId, ParamInfo, Ports, Processor, ScaleInfo, Section, ViewChannel};
+use rlive_core::{
+    ChainId, ClipRegion, DeviceId, ParamInfo, Ports, Processor, ScaleInfo, Section, ViewChannel,
+};
 use rlive_devices::devices::b1::common::SCALES;
 use rlive_devices::{DeviceInit, DeviceRole};
 use rlive_engine::shared::{ChainShared, TrackShared};
 use rlive_engine::{
     mix_cell, ArrangementLane, AudioClip, BusLayout, ChainNode, ClipCurve, ClipData, ClipEnvelopes,
-    DeviceSlot, EnvCurve, EnvTiming, EnvelopedClip, ExprPoint, LaneClip, LaneFades, MidiClip,
-    MixSettings, Note, NoteExpression, NullProcessor, ProgramChange, RackKind as EngineRackKind,
-    RackNode, TrackNode, WarpedClip, MAX_RACK_DEPTH, MAX_SENDS,
+    DeviceSlot, EnvCurve, EnvTiming, EnvelopedClip, ExprPoint, FrozenClip, LaneClip, LaneFades,
+    MidiClip, MixSettings, Note, NoteExpression, NullProcessor, ProgramChange,
+    RackKind as EngineRackKind, RackNode, TrackNode, WarpedClip, MAX_RACK_DEPTH, MAX_SENDS,
 };
 use rlive_plugin_host::scanner::PluginCache;
 use rlive_plugin_host::{PluginDescriptor, PluginHandle};
 use rlive_project::arrangement_edit::effective_fades;
 use rlive_project::{
     clip_envelope, ArrangementClip, BeatsPreserve, Breakpoint, Chain, Clip, ClipContent,
-    ClipEnvelope, ClipScale, Device, DeviceKind, DrumPad as ProjectPad, Project, RackKind, Track,
-    TrackKind, Warp, WarpMode as ProjectWarpMode, Zone as ProjectZone, Zones as ProjectZones,
+    ClipEnvelope, ClipScale, Device, DeviceKind, DrumPad as ProjectPad, FrozenAudio, Project,
+    RackKind, Track, TrackKind, Warp, WarpMode as ProjectWarpMode, Zone as ProjectZone,
+    Zones as ProjectZones,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicU32;
@@ -267,6 +270,8 @@ pub struct Builder<'a> {
     pub chain_shared: Option<&'a mut HashMap<ChainId, Arc<ChainShared>>>,
     /// Create Fades on Clip Edges: the default fade length, in ticks.
     pub edge_fade: Option<u64>,
+    /// The clips being built belong to a frozen track, and play their frozen audio.
+    pub frozen: bool,
 }
 
 /// Which plug-ins have something routed to or tapped from their extra buses.
@@ -556,6 +561,9 @@ impl Builder<'_> {
 
     /// `session` says it's a Session clip, the only kind with edge fades (manual p. 218).
     fn compile(&mut self, clip: &Clip, session: bool) -> Option<Arc<ClipData>> {
+        if let Some(frozen) = clip.frozen.as_deref().filter(|_| self.frozen) {
+            return self.frozen_clip(frozen);
+        }
         let region = clip.region();
         let mut hi_q_needed = false;
         let mut edge_fade_on = false;
@@ -643,10 +651,57 @@ impl Builder<'_> {
         ))
     }
 
+    /// What a frozen clip plays: the rendered audio, Warp on in Beats mode (manual p. 992).
+    fn frozen_clip(&mut self, frozen: &FrozenAudio) -> Option<Arc<ClipData>> {
+        let SampleStatus::Ready(sample) = self.samples.request(&frozen.file.path) else {
+            return None;
+        };
+        let sample_rate = sample.sample_rate;
+        let warp = Warp {
+            enabled: true,
+            mode: ProjectWarpMode::Beats,
+            markers: frozen.markers.clone(),
+            ..Warp::default()
+        };
+        let map = warp_map(&warp, sample_rate);
+        let found = self.samples.transients(&frozen.file.path);
+        let warped = WarpedClip {
+            slices: beats_slices(
+                &warp,
+                map.as_ref(),
+                sample_rate,
+                frozen.length,
+                found.as_ref().map(|f| f.as_slice()),
+            ),
+            audio: AudioClip {
+                sample,
+                length: frozen.length,
+                looped: frozen.looped,
+                gain: 1.0,
+                scale: None,
+            },
+            map,
+            mode: warp_mode(&warp),
+            transpose: 0.0,
+        };
+        let length = frozen.length as f64;
+        let start = frozen.loop_start as f64;
+        let region = ClipRegion::new(0.0, Some(length), start, length - start, frozen.looped);
+        Some(Arc::new(ClipData::Frozen(Box::new(FrozenClip {
+            warped,
+            region,
+        }))))
+    }
+
     /// Compiles a timeline. Clips whose sample isn't there are left out.
     pub fn lane(&mut self, clips: &[ArrangementClip]) -> Arc<ArrangementLane> {
         let mut lane = Vec::with_capacity(clips.len());
-        let fades = effective_fades(clips, self.edge_fade);
+        // A frozen clip's fades are already in its audio.
+        let fades = if self.frozen {
+            vec![Default::default(); clips.len()]
+        } else {
+            effective_fades(clips, self.edge_fade)
+        };
         // A clip takes the second voice while it overlaps the one before it.
         let (mut voice, mut prev_tail) = (0u8, false);
         for (c, f) in clips.iter().zip(fades) {
@@ -668,7 +723,12 @@ impl Builder<'_> {
             lane.push(LaneClip {
                 start: c.start,
                 end: c.end(),
-                offset: c.run_offset(),
+                // A frozen clip's audio is indexed by where it was, not by the clip's markers.
+                offset: if self.frozen && c.clip.frozen.is_some() {
+                    c.offset
+                } else {
+                    c.run_offset()
+                },
                 data,
                 fades: LaneFades {
                     fade_in: f.fade_in,
@@ -700,6 +760,8 @@ impl Builder<'_> {
             node = node.with_feedback(self.max_block);
         }
         node.mix = mix_of(track);
+        node.set_frozen(track.is_frozen());
+        self.frozen = track.is_frozen();
         let mut layout = BusLayout::for_track(&node.mix).with_max_block(self.max_block);
         for (n, ret) in returns.iter().take(MAX_SENDS).enumerate() {
             let db = track.send_level(*ret);
@@ -728,6 +790,7 @@ impl Builder<'_> {
             node.set_launch(i, super::launch::slot_launch(track, i));
         }
         node.set_lane(self.lane(&track.arrangement));
+        self.frozen = false;
         Box::new(node)
     }
 
@@ -1110,6 +1173,7 @@ mod tests {
             wiring: &PluginWiring::default(),
             chain_shared: None,
             edge_fade: None,
+            frozen: false,
         };
         let mut clip = Clip {
             length: 4 * PPQ,

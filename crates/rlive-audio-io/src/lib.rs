@@ -14,7 +14,7 @@ pub mod sample_cache;
 pub mod writer;
 
 pub use analysis::{Analysis, AnalysisExtras};
-pub use decode::{probe, AudioInfo, DecodeError, DecodedAudio, Decoder};
+pub use decode::{decode, probe, AudioInfo, DecodeError, DecodedAudio, Decoder};
 pub use decoding_cache::{CacheConfig, Cleanup, DecodingCache, Stored};
 pub use fingerprint::{fingerprint, Fingerprint};
 pub use peaks::Peaks;

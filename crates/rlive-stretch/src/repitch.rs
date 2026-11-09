@@ -1,7 +1,7 @@
 //! Re-Pitch: the source is read at whatever rate the timeline asks for.
 
-use crate::crossfade_frames;
 use crate::interp::Sinc;
+use crate::{crossfade_frames, is_native_rate, source_frame};
 use rlive_core::warp::{StretchSpan, Stretcher};
 use rlive_core::SampleBuffer;
 
@@ -100,9 +100,16 @@ impl Stretcher for RePitch {
         let band = Sinc::band_for(rate);
         let tail_band = Sinc::band_for(self.tail_rate);
         let crossfade = self.crossfade as f32;
+        // At native speed the source is played as it is (manual p. 990).
+        let native = is_native_rate(rate);
+        let first_frame = span.src_start.round();
         for i in 0..frames {
             let pos = span.src_start + rate * i as f64;
-            let (mut out_l, mut out_r) = self.sinc.read(s, pos, band);
+            let (mut out_l, mut out_r) = if native {
+                source_frame(s, first_frame + i as f64)
+            } else {
+                self.sinc.read(s, pos, band)
+            };
             if self.fade_in_left > 0 {
                 let gain = 1.0 - self.fade_in_left as f32 / crossfade;
                 out_l *= gain;

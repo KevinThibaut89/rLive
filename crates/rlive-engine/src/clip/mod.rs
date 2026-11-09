@@ -7,12 +7,14 @@ mod envelope_tests;
 pub(crate) mod envelopes;
 #[cfg(test)]
 mod following_tests;
+mod frozen;
 mod launcher;
 mod midi;
 
 pub(crate) use audio::{AudioCursor, LANE_CROSSFADE_VOICE, LANE_VOICE};
 pub use data::{
-    AudioClip, ClipData, ExprPoint, MidiClip, Note, NoteExpression, ProgramChange, WarpedClip,
+    AudioClip, ClipData, ExprPoint, FrozenClip, MidiClip, Note, NoteExpression, ProgramChange,
+    WarpedClip,
 };
 pub use envelopes::{ClipCurve, ClipEnvelopes, EnvCurve, EnvTiming, EnvelopedClip};
 pub use launcher::{velocity_gain, SlotLaunch};
@@ -23,6 +25,7 @@ pub(crate) use midi::{chase, Voices};
 
 use audio::{render_audio_env, Quality};
 use envelopes::render_controllers;
+use frozen::render_frozen;
 use midi::render_midi;
 use rlive_core::time::TempoRun;
 use rlive_core::warp::StretchBank;
@@ -132,6 +135,9 @@ pub(crate) fn render_range(
             l,
             r,
             stretch,
+        ),
+        ClipData::Frozen(clip) => render_frozen(
+            clip, region, quality, origin, a, seg_end, time, audio, l, r, stretch,
         ),
         ClipData::Enveloped(_) => {}
     }

@@ -135,11 +135,22 @@ pub struct WarpedClip {
     pub slices: Arc<[f64]>,
 }
 
+/// A clip on a frozen track: the rendered audio in place of what the clip holds. At the tempo it
+/// was frozen at it is read straight off the file, one sample per frame, so playing it back is
+/// neutral (manual p. 992); at any other tempo it goes through its warp mode.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrozenClip {
+    pub warped: WarpedClip,
+    /// How the file plays: from its start, looping over whatever part of it is the loop.
+    pub region: ClipRegion,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClipData {
     Midi(MidiClip),
     Audio(AudioClip),
     Warped(WarpedClip),
+    Frozen(Box<FrozenClip>),
     /// Any of the above, with envelopes on its own content or anything else that sets it apart
     /// from plain playback: markers away from their defaults, an edge fade, Hi-Q.
     Enveloped(Box<EnvelopedClip>),
@@ -167,6 +178,7 @@ impl ClipData {
             ClipData::Midi(c) => c.length,
             ClipData::Audio(c) => c.length,
             ClipData::Warped(c) => c.audio.length,
+            ClipData::Frozen(c) => c.warped.audio.length,
             ClipData::Enveloped(_) => 0,
         }
     }
@@ -177,6 +189,7 @@ impl ClipData {
             ClipData::Enveloped(c) => c
                 .region
                 .unwrap_or_else(|| ClipRegion::whole(c.clip.length() as f64, c.clip.looped())),
+            ClipData::Frozen(c) => c.region,
             _ => ClipRegion::whole(self.length() as f64, self.looped()),
         }
     }
@@ -188,7 +201,7 @@ impl ClipData {
 
     /// Whether this clip resamples with Hi-Q interpolation.
     pub fn hi_q(&self) -> bool {
-        matches!(self, ClipData::Enveloped(c) if c.hi_q)
+        matches!(self, ClipData::Enveloped(c) if c.hi_q) || matches!(self, ClipData::Frozen(_))
     }
 
     /// The scale devices should follow while this clip plays.
@@ -197,7 +210,7 @@ impl ClipData {
             ClipData::Midi(c) => c.scale,
             ClipData::Audio(c) => c.scale,
             ClipData::Warped(c) => c.audio.scale,
-            ClipData::Enveloped(_) => None,
+            ClipData::Frozen(_) | ClipData::Enveloped(_) => None,
         }
     }
 
@@ -206,6 +219,7 @@ impl ClipData {
             ClipData::Midi(c) => c.looped,
             ClipData::Audio(c) => c.looped,
             ClipData::Warped(c) => c.audio.looped,
+            ClipData::Frozen(c) => c.warped.audio.looped,
             ClipData::Enveloped(_) => false,
         }
     }

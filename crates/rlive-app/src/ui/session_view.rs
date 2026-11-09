@@ -820,6 +820,9 @@ fn track_column(
             &resp,
             session.info_text(InfoTarget::Track(id)).unwrap_or_default(),
         );
+        if session.is_frozen(id) {
+            super::commands::bounce::frozen_badge(cu.painter(), rect.right_top());
+        }
         resp.context_menu(|ui| track_menu(ui, session, state, id, &name));
     }
 
@@ -884,6 +887,9 @@ fn track_column(
                     },
                 );
                 p.rect_filled(launch, 1.0, theme::darken(fill, 0.25));
+                if session.clip(id, slot).is_some_and(|c| c.frozen.is_some()) {
+                    super::commands::bounce::frozen_glaze(&p, rect);
+                }
                 let tri = if waiting_for_sample {
                     pal().text_faint
                 } else if is_playing || (is_queued && blink) {
@@ -1227,6 +1233,11 @@ fn group_slot(
             state.selected_clip = None;
             state.group_slot = Some((id, slot));
         }
+    }
+    if filled {
+        resp.context_menu(|ui| {
+            super::commands::bounce::group_slot_menu_items(ui, session, state, id, slot);
+        });
     }
     let text = if filled {
         "Group slot — ▶ launches its clips, ■ stops them, click selects them"
@@ -2135,6 +2146,7 @@ pub(super) fn track_menu(
     } else {
         vec![id]
     };
+    super::commands::bounce::track_menu_items(ui, session, state, id);
     if ui.button("Group Tracks   ⌘G").clicked() {
         if let Some(g) = session.group_tracks(&selection) {
             state.selected = Some(ChainRef::Track(g));
@@ -2265,6 +2277,7 @@ fn clip_menu(
         duplicate_clip(session, id, slot);
         ui.close();
     }
+    super::commands::bounce::slot_menu_items(ui, session, state, id, slot);
     if ui.button("Create Follow Action Chain").clicked() {
         let mut slots = selected_slots(session, state);
         if !slots.contains(&(id, slot)) {
@@ -2283,7 +2296,11 @@ fn clip_menu(
         ui.close();
     }
     let mut looped = session.clip(id, slot).is_some_and(|c| c.looped);
-    if ui.checkbox(&mut looped, "Loop").changed() {
+    let frozen = session.is_frozen(id);
+    if ui
+        .add_enabled(!frozen, egui::Checkbox::new(&mut looped, "Loop"))
+        .changed()
+    {
         if let Some(c) = session.clip_mut(id, slot) {
             c.looped = looped;
         }

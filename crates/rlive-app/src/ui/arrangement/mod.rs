@@ -7,6 +7,7 @@ pub mod selection;
 pub mod view;
 
 use super::automation::{self, AutomationState, LaneKey};
+use super::commands::bounce;
 use super::icons;
 use super::info_view::edit_info_item;
 use super::keymap::{self, Platform};
@@ -114,7 +115,7 @@ pub struct ArrangementState {
     lanes_height: f32,
     drag: Option<ClipDragState>,
     loop_drag: Option<(LoopDrag, f32, u64, u64)>,
-    context: Option<(TrackId, ArrClipId)>,
+    pub(in crate::ui) context: Option<(TrackId, ArrClipId)>,
     /// Automation Mode and what's being edited in its lanes.
     pub auto: AutomationState,
 }
@@ -786,6 +787,9 @@ fn paint_clip(
         theme::darken(color, 0.55)
     };
     p.rect_filled(rect, 1.0, body);
+    if c.clip.frozen.is_some() {
+        bounce::frozen_glaze(p, rect);
+    }
     let title = Rect::from_min_max(
         rect.min,
         Pos2::new(rect.right(), (rect.top() + CLIP_TITLE_H).min(rect.bottom())),
@@ -805,6 +809,9 @@ fn paint_clip(
         );
     }
     let content = Rect::from_min_max(Pos2::new(rect.left(), title.bottom()), rect.max);
+    if c.clip.frozen_tail {
+        bounce::frozen_hatch(&p.with_clip_rect(rect.intersect(lanes)), content);
+    }
     if content.height() > 6.0 {
         match &c.clip.content {
             ClipContent::Midi { .. } => paint_notes(p, c, content, lanes, axis, color),
@@ -1525,6 +1532,7 @@ fn finish_drag(
 }
 
 fn clip_context_menu(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
+    bounce::arrangement_menu_items(ui, session, state);
     if let Some((track, id)) = state.arr.context {
         if ui.button("Edit").clicked() {
             open_clip(state, track, id, true);
@@ -1579,8 +1587,6 @@ fn clip_context_menu(ui: &mut egui::Ui, session: &mut Session, state: &mut UiSta
         };
         ui.add_enabled(false, egui::Button::new("Reverse Clip(s)"))
             .on_disabled_hover_text(hint);
-        ui.add_enabled(false, egui::Button::new("Consolidate"))
-            .on_disabled_hover_text("Arrives with A12");
         if ui.button("Delete Fades").clicked() {
             let items = state.arr.selection.clone();
             session.arr_delete_fades(&items);
@@ -2066,6 +2072,9 @@ fn track_header(
     );
     let swatch = Rect::from_min_size(rect.min, Vec2::new(6.0, rect.height()));
     p.rect_filled(swatch, 0.0, rgb(color));
+    if session.is_frozen(id) {
+        bounce::frozen_badge(&p, rect.right_top());
+    }
     let indent = depth as f32 * 8.0;
     let in_out_w = if state.layout.show_in_out {
         super::in_out::ARR_IN_OUT_W

@@ -133,7 +133,7 @@ fn layout(take: &AudioTake, frames: u64, sample_rate: f64, tempo: &TempoMap) -> 
     }
 }
 
-fn file_name(track: &str, take: u64, kind: rlive_audio_io::FileType) -> String {
+pub(super) fn file_name(track: &str, take: u64, kind: rlive_audio_io::FileType) -> String {
     let safe: String = track
         .chars()
         .map(|c| {
@@ -436,25 +436,30 @@ impl Session {
 
     fn note_new_recording(&mut self, path: &Path) {
         if self.path.is_none() {
-            self.temp_recordings.push(path.to_path_buf());
+            self.temp_recordings.push((path.to_path_buf(), None));
         }
     }
 
-    /// Moves recordings out of the temporary folder into the Set's own, now that it has one.
+    /// Moves recordings and processed files out of the temporary folder into the Set's own, now
+    /// that it has one. Undo steps that used them follow them to where they went.
     pub(super) fn adopt_temp_recordings(&mut self, project_file: &Path) {
-        let moved = std::mem::take(&mut self.temp_recordings);
-        if moved.is_empty() {
+        let waiting = std::mem::take(&mut self.temp_recordings);
+        if waiting.is_empty() {
             return;
         }
-        let dir = recording_folder(Some(project_file), None);
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            self.messages.push(format!("{}: {e}", dir.display()));
-            return;
-        }
-        for from in moved {
+        let mut moved = HashMap::new();
+        for (from, processed) in waiting {
             let Some(name) = from.file_name() else {
                 continue;
             };
+            let dir = match processed {
+                Some(kind) => super::render::processed_folder(Some(project_file), None, kind),
+                None => recording_folder(Some(project_file), None),
+            };
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                self.messages.push(format!("{}: {e}", dir.display()));
+                continue;
+            }
             let to = dir.join(name);
             if let Err(e) =
                 std::fs::rename(&from, &to).or_else(|_| std::fs::copy(&from, &to).map(|_| ()))
@@ -469,7 +474,9 @@ impl Session {
                     file.path = to.clone();
                 }
             });
+            moved.insert(from, to);
         }
+        self.history.move_files(&moved);
     }
 
     // ------------------------------------------------------------- Session slots

@@ -10,6 +10,7 @@ use std::sync::LazyLock;
 
 pub mod app;
 pub mod arrange;
+pub mod bounce;
 pub mod clip;
 pub mod create;
 pub mod edit;
@@ -70,6 +71,7 @@ registry! {
     Arrange(arrange::Arrange),
     Launch(launch::Launch),
     Clip(clip::Clip),
+    Bounce(bounce::Bounce),
 }
 
 static ALL: LazyLock<Vec<MenuCommand>> = LazyLock::new(build_all);
@@ -103,6 +105,8 @@ pub struct MenuState {
     checked: Vec<bool>,
     pub undo_label: Option<&'static str>,
     pub redo_label: Option<&'static str>,
+    /// Freeze or Unfreeze, for the selected tracks.
+    pub freeze_title: &'static str,
 }
 
 impl Default for MenuState {
@@ -113,6 +117,7 @@ impl Default for MenuState {
             checked: vec![false; n],
             undo_label: None,
             redo_label: None,
+            freeze_title: "Freeze Track",
         }
     }
 }
@@ -145,6 +150,7 @@ impl MenuState {
                 Some(l) => format!("Redo {l}"),
                 None => "Redo".to_string(),
             }),
+            MenuCommand::Bounce(bounce::Bounce::Freeze) => Some(self.freeze_title.to_string()),
             _ => None,
         }
     }
@@ -160,10 +166,15 @@ impl RliveApp {
         self.arrange_state(&mut s);
         self.launch_state(&mut s);
         self.clip_state(&mut s);
+        self.bounce_state(&mut s);
         s
     }
 
     pub(super) fn dispatch(&mut self, ctx: &egui::Context, c: MenuCommand) {
+        // Nothing can change under a job that is rendering the project as it stood.
+        if self.session.render_status().is_some() && !matches!(c, MenuCommand::App(_)) {
+            return;
+        }
         match c {
             MenuCommand::App(c) => self.app_command(ctx, c),
             MenuCommand::File(c) => self.file_command(c),
@@ -177,6 +188,7 @@ impl RliveApp {
             MenuCommand::Arrange(c) => self.arrange_command(c),
             MenuCommand::Launch(c) => self.launch_command(c),
             MenuCommand::Clip(c) => self.clip_command(c),
+            MenuCommand::Bounce(c) => self.bounce_command(c),
         }
     }
 
@@ -265,6 +277,7 @@ mod tests {
             + create::Create::ALL.len()
             + view::View::ALL.len()
             + options::Options::ALL.len()
+            + bounce::Bounce::ALL.len()
             + transport::Transport::ALL.len()
             + track::Track::ALL.len()
             + rack::Rack::ALL.len()

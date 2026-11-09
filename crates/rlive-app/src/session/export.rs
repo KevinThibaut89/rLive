@@ -1,17 +1,9 @@
 //! Offline rendering to WAV files.
 
-use super::graph::compile_with;
-use super::timing::{bus_shape, buses_op, compensation_ops, RuntimeLatency, Timing};
-use super::{Builder, Session};
-use rlive_audio_io::SampleStatus;
-use rlive_core::Quantize;
-use rlive_engine::shared::TrackShared;
-use rlive_engine::{
-    EngineCommand, GraphOp, GraphTxn, LaunchCmd, OutputPair, TransportCmd, MAX_TRACKS,
-};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use super::render::{from_tick, Render};
+use super::Session;
+use rlive_engine::{EngineCommand, LaunchCmd};
+use std::path::Path;
 
 impl Session {
     // ------------------------------------------------------------- export
@@ -22,6 +14,7 @@ impl Session {
         let ticks = bars as u64 * self.project.time_signature.ticks_per_bar();
         self.render_offline(
             vec![EngineCommand::Launch(LaunchCmd::LaunchScene(scene))],
+            0,
             ticks,
             path,
         )
@@ -39,108 +32,31 @@ impl Session {
         if end <= start {
             return Err("the Arrangement is empty".into());
         }
-        let setup = vec![
-            EngineCommand::Transport(TransportCmd::SetLoop(None)),
-            EngineCommand::Transport(TransportCmd::Seek(start as f64)),
-            EngineCommand::Transport(TransportCmd::Play),
-        ];
-        self.render_offline(setup, end - start, path)
+        self.render_offline(from_tick(start), start, end - start, path)
     }
 
     /// Renders `ticks` of the project on a private engine, after `setup` commands.
     fn render_offline(
         &mut self,
         setup: Vec<EngineCommand>,
+        start: u64,
         ticks: u64,
         path: &Path,
     ) -> Result<(), String> {
-        self.capture_plugin_states();
-        // An export must have every sample in it, so this is the one place that waits for them.
-        let paths = self.project_audio_paths();
-        self.samples.wait_for(paths.iter().map(PathBuf::as_path));
-        for path in &paths {
-            if let Some(SampleStatus::Failed(reason)) = self.samples.status(path) {
-                self.messages
-                    .push(format!("Exported without a sample: {reason}"));
-            }
-        }
-        let sample_rate = self.engine.sample_rate;
-        let max_block = 512;
-        let (mut engine, mut handle) = rlive_engine::create_engine(sample_rate, max_block);
-        let mut runtimes = HashMap::new();
-        let mut layouts = HashMap::new();
-        let mut errors = Vec::new();
-        let mut b = Builder {
-            sample_rate,
-            max_block,
-            plugins: &self.plugins,
-            samples: &mut self.samples,
-            wiring: &self.wiring,
-            chain_shared: None,
-            edge_fade: self
-                .edge_fades
-                .then(|| super::arrange_edit::edge_fade_ticks(self.project.tempo)),
-        };
-        let p = &self.project;
-        let mut tracks = Vec::with_capacity(MAX_TRACKS);
-        let returns: Vec<_> = p.returns.iter().map(|t| t.id).collect();
-        for t in p.tracks.iter().chain(&p.returns) {
-            tracks.push(b.track(
-                t,
-                &returns,
-                Arc::new(TrackShared::default()),
-                &mut runtimes,
-                &mut layouts,
-                &mut errors,
-            ));
-        }
-        let master = b.master(p, &mut runtimes, &mut layouts, &mut errors);
-        self.messages.extend(errors);
-        let p = &self.project;
-        let maps = super::build::time_maps(p);
-        let timing = Timing::measure(p, sample_rate, &RuntimeLatency(&runtimes));
-        let mut plan = compile_with(p, &timing);
-        // Whatever the hardware is, an export is the Main output on two channels.
-        plan.main_out = OutputPair::default();
-        plan.cue = None;
-        // The render starts this much late, and is one this much longer, for the audio that
-        // leaves the Master in its first frames.
-        let lead_in = plan.output_latency as usize;
-        let mut ops = vec![GraphOp::ReplaceAll {
-            tracks: Box::new(tracks),
-            master,
-        }];
-        ops.push(buses_op(&bus_shape(&plan), max_block));
-        ops.extend(compensation_ops(&plan, &timing, p, max_block));
-        let mut cmds = vec![
-            EngineCommand::Graph(GraphTxn::new(ops, Some(plan))),
-            EngineCommand::Transport(TransportCmd::SetTimeMaps(Arc::new(maps.clone()))),
-            EngineCommand::Transport(TransportCmd::SetQuantize(Quantize::None)),
-        ];
-        cmds.extend(setup);
-        for c in cmds {
-            if handle.send(c).is_err() {
-                return Err("engine queue full".into());
-            }
-        }
-        let seconds = if p.tempo_points_in_force().is_empty() {
-            ticks as f64 / rlive_core::PPQ as f64 * 60.0 / p.tempo
-        } else {
-            maps.tempo.tick_to_seconds(ticks as f64)
-        };
-        let frames = (seconds * sample_rate) as usize + lead_in;
-        let mut left = vec![0.0; frames];
-        let mut right = vec![0.0; frames];
-        for (l, r) in left.chunks_mut(max_block).zip(right.chunks_mut(max_block)) {
-            engine.process_stereo(l, r);
-            handle.collect_garbage();
-        }
-        left.drain(..lead_in);
-        right.drain(..lead_in);
-        rlive_devices::write_wav(path, &left, &right, sample_rate as u32)
-            .map_err(|e| e.to_string())?;
-        drop(engine);
-        drop(runtimes);
-        Ok(())
+        self.prepare_render();
+        let rendered = self.render_now(Render {
+            project: self.project.clone(),
+            setup,
+            start,
+            ticks,
+            tail: false,
+        })?;
+        rlive_devices::write_wav(
+            path,
+            &rendered.left,
+            &rendered.right,
+            self.engine.sample_rate as u32,
+        )
+        .map_err(|e| e.to_string())
     }
 }

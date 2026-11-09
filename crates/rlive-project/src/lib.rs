@@ -28,8 +28,8 @@ pub use arrangement::{
 };
 pub use clip::{
     BeatsLoop, BeatsPreserve, Clip, ClipContent, ClipScale, Fades, FollowAction, FollowActions,
-    LaunchMode, LaunchSettings, MidiProgram, NoteData, NoteExpression, TransientEdits, Warp,
-    WarpMarker, WarpMode, WarpParams,
+    FrozenAudio, LaunchMode, LaunchSettings, MidiProgram, NoteData, NoteExpression, TransientEdits,
+    Warp, WarpMarker, WarpMode, WarpParams,
 };
 pub use device::{
     grow_macros, Chain, ChainMix, ChainSend, Device, DeviceKind, DrumPad, Macro, MacroMapping,
@@ -46,5 +46,5 @@ pub use routing::SEND_OFF_DB;
 pub use scene::Scene;
 pub use track::{
     ChainTap, Crossfade, ExternalRoute, MainLane, Monitor, PanMode, Route, Routing, Tap, Track,
-    TrackDelay, TrackKind, TrackSend, TrackUi,
+    TrackDelay, TrackFreeze, TrackKind, TrackSend, TrackUi,
 };

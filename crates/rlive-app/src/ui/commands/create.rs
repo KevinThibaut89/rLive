@@ -26,6 +26,8 @@ pub const MENU: &[Entry] = &[
     Separator,
     Item("Group Tracks", M::Create(Create::GroupTracks)),
     Item("Ungroup Tracks", M::Create(Create::UngroupTracks)),
+    Separator,
+    super::bounce::CONSOLIDATE_TO_SCENE,
 ];
 
 impl RliveApp {

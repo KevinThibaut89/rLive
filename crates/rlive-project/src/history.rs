@@ -13,12 +13,13 @@
 //! Adding a field is a compile error here, which is the prompt to decide if undo should cover it.
 
 use crate::{
-    Arrangement, ArrangementClip, Chain, Clip, Device, DeviceKind, Envelope, Project, Scene,
-    TakeLane, Track, TrackUi,
+    Arrangement, ArrangementClip, Chain, Clip, ClipContent, Device, DeviceKind, Envelope, Project,
+    Scene, TakeLane, Track, TrackUi,
 };
 use rlive_core::{DeviceId, TrackId};
 use std::collections::{HashMap, HashSet};
 use std::mem::{size_of, size_of_val};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 const MAX_STEPS: usize = 200;
@@ -282,6 +283,7 @@ fn track_shell(t: &Track) -> Track {
         automation: Vec::new(),
         take_lanes: Vec::new(),
         keep_monitor_latency: t.keep_monitor_latency,
+        freeze: t.freeze,
         info: t.info.clone(),
         ui: TrackUi::default(),
     }
@@ -602,6 +604,31 @@ impl History {
         Some(self.current().clone())
     }
 
+    /// Points every step at where its files are now, after some of them moved on disk, so an undo
+    /// across the move still finds them.
+    pub fn move_files(&mut self, moved: &HashMap<PathBuf, PathBuf>) {
+        if moved.is_empty() {
+            return;
+        }
+        for step in &mut self.steps {
+            let mut snapshot = (*step.snapshot).clone();
+            let mut changed = false;
+            for t in snapshot
+                .tracks
+                .iter_mut()
+                .chain(snapshot.returns.iter_mut())
+            {
+                if let Some(next) = moved_track(t, moved) {
+                    *t = Arc::new(next);
+                    changed = true;
+                }
+            }
+            if changed {
+                step.snapshot = Arc::new(snapshot);
+            }
+        }
+    }
+
     pub fn mark_saved(&mut self) {
         self.saved = Some(self.current().clone());
         self.untracked_dirty = false;
@@ -610,6 +637,76 @@ impl History {
     pub fn at_saved(&self) -> bool {
         self.saved.as_ref().is_some_and(|s| **s == **self.current())
     }
+}
+
+fn moved_clip(c: &Clip, moved: &HashMap<PathBuf, PathBuf>) -> Option<Clip> {
+    let content = match &c.content {
+        ClipContent::Audio { file, .. } => moved.get(&file.path),
+        ClipContent::Midi { .. } => None,
+    };
+    let frozen = c.frozen.as_ref().and_then(|f| moved.get(&f.file.path));
+    if content.is_none() && frozen.is_none() {
+        return None;
+    }
+    let mut next = c.clone();
+    if let (ClipContent::Audio { file, .. }, Some(to)) = (&mut next.content, content) {
+        file.path = to.clone();
+    }
+    if let (Some(f), Some(to)) = (&mut next.frozen, frozen) {
+        f.file.path = to.clone();
+    }
+    Some(next)
+}
+
+fn moved_lane(
+    lane: &[Arc<ArrangementClip>],
+    moved: &HashMap<PathBuf, PathBuf>,
+) -> Option<Vec<Arc<ArrangementClip>>> {
+    let mut changed = false;
+    let next = lane
+        .iter()
+        .map(|c| match moved_clip(&c.clip, moved) {
+            Some(clip) => {
+                changed = true;
+                Arc::new(ArrangementClip {
+                    clip,
+                    ..(**c).clone()
+                })
+            }
+            None => c.clone(),
+        })
+        .collect();
+    changed.then_some(next)
+}
+
+fn moved_track(t: &TrackSnap, moved: &HashMap<PathBuf, PathBuf>) -> Option<TrackSnap> {
+    let mut next = t.clone();
+    let mut changed = false;
+    for c in next.clips.iter_mut().flatten() {
+        if let Some(clip) = moved_clip(c, moved) {
+            *c = Arc::new(clip);
+            changed = true;
+        }
+    }
+    if let Some(lane) = moved_lane(&next.lane, moved) {
+        next.lane = lane;
+        changed = true;
+    }
+    let mut lanes = (*next.take_lanes).clone();
+    let mut lanes_changed = false;
+    for l in &mut lanes {
+        for c in &mut l.clips {
+            if let Some(clip) = moved_clip(&c.clip, moved) {
+                c.clip = clip;
+                lanes_changed = true;
+            }
+        }
+    }
+    if lanes_changed {
+        next.take_lanes = Arc::new(lanes);
+        changed = true;
+    }
+    changed.then_some(next)
 }
 
 #[cfg(test)]
@@ -622,6 +719,27 @@ mod tests {
         let mut p = Project::new_default();
         p.tracks[1].clips[0] = Some(Clip::new_midi("B", PALETTE[1], 1, TimeSignature::default()));
         p
+    }
+
+    #[test]
+    fn moving_a_file_reaches_every_step() {
+        let mut p = project();
+        let old = PathBuf::from("/tmp/a.wav");
+        let clip = Clip {
+            length: 960,
+            content: ClipContent::audio(&old, 0.0),
+            ..Clip::default()
+        };
+        p.tracks[2].clips[0] = Some(clip);
+        let mut h = History::new(&p);
+        p.tracks[0].clips[0].as_mut().unwrap().name = "edited".into();
+        assert!(h.commit(&p, "Edit"));
+        let new = PathBuf::from("/tmp/b.wav");
+        h.move_files(&HashMap::from([(old.clone(), new.clone())]));
+        for step in &h.steps {
+            let c = step.snapshot.tracks[2].clips[0].as_ref().unwrap();
+            assert!(matches!(&c.content, ClipContent::Audio { file, .. } if file.path == new));
+        }
     }
 
     #[test]

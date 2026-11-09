@@ -125,6 +125,10 @@ pub struct UiState {
     scan_rx: Option<mpsc::Receiver<ScanMsg>>,
     pub scan_status: String,
     pub status: String,
+    /// What Copy picked up, for Paste Bounced Audio to render when it is used.
+    pub bounce_copy: Option<crate::session::BounceSource>,
+    /// Tracks waiting their turn in a Freeze of several at once.
+    pub pending_freezes: Vec<TrackId>,
     pub sample_files: Vec<PathBuf>,
     pub request_scan: bool,
     /// Device lists are slow to enumerate; refreshed only when Preferences opens.
@@ -304,6 +308,8 @@ impl RliveApp {
             export_arrangement: false,
             scan_rx: None,
             scan_status: String::new(),
+            bounce_copy: None,
+            pending_freezes: Vec::new(),
             status: audio
                 .error
                 .clone()
@@ -685,7 +691,10 @@ impl RliveApp {
             computer_keys: self.ui.computer_keys,
             text_focused: ctx.text_edit_focused(),
             keyboard_taken: ctx.egui_wants_keyboard_input(),
-            dialog_open: self.ui.show_about || self.ui.show_export || self.ui.show_settings,
+            dialog_open: self.ui.show_about
+                || self.ui.show_export
+                || self.ui.show_settings
+                || self.session.render_status().is_some(),
             group_selected: self
                 .selected_track_ids()
                 .iter()
@@ -1737,22 +1746,29 @@ impl eframe::App for RliveApp {
                 && self.ui.selected_clip.is_some()
                 && self.ui.detail != Detail::Scene;
             let panel = detail.show(ui, |ui| {
-                if stacked {
-                    self.stacked_detail(ui);
-                } else {
-                    match self.ui.detail {
-                        Detail::Clip if self.ui.selected_clip.is_some() => {
-                            launch_panel::with_launch_strip(
-                                ui,
-                                &mut self.session,
-                                &mut self.ui,
-                                clip_view::show,
-                            )
-                        }
-                        Detail::Scene => scene_view::show(ui, &mut self.session, &mut self.ui),
-                        _ => devices::show(ui, &mut self.session, &mut self.ui),
-                    }
+                // A frozen track's Device and Clip Views can be looked at, not changed.
+                let frozen = self.detail_is_frozen(stacked);
+                if frozen {
+                    ui.colored_label(pal().text_dim, "Frozen: unfreeze the track to edit");
                 }
+                ui.add_enabled_ui(!frozen, |ui| {
+                    if stacked {
+                        self.stacked_detail(ui);
+                    } else {
+                        match self.ui.detail {
+                            Detail::Clip if self.ui.selected_clip.is_some() => {
+                                launch_panel::with_launch_strip(
+                                    ui,
+                                    &mut self.session,
+                                    &mut self.ui,
+                                    clip_view::show,
+                                )
+                            }
+                            Detail::Scene => scene_view::show(ui, &mut self.session, &mut self.ui),
+                            _ => devices::show(ui, &mut self.session, &mut self.ui),
+                        }
+                    }
+                });
             });
             rects.detail = Some(panel.response.rect);
             self.detail_edge(&ctx, panel.response.rect);
@@ -1779,6 +1795,8 @@ impl eframe::App for RliveApp {
             menu.publish(self.menu_state(&ctx));
         }
         self.dialogs(&ctx);
+        self.render_progress(&ctx);
+        self.run_pending_freezes();
         automation::show_popups(&ctx, &mut self.session, &mut self.ui);
     }
 
