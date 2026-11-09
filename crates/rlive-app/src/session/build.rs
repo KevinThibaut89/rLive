@@ -16,7 +16,7 @@ use rlive_engine::shared::{ChainShared, TrackShared};
 use rlive_engine::{
     mix_cell, ArrangementLane, AudioClip, BusLayout, ChainNode, ClipCurve, ClipData, ClipEnvelopes,
     DeviceSlot, EnvCurve, EnvTiming, EnvelopedClip, ExprPoint, FrozenClip, LaneClip, LaneFades,
-    MidiClip, MixSettings, Note, NoteExpression, NullProcessor, ProgramChange,
+    MidiClip, MixSettings, Note, NoteExpression, NullProcessor, PlayGroup, ProgramChange,
     RackKind as EngineRackKind, RackNode, TrackNode, WarpedClip, MAX_RACK_DEPTH, MAX_SENDS,
 };
 use rlive_plugin_host::scanner::PluginCache;
@@ -569,7 +569,9 @@ impl Builder<'_> {
         let mut edge_fade_on = false;
         let data = match &clip.content {
             ClipContent::Midi { notes, program } => {
-                // Deactivated notes never reach the engine.
+                // Deactivated notes never reach the engine, and a Play One group only picks from
+                // the notes that are ever reached.
+                let reach = (region.start.min(region.loop_start), region.content_end());
                 let notes: Vec<Note> = notes
                     .iter()
                     .filter(|n| !n.muted)
@@ -579,6 +581,17 @@ impl Builder<'_> {
                         key: n.key,
                         velocity: n.velocity,
                         release: n.release,
+                        probability: n.probability,
+                        vel_range: n.vel_range,
+                        group: n
+                            .group
+                            .filter(|_| (reach.0..reach.1).contains(&(n.start as f64)))
+                            .map(|g| PlayGroup {
+                                id: g.id,
+                                one: g.one,
+                                member: 0,
+                                size: 0,
+                            }),
                         expr: n.expr.as_deref().map(engine_expression).map(Box::new),
                     })
                     .collect();

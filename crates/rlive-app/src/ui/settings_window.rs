@@ -230,7 +230,9 @@ impl RliveApp {
             label(ui, "Permanent Scrub Areas");
             ui.checkbox(&mut self.settings.permanent_scrub_areas, "");
             ui.end_row();
-            soon_check(ui, "Pitch-Locked Drawing", false, "C9");
+            label(ui, "Draw Mode with Pitch Lock");
+            ui.checkbox(&mut self.settings.pitch_lock, "");
+            ui.end_row();
         });
         ui.add_space(10.0);
         widgets::section_label(ui, "APPLICATION OPTIONS");

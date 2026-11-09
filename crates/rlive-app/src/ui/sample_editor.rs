@@ -508,7 +508,7 @@ fn waveform(
         let (strip, _) =
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 10.0), Sense::hover());
         let (start, ticks) = state.sample.view.unwrap_or((0.0, whole));
-        if let Some(to) = markers::overview_strip(ui, strip, whole, start, ticks) {
+        if let (Some(to), _) = markers::overview_strip(ui, strip, whole, start, ticks) {
             state.sample.view = Some((to, ticks));
         }
     }

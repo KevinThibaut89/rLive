@@ -4,7 +4,7 @@ use crate::session::{ChainRef, ClipRef};
 use crate::ui::session_view;
 use crate::ui::RliveApp;
 use rlive_core::TrackId;
-use rlive_project::{Clip, TrackKind};
+use rlive_project::TrackKind;
 
 super::domain! {
     /// Commands with no menu, reached only through the keymap.
@@ -106,8 +106,7 @@ impl RliveApp {
             .track(track)
             .map(|t| t.color)
             .unwrap_or(rlive_project::PALETTE[0]);
-        let mut clip = Clip::new_midi("MIDI Clip", color, 1, sig);
-        clip.launch = session.launch_defaults.settings();
+        let clip = session.new_midi_clip(color, sig);
         session.set_clip(track, slot, Some(clip));
     }
 

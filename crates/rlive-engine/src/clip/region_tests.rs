@@ -2,14 +2,14 @@
 //! timeline, including running in to a loop.
 
 use super::audio::{AudioCursor, LANE_VOICE, SESSION_VOICE};
-use super::data::{AudioClip, ClipData, MidiClip, Note, WarpedClip};
+use super::data::{AudioClip, ClipData, MidiClip, Note, PlayGroup, WarpedClip};
 use super::envelopes::{ClipCurve, ClipEnvelopes, EnvCurve, EnvTiming, EnvelopedClip};
 use super::midi::Voices;
 use super::{chase, render_range, BlockTime, ClipPlayer, LaunchEnv, Pending, SlotLaunch};
 use crate::lane::{ArrangementLane, LaneClip, LaneFades, LanePlayer};
 use rlive_core::fade::EdgeFades;
 use rlive_core::time::{ticks_per_sample, BarMap};
-use rlive_core::warp::{WarpMap, WarpMarker, WarpMode};
+use rlive_core::warp::{StretchBank, WarpMap, WarpMarker, WarpMode};
 use rlive_core::{
     ClipRegion, FollowActions, MidiEvent, MidiMessage, NoteSpace, ParamRange, Quantize,
     SampleBuffer, TimeSignature, PPQ,
@@ -913,4 +913,263 @@ fn a_linked_follow_action_is_due_at_the_end_of_the_clips_first_pass() {
     );
     assert_eq!(player.follow.expect("still armed").at, due);
     assert_eq!(player.playing.as_ref().unwrap().gain, 1.0);
+}
+
+/// Every note-on and note-off of a clip over `frames`, in blocks of 256, as (is_on, key, velocity).
+fn run_seeded(clip: &ClipData, seed: u64, frames: usize) -> Vec<(bool, u8, f32)> {
+    let mut voices = Voices::new(NoteSpace::Session);
+    voices.seed(seed);
+    let mut audio = AudioCursor::new(LANE_VOICE);
+    let mut stretch = StretchBank::new(512);
+    let (mut l, mut r) = (vec![0.0; 256], vec![0.0; 256]);
+    let mut out = Vec::new();
+    let mut t = 0.0;
+    let mut done = 0;
+    while done < frames {
+        let block = time(t, 256);
+        let mut ev = Vec::with_capacity(4096);
+        render_range(
+            clip,
+            clip.region(),
+            0.0,
+            t,
+            block.t1(),
+            block,
+            &mut voices,
+            &mut audio,
+            &mut ev,
+            &mut l,
+            &mut r,
+            &mut stretch,
+        );
+        for e in &ev {
+            match e.message {
+                MidiMessage::NoteOn { key, velocity, .. } => out.push((true, key, velocity)),
+                MidiMessage::NoteOff { key, .. } => out.push((false, key, 0.0)),
+                _ => {}
+            }
+        }
+        t = block.t1();
+        done += 256;
+    }
+    let mut ev = Vec::with_capacity(4096);
+    voices.release_all(0, &mut ev);
+    for e in &ev {
+        if let MidiMessage::NoteOff { key, .. } = e.message {
+            out.push((false, key, 0.0));
+        }
+    }
+    out
+}
+
+fn ons(events: &[(bool, u8, f32)], key: u8) -> usize {
+    events.iter().filter(|e| e.0 && e.1 == key).count()
+}
+
+fn assert_all_released(events: &[(bool, u8, f32)]) {
+    for key in 0..128u8 {
+        let on = events.iter().filter(|e| e.0 && e.1 == key).count();
+        let off = events.iter().filter(|e| !e.0 && e.1 == key).count();
+        assert_eq!(on, off, "key {key}: every note that starts must stop");
+    }
+}
+
+/// Eighty passes of a one-beat loop at 120 BPM, near enough.
+const MANY_PASSES: usize = 80 * 24000;
+
+#[test]
+fn a_note_of_no_chance_never_plays_and_full_chance_always_does() {
+    let never = Note {
+        probability: 0.0,
+        ..note(0, 60)
+    };
+    let always = note(0, 62);
+    let e = run_seeded(&midi(vec![never, always], BEAT, true), 1, MANY_PASSES);
+    assert_eq!(ons(&e, 60), 0);
+    assert!(ons(&e, 62) > 70);
+    assert_all_released(&e);
+}
+
+#[test]
+fn chance_plays_about_as_often_as_it_says_and_is_released() {
+    let half = Note {
+        probability: 0.25,
+        ..note(0, 60)
+    };
+    let e = run_seeded(&midi(vec![half], BEAT, true), 7, MANY_PASSES);
+    let n = ons(&e, 60);
+    assert!((8..=35).contains(&n), "{n} of 80 at 25%");
+    assert_all_released(&e);
+}
+
+#[test]
+fn the_same_seed_repeats_and_another_differs() {
+    let clip = midi(
+        vec![Note {
+            probability: 0.5,
+            ..note(0, 60)
+        }],
+        BEAT,
+        true,
+    );
+    let a = run_seeded(&clip, 11, MANY_PASSES);
+    let b = run_seeded(&clip, 11, MANY_PASSES);
+    let c = run_seeded(&clip, 12, MANY_PASSES);
+    assert_eq!(a, b);
+    assert_ne!(a, c);
+}
+
+fn grouped(start: u64, key: u8, id: u32, one: bool, probability: f32) -> Note {
+    Note {
+        probability,
+        group: Some(PlayGroup {
+            id,
+            one,
+            member: 0,
+            size: 0,
+        }),
+        ..note(start, key)
+    }
+}
+
+#[test]
+fn a_play_all_group_plays_together_or_not_at_all() {
+    let notes = vec![
+        grouped(0, 60, 1, false, 0.5),
+        grouped(0, 64, 1, false, 0.5),
+        grouped(BEAT / 2, 67, 1, false, 0.5),
+    ];
+    let e = run_seeded(&midi(notes, BEAT, true), 3, MANY_PASSES);
+    let (a, b, c) = (ons(&e, 60), ons(&e, 64), ons(&e, 67));
+    assert_eq!(a, b, "members share their fate");
+    assert!(
+        a.abs_diff(c) <= 1,
+        "wherever they are in the pass: {a} and {c}"
+    );
+    assert!((20..=60).contains(&a), "{a} of 80 at 50%");
+    assert_all_released(&e);
+}
+
+#[test]
+fn a_play_one_group_plays_exactly_one_note_each_pass() {
+    let notes = vec![
+        grouped(0, 60, 1, true, 1.0),
+        grouped(0, 64, 1, true, 1.0),
+        grouped(0, 67, 1, true, 1.0),
+    ];
+    let clip = midi(notes, BEAT, true);
+    let e = run_seeded(&clip, 5, MANY_PASSES);
+    let total = ons(&e, 60) + ons(&e, 64) + ons(&e, 67);
+    assert!((78..=82).contains(&total), "one per pass, got {total}");
+    for k in [60, 64, 67] {
+        assert!(ons(&e, k) > 10, "key {k} comes up sometimes");
+    }
+    // Never two at once: each note-on is followed by its own note-off before the next.
+    let mut sounding = 0;
+    for (on, _, _) in &e {
+        sounding += if *on { 1 } else { -1 };
+        assert!((0..=1).contains(&sounding));
+    }
+    assert_all_released(&e);
+}
+
+#[test]
+fn a_play_one_group_at_half_chance_is_often_silent() {
+    let notes = vec![grouped(0, 60, 1, true, 0.5), grouped(0, 64, 1, true, 0.5)];
+    let e = run_seeded(&midi(notes, BEAT, true), 9, MANY_PASSES);
+    let total = ons(&e, 60) + ons(&e, 64);
+    assert!((20..=60).contains(&total), "{total} of 80");
+    assert_all_released(&e);
+}
+
+#[test]
+fn velocity_deviation_stays_in_its_range_and_varies() {
+    let n = Note {
+        velocity: 60.0 / 127.0,
+        vel_range: 20.0 / 127.0,
+        ..note(0, 60)
+    };
+    let e = run_seeded(&midi(vec![n], BEAT, true), 2, MANY_PASSES);
+    let velocities: Vec<f32> = e.iter().filter(|e| e.0).map(|e| e.2).collect();
+    assert!(velocities.len() > 70);
+    assert!(velocities
+        .iter()
+        .all(|v| (60.0 / 127.0..=80.0 / 127.0 + 1e-5).contains(v)));
+    let lo = velocities.iter().cloned().fold(1.0, f32::min);
+    let hi = velocities.iter().cloned().fold(0.0, f32::max);
+    assert!(hi - lo > 10.0 / 127.0, "spreads over the range: {lo}..{hi}");
+}
+
+#[test]
+fn a_negative_deviation_goes_down_and_never_to_nothing() {
+    let n = Note {
+        velocity: 5.0 / 127.0,
+        vel_range: -5.0 / 127.0,
+        ..note(0, 60)
+    };
+    let e = run_seeded(&midi(vec![n], BEAT, true), 4, MANY_PASSES);
+    assert!(e
+        .iter()
+        .filter(|e| e.0)
+        .all(|e| e.2 >= 1.0 / 127.0 && e.2 <= 5.0 / 127.0 + 1e-5));
+}
+
+#[test]
+fn a_chased_note_gets_the_same_answer_as_it_would_have_played() {
+    // Whatever Chance said for this pass, chase and playback agree.
+    let n = Note {
+        probability: 0.5,
+        length: BEAT * 2,
+        ..note(0, 60)
+    };
+    let clip = midi(vec![n], BEAT * 4, true);
+    let mut played = Voices::new(NoteSpace::Session);
+    played.seed(21);
+    let mut chased = Voices::new(NoteSpace::Session);
+    chased.seed(21);
+    let notes = match &clip {
+        ClipData::Midi(c) => &c.notes[0],
+        _ => unreachable!(),
+    };
+    assert_eq!(played.fate(notes, 0, 3), chased.fate(notes, 0, 3));
+}
+
+#[test]
+fn chance_groups_and_deviation_allocate_nothing() {
+    let notes = (0..64u64)
+        .map(|i| {
+            let mut n = grouped(i * 10, 40 + i as u8 % 40, (i % 8) as u32, i % 2 == 0, 0.5);
+            n.vel_range = 0.2;
+            n
+        })
+        .collect();
+    let clip = midi(notes, BEAT, true);
+    let mut voices = Voices::new(NoteSpace::Session);
+    let mut audio = AudioCursor::new(LANE_VOICE);
+    let mut stretch = StretchBank::new(512);
+    let (mut l, mut r) = (vec![0.0; 256], vec![0.0; 256]);
+    let mut ev = Vec::with_capacity(4096);
+    let mut t = 0.0;
+    rlive_testkit::assert_no_alloc(|| {
+        for _ in 0..2000 {
+            let block = time(t, 256);
+            ev.clear();
+            render_range(
+                &clip,
+                clip.region(),
+                0.0,
+                t,
+                block.t1(),
+                block,
+                &mut voices,
+                &mut audio,
+                &mut ev,
+                &mut l,
+                &mut r,
+                &mut stretch,
+            );
+            t = block.t1();
+        }
+        voices.release_all(0, &mut ev);
+    });
 }

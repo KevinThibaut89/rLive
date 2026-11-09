@@ -11,6 +11,7 @@ use egui::{Pos2, RichText, Sense, Shape, Stroke, Vec2};
 use rlive_core::{TimeSignature, PPQ};
 use rlive_devices::devices::b1::common::SCALES;
 use rlive_project::clip_edit::{self as edit, merged};
+use rlive_project::note_edit;
 use rlive_project::{Clip, ClipContent, MidiProgram};
 
 const NOTE_NAMES: [&str; 12] = [
@@ -141,7 +142,8 @@ fn length_field(
     sig: TimeSignature,
     tip: &str,
 ) -> Option<u64> {
-    let mut v = value.unwrap_or(0) as f64;
+    // Inside the range even when it says "*": a value clamped to the range counts as an edit.
+    let mut v = value.unwrap_or(1).max(1) as f64;
     let before = v;
     let r = ui.add(
         egui::DragValue::new(&mut v)
@@ -357,9 +359,24 @@ fn main_panel(
     };
     let can_loop = clips.iter().all(|c| c.is_midi() || c.is_warped());
     let looped = shared.looped.is_some_and(|(_, hi)| hi);
+    let half_lit = shared.looped.is_some_and(|(lo, hi)| lo != hi);
     ui.horizontal(|ui| {
         ui.add_enabled_ui(can_loop, |ui| {
-            if toggle(ui, looped, "Loop", "Clip Loop — repeat the loop region").clicked {
+            let clicked = toggle(
+                ui,
+                looped && !half_lit,
+                "Loop",
+                "Clip Loop — repeat the loop region",
+            );
+            if half_lit {
+                // Some looped and some not: half the button lit (manual p. 292).
+                let r = ui.min_rect().right_top();
+                let lit =
+                    egui::Rect::from_min_size(r + Vec2::new(-22.0, 0.0), Vec2::new(22.0, 16.0));
+                ui.painter()
+                    .rect_filled(lit, 1.0, pal().accent.gamma_multiply(0.5));
+            }
+            if clicked.clicked {
                 session.set_clip_looped(group, !looped);
             }
         });
@@ -526,7 +543,16 @@ fn groove_row(
     });
 }
 
+/// Whether every clip agrees on `f`.
+fn all_same<T: PartialEq>(clips: &[&Clip], f: impl Fn(&Clip) -> T) -> bool {
+    clips.windows(2).all(|w| f(w[0]) == f(w[1]))
+}
+
 fn scale_rows(ui: &mut egui::Ui, session: &mut Session, group: &[ClipRef], clip: &Clip) {
+    let clips = clips_of(session, group);
+    let same_root = all_same(&clips, |c| c.scale.root);
+    let same_name = all_same(&clips, |c| c.scale.name.clone());
+    drop(clips);
     let mut scale = clip.scale.clone();
     ui.horizontal(|ui| {
         if toggle(
@@ -541,7 +567,11 @@ fn scale_rows(ui: &mut egui::Ui, session: &mut Session, group: &[ClipRef], clip:
         }
         egui::ComboBox::from_id_salt("clip_scale_root")
             .width(40.0)
-            .selected_text(NOTE_NAMES[scale.root as usize % 12])
+            .selected_text(if same_root {
+                NOTE_NAMES[scale.root as usize % 12].to_string()
+            } else {
+                "*".to_string()
+            })
             .show_ui(ui, |ui| {
                 for (n, name) in NOTE_NAMES.iter().enumerate() {
                     ui.selectable_value(&mut scale.root, n as u8, *name);
@@ -550,7 +580,11 @@ fn scale_rows(ui: &mut egui::Ui, session: &mut Session, group: &[ClipRef], clip:
     });
     let r = egui::ComboBox::from_id_salt("clip_scale_name")
         .width(ui.available_width() - 8.0)
-        .selected_text(scale.name.clone())
+        .selected_text(if same_name {
+            scale.name.clone()
+        } else {
+            "*".to_string()
+        })
         .show_ui(ui, |ui| {
             for (name, _) in SCALES {
                 ui.selectable_value(&mut scale.name, (*name).to_string(), *name);
@@ -750,41 +784,37 @@ fn pitch_time_panel(ui: &mut egui::Ui, session: &mut Session, state: &mut UiStat
     let Some(clip) = session.clip_at(cref).cloned() else {
         return;
     };
-    let selected = state.piano.selected.clone();
     let scale = Session::pitch_scale(&clip);
     let grid = state.piano.grid;
+    let loop_end = clip.loop_end();
+    let range = state
+        .piano
+        .time
+        .filter(|(a, b)| b > a)
+        .or_else(|| note_edit::span_of(clip.notes(), &state.piano.selected));
     let tools = &mut state.clip_view.tools;
+    let mut queued: Option<NoteTool> = None;
     field_label(ui, "Pitch");
     ui.horizontal(|ui| {
         ui.add(egui::DragValue::new(&mut tools.transpose).range(-48..=48));
         if ui.small_button("Transpose").clicked() {
-            let by = tools.transpose;
-            session.edit_notes(cref, "Transpose", |n| {
-                edit::transpose(n, &selected, by, scale)
-            });
+            queued = Some(NoteTool::Transpose(tools.transpose));
         }
     });
     ui.horizontal_wrapped(|ui| {
         let r = ui.add_enabled(scale.is_some(), egui::Button::new("Fit").small());
         if info(r, "Fit to Scale — move notes onto the clip's scale").clicked() {
-            if let Some(s) = scale {
-                session.edit_notes(cref, "Fit to Scale", |n| {
-                    edit::fit_to_scale(n, &selected, s)
-                });
-            }
+            queued = scale.map(NoteTool::FitToScale);
         }
         if info(ui.small_button("Invert"), "Invert — flip upside-down").clicked() {
-            session.edit_notes(cref, "Invert", |n| edit::invert(n, &selected));
+            queued = Some(NoteTool::Invert);
         }
     });
     ui.horizontal(|ui| {
         ui.add(egui::DragValue::new(&mut tools.interval).range(-48..=48));
         let r = ui.small_button("Add Interval");
         if info(r, "Interval — add a note this far from each selected one").clicked() {
-            let by = tools.interval;
-            session.edit_notes(cref, "Add Interval", |n| {
-                edit::add_interval(n, &selected, by, scale)
-            });
+            queued = Some(NoteTool::AddInterval(tools.interval));
         }
     });
     ui.separator();
@@ -797,10 +827,10 @@ fn pitch_time_panel(ui: &mut egui::Ui, session: &mut Session, state: &mut UiStat
                 .max_decimals(2),
         );
         if ui.small_button("Stretch").clicked() {
-            let factor = tools.stretch;
-            session.edit_notes(cref, "Stretch", |n| edit::stretch(n, &selected, factor));
+            queued = Some(NoteTool::Stretch(tools.stretch));
         }
     });
+    let selected = state.piano.selected.clone();
     ui.horizontal_wrapped(|ui| {
         if ui.small_button("×2").clicked() {
             session.scale_time(cref, &selected, 2.0);
@@ -809,26 +839,37 @@ fn pitch_time_panel(ui: &mut egui::Ui, session: &mut Session, state: &mut UiStat
             session.scale_time(cref, &selected, 0.5);
         }
         if ui.small_button("Rev").clicked() {
-            session.edit_notes(cref, "Reverse Notes", |n| edit::reverse(n, &selected));
+            queued = Some(NoteTool::Reverse);
         }
         if ui.small_button("Legato").clicked() {
-            session.edit_notes(cref, "Legato", |n| edit::legato(n, &selected));
+            queued = Some(NoteTool::Legato(loop_end));
         }
     });
+    let tools = &mut state.clip_view.tools;
     ui.horizontal(|ui| {
         egui::ComboBox::from_id_salt("note_duration")
-            .width(52.0)
-            .selected_text(grid_label(tools.duration))
+            .width(70.0)
+            .selected_text(duration_label(tools.duration))
             .show_ui(ui, |ui| {
-                for g in [PPQ, PPQ / 2, PPQ / 4, PPQ / 8] {
-                    ui.selectable_value(&mut tools.duration, g, grid_label(g));
+                for option in [
+                    FIT_RANGE,
+                    USE_GRID,
+                    4 * PPQ,
+                    2 * PPQ,
+                    PPQ,
+                    PPQ / 2,
+                    PPQ / 4,
+                    PPQ / 8,
+                ] {
+                    ui.selectable_value(&mut tools.duration, option, duration_label(option));
                 }
             });
         if ui.small_button("Set Length").clicked() {
-            let length = tools.duration;
-            session.edit_notes(cref, "Set Length", |n| {
-                edit::set_length(n, &selected, length)
-            });
+            queued = match tools.duration {
+                FIT_RANGE => range.map(|(a, b)| NoteTool::FitRange(a, b)),
+                USE_GRID => Some(NoteTool::SetLength(grid)),
+                length => Some(NoteTool::SetLength(length)),
+            };
         }
     });
     ui.horizontal(|ui| {
@@ -839,12 +880,83 @@ fn pitch_time_panel(ui: &mut egui::Ui, session: &mut Session, state: &mut UiStat
                 .max_decimals(2),
         );
         if ui.small_button("Humanize").clicked() {
-            let amount = tools.humanize;
-            let mut rng = session.tool_random();
-            session.edit_notes(cref, "Humanize", |n| {
-                edit::humanize(n, &selected, amount, grid, &mut rng)
-            });
+            queued = Some(NoteTool::Humanize(tools.humanize));
         }
+    });
+    if let Some(tool) = queued {
+        apply_tool(session, state, tool, grid, scale);
+    }
+}
+
+/// The Duration menu's two choices that aren't a length.
+const FIT_RANGE: u64 = u64::MAX;
+const USE_GRID: u64 = u64::MAX - 1;
+
+fn duration_label(d: u64) -> String {
+    match d {
+        FIT_RANGE => "Fit Range".into(),
+        USE_GRID => "Grid".into(),
+        d if d == 4 * PPQ => "1 Bar".into(),
+        d if d == 2 * PPQ => "1/2".into(),
+        d => grid_label(d),
+    }
+}
+
+/// A tool from the Pitch and Time panel, run on the selection of each clip it applies to.
+#[derive(Clone, Copy)]
+enum NoteTool {
+    Transpose(i32),
+    FitToScale(edit::PitchScale),
+    Invert,
+    AddInterval(i32),
+    Stretch(f64),
+    Reverse,
+    Legato(u64),
+    SetLength(u64),
+    FitRange(u64, u64),
+    Humanize(f64),
+}
+
+impl NoteTool {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Transpose(_) => "Transpose",
+            Self::FitToScale(_) => "Fit to Scale",
+            Self::Invert => "Invert",
+            Self::AddInterval(_) => "Add Interval",
+            Self::Stretch(_) => "Stretch",
+            Self::Reverse => "Reverse Notes",
+            Self::Legato(_) => "Legato",
+            Self::SetLength(_) => "Set Length",
+            Self::FitRange(..) => "Fit to Time Range",
+            Self::Humanize(_) => "Humanize",
+        }
+    }
+}
+
+fn apply_tool(
+    session: &mut Session,
+    state: &mut UiState,
+    tool: NoteTool,
+    grid: u64,
+    scale: Option<edit::PitchScale>,
+) {
+    let mut rng = session.tool_random();
+    crate::ui::piano_roll::edit_selected(session, state, tool.label(), |n, s| match tool {
+        NoteTool::Transpose(by) => edit::transpose(n, s, by, scale),
+        NoteTool::FitToScale(sc) => edit::fit_to_scale(n, s, sc),
+        NoteTool::Invert => edit::invert(n, s, scale),
+        NoteTool::AddInterval(by) => {
+            let first = n.len();
+            edit::add_interval(n, s, by, scale);
+            s.extend(first..n.len());
+        }
+        NoteTool::Stretch(f) => edit::stretch(n, s, f),
+        NoteTool::Reverse => edit::reverse(n, s),
+        NoteTool::Legato(end) => edit::legato(n, s, end),
+        NoteTool::SetLength(l) => edit::set_length(n, s, l),
+        NoteTool::FitRange(a, b) => note_edit::fit_to_range(n, s, a, b),
+        NoteTool::Humanize(amount) => edit::humanize(n, s, amount, grid, &mut rng),
     });
 }
 
@@ -866,6 +978,7 @@ pub(super) fn notes_row(
             }
         });
     info(r.response, "Grid — for drawing and snapping notes");
+    header_toggles(ui, state);
     field_label(ui, "Vel");
     let r = ui.add(
         egui::DragValue::new(&mut state.piano.new_velocity)
@@ -876,19 +989,67 @@ pub(super) fn notes_row(
     info(r, "New Note Velocity — how hard new notes are played");
     if info(
         ui.small_button("Quantize"),
-        "Quantize — snap selected, or all, notes to the grid",
+        "Quantize — snap selected, or all, notes as the Quantize settings say (Cmd+U)",
     )
     .clicked()
     {
-        let grid = state.piano.grid;
-        let selected = state.piano.selected.clone();
-        session.edit_notes(cref, "Quantize", |notes| {
-            for (i, n) in notes.iter_mut().enumerate() {
-                if selected.is_empty() || selected.contains(&i) {
-                    n.start = crate::ui::timeline::snap(n.start as f64, grid, true).max(0) as u64;
-                }
-            }
+        let q = state.piano.quantize;
+        crate::ui::piano_roll::edit_selected(session, state, "Quantize", |n, s| {
+            note_edit::quantize(n, s, q);
         });
+    }
+    let _ = cref;
+}
+
+/// The note editor's own toggles: fold, scale highlight, Find and Focus.
+fn header_toggles(ui: &mut egui::Ui, state: &mut UiState) {
+    let p = &mut state.piano;
+    let button = |ui: &mut egui::Ui, on: bool, label: &str, tip: &str| {
+        info(
+            widgets::state_button(ui, Vec2::new(34.0, 15.0), on, pal().accent, label),
+            tip,
+        )
+        .clicked()
+    };
+    if button(
+        ui,
+        p.fold_notes,
+        "Fold",
+        "Fold to Notes — hide empty key tracks, in every clip (F)",
+    ) {
+        p.fold_notes = !p.fold_notes;
+    }
+    if button(
+        ui,
+        p.fold_scale,
+        "Scale",
+        "Fold to Scale — show only the scale, and notes outside it (G)",
+    ) {
+        p.fold_scale = !p.fold_scale;
+    }
+    if button(
+        ui,
+        p.highlight,
+        "Hilite",
+        "Highlight Scale — show the scale across the grid (K)",
+    ) {
+        p.highlight = !p.highlight;
+    }
+    if button(
+        ui,
+        p.filters.open,
+        "Find",
+        "Find and Select Notes — filter notes into the selection",
+    ) {
+        p.filters.open = !p.filters.open;
+    }
+    if button(
+        ui,
+        p.focus_mode,
+        "Focus",
+        "Focus Mode — edit one clip while seeing the rest (N, or hold N)",
+    ) {
+        p.focus_mode = !p.focus_mode;
     }
 }
 

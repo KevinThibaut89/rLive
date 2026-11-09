@@ -3,6 +3,7 @@
 use super::{Entry, Entry::Item, Entry::Separator, FocusArea, MenuCommand as M, MenuState};
 use crate::session::{ChainRef, ClipRef};
 use crate::ui::automation::{self, EnvelopeClipboard};
+use crate::ui::clip_view::MarkerSel;
 use crate::ui::session_select::selected_slots;
 use crate::ui::{piano_roll, scene_view, session_view, Detail, MainView, RliveApp};
 use rlive_core::TrackId;
@@ -123,7 +124,8 @@ pub enum EditFocus {
 /// Internal clipboard for musical content.
 #[derive(Clone)]
 pub enum ClipBoard {
-    Notes(Vec<NoteData>),
+    /// Notes from each clip they were copied from, the earliest at tick 0.
+    Notes(Vec<(ClipRef, Vec<NoteData>)>),
     Slot(Box<Clip>),
     /// Several Session clips, as (columns from the first track, rows from the top, clip).
     Slots(Vec<(usize, usize, Clip)>),
@@ -348,6 +350,7 @@ impl RliveApp {
             return;
         }
         self.ui.piano.selected.clear();
+        self.ui.piano.others.clear();
         let project = &self.session.project;
         self.ui
             .arr
@@ -400,6 +403,18 @@ impl RliveApp {
                 if let Some(ClipBoard::Notes(notes)) = ui.clipboard.clone() {
                     piano_roll::paste_notes(session, ui, &notes);
                 }
+            }
+            Edit::Duplicate if ui.clip_view.marker == Some(MarkerSel::Loop) => {
+                if let Some(r) = ui.selected_clip {
+                    session.duplicate_loop(r);
+                    ui.piano.reset_view = true;
+                }
+            }
+            Edit::Duplicate if !ui.piano.bars.is_empty() => {
+                for r in ui.piano.bars.clone() {
+                    session.duplicate_loop(r);
+                }
+                ui.piano.reset_view = true;
             }
             Edit::Duplicate => piano_roll::duplicate_selection(session, ui),
             Edit::Delete => piano_roll::delete_selected(session, ui),

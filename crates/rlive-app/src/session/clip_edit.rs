@@ -353,6 +353,13 @@ impl Session {
         self.edit_clips(targets, "Clip Scale", |c| c.scale = scale.clone())
     }
 
+    /// Remembers the scale of the clip last shown, which new clips take on (manual p. 286).
+    pub fn note_recent_scale(&mut self, scale: &ClipScale) {
+        if self.recent_scale != *scale {
+            self.recent_scale.clone_from(scale);
+        }
+    }
+
     /// A clip's scale for the pitch tools, if it's on and one rLive knows.
     pub fn pitch_scale(clip: &Clip) -> Option<PitchScale> {
         if !clip.scale.enabled {

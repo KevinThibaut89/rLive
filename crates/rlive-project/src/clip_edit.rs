@@ -261,7 +261,7 @@ pub fn merged<T: PartialOrd + Copy>(values: impl IntoIterator<Item = T>) -> Opti
 // ------------------------------------------------------------- notes
 
 /// The notes a tool works on: the selected ones, or all of them with nothing selected.
-fn chosen(notes: &[NoteData], selected: &[usize]) -> Vec<usize> {
+pub(crate) fn chosen(notes: &[NoteData], selected: &[usize]) -> Vec<usize> {
     if selected.is_empty() {
         (0..notes.len()).collect()
     } else {
@@ -276,7 +276,7 @@ fn chosen(notes: &[NoteData], selected: &[usize]) -> Vec<usize> {
 /// A clip's scale for pitch tools: root, and the mask of its notes with the root as bit 0.
 pub type PitchScale = (u8, u16);
 
-fn in_scale(key: i32, (root, mask): PitchScale) -> bool {
+pub(crate) fn in_scale(key: i32, (root, mask): PitchScale) -> bool {
     mask & (1 << (key - root as i32).rem_euclid(12)) != 0
 }
 
@@ -325,15 +325,32 @@ pub fn fit_to_scale(notes: &mut [NoteData], selected: &[usize], scale: PitchScal
     }
 }
 
-/// Flips the selection upside down, so the highest note and the lowest swap.
-pub fn invert(notes: &mut [NoteData], selected: &[usize]) {
+/// Flips the selection upside down, so the highest note and the lowest swap. With a scale it's
+/// by the scale's degrees, so what was in the scale stays in it (manual p. 270).
+pub fn invert(notes: &mut [NoteData], selected: &[usize], scale: Option<PitchScale>) {
     let set = chosen(notes, selected);
     let Some((lo, hi)) = merged(set.iter().map(|i| notes[*i].key)) else {
         return;
     };
     for i in set {
-        notes[i].key = hi - (notes[i].key - lo);
+        let key = notes[i].key;
+        notes[i].key = match scale {
+            // Reflected about the middle in semitones, then to the nearest degree: the top and
+            // bottom land on each other, and each step keeps its distance in degrees.
+            Some(s) => {
+                let steps = degrees_between(lo, key, s);
+                step_in_scale(hi, -steps, s)
+            }
+            None => hi - (key - lo),
+        };
     }
+}
+
+/// How many notes of the scale lie between `lo` and `key`, counting `key`.
+fn degrees_between(lo: u8, key: u8, scale: PitchScale) -> i32 {
+    (lo as i32 + 1..=key as i32)
+        .filter(|k| in_scale(*k, scale))
+        .count() as i32
 }
 
 /// A new note at `interval` from each one chosen. The new notes are at the end of the list.
@@ -373,7 +390,8 @@ pub fn set_length(notes: &mut [NoteData], selected: &[usize], length: u64) {
     }
 }
 
-/// Moves each note by up to half a grid division, `amount` of the way. `random` gives -1..1.
+/// Moves each note by up to a quarter of a grid division, `amount` of the way (manual p. 273).
+/// `random` gives -1..1.
 pub fn humanize(
     notes: &mut [NoteData],
     selected: &[usize],
@@ -381,7 +399,7 @@ pub fn humanize(
     grid: u64,
     mut random: impl FnMut() -> f64,
 ) {
-    let reach = grid as f64 / 2.0 * amount.clamp(0.0, 1.0);
+    let reach = grid as f64 / 4.0 * amount.clamp(0.0, 1.0);
     for i in chosen(notes, selected) {
         let start = notes[i].start as f64 + reach * random().clamp(-1.0, 1.0);
         notes[i].start = start.round().max(0.0) as u64;
@@ -403,15 +421,16 @@ pub fn reverse(notes: &mut [NoteData], selected: &[usize]) {
     }
 }
 
-/// Lengthens or shortens each note to reach the next one. The last note keeps its length.
-pub fn legato(notes: &mut [NoteData], selected: &[usize]) {
+/// Lengthens or shortens each note to reach the next one, and the last to the end of the loop
+/// (manual p. 275).
+pub fn legato(notes: &mut [NoteData], selected: &[usize], loop_end: u64) {
     let mut set = chosen(notes, selected);
     set.sort_by_key(|i| notes[*i].start);
     let starts: Vec<u64> = set.iter().map(|i| notes[*i].start).collect();
     for (at, i) in set.iter().enumerate() {
-        if let Some(next) = starts[at + 1..].iter().find(|s| **s > starts[at]) {
-            notes[*i].length = next - starts[at];
-        }
+        let next = starts[at + 1..].iter().find(|s| **s > starts[at]).copied();
+        let reach = next.unwrap_or(loop_end.max(starts[at] + 1));
+        notes[*i].length = reach - starts[at];
     }
 }
 
@@ -566,11 +585,33 @@ mod tests {
     #[test]
     fn invert_swaps_top_and_bottom_and_interval_adds_notes() {
         let mut n = vec![note(0, 60), note(1, 64), note(2, 72)];
-        invert(&mut n, &[]);
+        invert(&mut n, &[], None);
         assert_eq!((n[0].key, n[1].key, n[2].key), (72, 68, 60));
         add_interval(&mut n, &[0], 3, None);
         assert_eq!(n.len(), 4);
         assert_eq!(n[3].key, 75);
+    }
+
+    #[test]
+    fn fit_to_scale_takes_the_lower_note_on_a_tie() {
+        // C# is as far from C as from D, both in C major.
+        let mut n = vec![note(0, 61)];
+        fit_to_scale(&mut n, &[], MAJOR);
+        assert_eq!(n[0].key, 60);
+    }
+
+    #[test]
+    fn a_scale_inverts_by_its_degrees() {
+        // C, E, G in C major: two degrees apart each.
+        let mut n = vec![note(0, 60), note(1, 64), note(2, 67)];
+        invert(&mut n, &[], Some(MAJOR));
+        assert_eq!((n[0].key, n[1].key, n[2].key), (67, 64, 60));
+        let mut n = vec![note(0, 60), note(1, 62), note(2, 67)];
+        invert(&mut n, &[], Some(MAJOR));
+        assert_eq!(
+            n[1].key, 65,
+            "D is a degree up from the bottom, so F a degree down"
+        );
     }
 
     #[test]
@@ -581,8 +622,9 @@ mod tests {
         assert_eq!(n[0].length, 2 * PPQ);
         set_length(&mut n, &[1], 7);
         assert_eq!((n[0].length, n[1].length), (2 * PPQ, 7));
-        legato(&mut n, &[]);
+        legato(&mut n, &[], 3 * PPQ);
         assert_eq!(n[0].length, 2 * PPQ, "reaches the next note");
+        assert_eq!(n[1].length, PPQ, "and the last reaches the end of the loop");
         let mut n = vec![note(0, 60), NoteData::new(PPQ, 2 * PPQ, 62, 0.8)];
         reverse(&mut n, &[]);
         assert_eq!(n[0].start, 2 * PPQ);
@@ -590,11 +632,11 @@ mod tests {
     }
 
     #[test]
-    fn humanize_stays_within_half_a_grid() {
+    fn humanize_stays_within_a_quarter_of_a_grid() {
         let mut n = vec![note(PPQ, 60)];
         let grid = PPQ / 4;
         humanize(&mut n, &[], 1.0, grid, || 1.0);
-        assert_eq!(n[0].start, PPQ + grid / 2);
+        assert_eq!(n[0].start, PPQ + grid / 4);
     }
 
     #[test]

@@ -32,6 +32,7 @@ fn cx(focus: FocusArea) -> KeyContext {
         enter_held: false,
         slot_selected: false,
         lane_focused: false,
+        notes_free: false,
     }
 }
 
@@ -84,7 +85,12 @@ fn the_same_chord_means_different_things_by_focus() {
         )),
     );
     let notes = cx(FocusArea::Clip);
-    assert_eq!(resolve(cmd(Key::E), &notes), Resolution::Pending);
+    assert_eq!(
+        resolve(cmd(Key::E), &notes),
+        Resolution::Run(MenuCommand::Notes(
+            super::super::commands::notes::Notes::ChopOrSplit
+        ))
+    );
     assert_eq!(
         resolve(cmd(Key::E), &cx(FocusArea::Browser)),
         Resolution::Unbound
@@ -99,7 +105,12 @@ fn the_sample_and_note_editors_are_separate_focus_areas() {
         ..notes
     };
     // Cmd+J joins notes, and means nothing in the sample editor.
-    assert_eq!(resolve(cmd(Key::J), &notes), Resolution::Pending);
+    assert_eq!(
+        resolve(cmd(Key::J), &notes),
+        Resolution::Run(MenuCommand::Notes(
+            super::super::commands::notes::Notes::Join
+        ))
+    );
     assert_eq!(resolve(cmd(Key::J), &sample), Resolution::Unbound);
     // Cmd+I inserts a Warp Marker in the sample editor, which is a widget's job, so here it is
     // simply not a command; it means nothing for notes either.
@@ -292,7 +303,9 @@ fn cmd_g_groups_tracks_and_groups_notes_by_focus() {
     assert_eq!(resolve(cmd(Key::G), &cx(FocusArea::Arrangement)), group);
     assert_eq!(
         resolve(cmd(Key::G), &cx(FocusArea::Clip)),
-        Resolution::Pending
+        Resolution::Run(MenuCommand::Notes(
+            super::super::commands::notes::Notes::Group
+        ))
     );
     assert_eq!(
         resolve(cmd(Key::G), &cx(FocusArea::Device)),
@@ -885,5 +898,68 @@ fn the_tab_cycle_is_a_clip_view_shortcut() {
     assert_eq!(
         resolve(alt_tab, &c),
         Resolution::Run(MenuCommand::Clip(Cv::CycleEditorMode))
+    );
+}
+
+#[test]
+fn ctrl_shift_f_opens_the_note_filters_on_windows_and_follow_stays_elsewhere() {
+    let notes = KeyContext {
+        platform: Platform::Other,
+        ..cx(FocusArea::Clip)
+    };
+    let chord = Chord {
+        mods: Mods {
+            cmd: true,
+            shift: true,
+            ..Mods::default()
+        },
+        key: Key::F,
+    };
+    assert_eq!(
+        resolve(chord, &notes),
+        Resolution::Run(MenuCommand::Notes(
+            super::super::commands::notes::Notes::ToggleFilters
+        ))
+    );
+    let sample = KeyContext {
+        clip_is_midi: false,
+        ..notes
+    };
+    assert_eq!(
+        resolve(chord, &sample),
+        Resolution::Run(MenuCommand::Clip(
+            super::super::commands::clip::Clip::ToggleFollow
+        )),
+    );
+}
+
+#[test]
+fn the_note_editor_arrows_yield_to_a_selected_marker() {
+    let free = KeyContext {
+        notes_free: true,
+        ..cx(FocusArea::Clip)
+    };
+    let shift_left = Chord {
+        mods: Mods {
+            shift: true,
+            ..Mods::default()
+        },
+        key: Key::ArrowLeft,
+    };
+    assert_eq!(
+        resolve(shift_left, &free),
+        Resolution::Run(MenuCommand::Notes(
+            super::super::commands::notes::Notes::ExtendLeft
+        ))
+    );
+    let marker = KeyContext {
+        notes_free: false,
+        ..cx(FocusArea::Clip)
+    };
+    assert_eq!(
+        resolve(shift_left, &marker),
+        Resolution::Run(MenuCommand::Clip(
+            super::super::commands::clip::Clip::ShiftRegionLeft
+        ))
     );
 }

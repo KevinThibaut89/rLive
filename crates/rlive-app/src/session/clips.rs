@@ -131,6 +131,7 @@ impl Session {
     pub fn new_midi_clip(&self, color: [u8; 3], sig: rlive_core::TimeSignature) -> Clip {
         Clip {
             launch: self.launch_defaults.settings(),
+            scale: self.recent_scale.clone(),
             ..Clip::new_midi("MIDI Clip", color, 1, sig)
         }
     }

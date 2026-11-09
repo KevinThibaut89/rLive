@@ -291,7 +291,7 @@ pub fn overview_strip(
     total: f64,
     start: f64,
     ticks: f64,
-) -> Option<f64> {
+) -> (Option<f64>, f32) {
     let p = ui.painter_at(strip);
     p.rect_filled(strip, 0.0, pal().panel_dark);
     let total = total.max(1.0);
@@ -310,8 +310,16 @@ pub fn overview_strip(
     } else {
         None
     };
-    info(resp, "Clip View Selector — the whole clip; drag to scroll");
-    out
+    let zoom = if resp.dragged() {
+        resp.drag_delta().y
+    } else {
+        0.0
+    };
+    info(
+        resp,
+        "Clip View Selector — the whole clip; drag sideways to scroll, up or down to zoom",
+    );
+    (out, zoom)
 }
 
 /// The vertical line of the playhead, when the clip is playing.

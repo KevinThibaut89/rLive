@@ -31,7 +31,7 @@ use rlive_core::param::{mixer, EnvTarget, ParamId, ParamOwner, ParamRef};
 use rlive_core::TrackId;
 use rlive_engine::mix_cell;
 use rlive_engine::shared::{NO_SLOT, STOP_QUEUED};
-use rlive_project::{ArrangementClip, Clip, TrackDelay, TrackKind, PALETTE, SEND_OFF_DB};
+use rlive_project::{ArrangementClip, TrackDelay, TrackKind, PALETTE, SEND_OFF_DB};
 use std::sync::atomic::Ordering;
 
 const HEADER_H: f32 = 22.0;
@@ -1031,8 +1031,7 @@ fn track_column(
                 state.piano.reset_view = true;
             } else if clip_info.is_none() && kind == TrackKind::Midi {
                 let color = session.new_clip_color(id);
-                let mut c = Clip::new_midi("MIDI Clip", color, 1, session.project.time_signature);
-                c.launch = session.launch_defaults.settings();
+                let c = session.new_midi_clip(color, session.project.time_signature);
                 session.set_clip(id, slot, Some(c));
                 select_one(state, id, slot);
                 state.detail = Detail::Clip;
@@ -2229,8 +2228,7 @@ fn clip_menu(
         }
         if kind == TrackKind::Midi && ui.button("Insert MIDI Clip").clicked() {
             let color = session.new_clip_color(id);
-            let mut c = Clip::new_midi("MIDI Clip", color, 1, session.project.time_signature);
-            c.launch = session.launch_defaults.settings();
+            let c = session.new_midi_clip(color, session.project.time_signature);
             session.set_clip(id, slot, Some(c));
             state.selected_clip = Some(ClipRef::slot(id, slot));
             state.detail = Detail::Clip;

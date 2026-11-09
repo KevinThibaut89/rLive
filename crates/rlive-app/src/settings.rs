@@ -397,6 +397,8 @@ pub struct Settings {
     pub clip_panel_layout: crate::ui::clip_view::PanelLayout,
     /// The Display & Input option: clicks in the lower half of a waveform scrub.
     pub permanent_scrub_areas: bool,
+    /// Draw Mode draws one key at a time, with Alt for melodies.
+    pub pitch_lock: bool,
     pub follow_behavior: FollowBehavior,
     /// The program a clip's Edit button opens samples in.
     pub sample_editor: Option<PathBuf>,
@@ -434,6 +436,7 @@ impl Default for Settings {
             clip: ClipSettings::default(),
             clip_panel_layout: Default::default(),
             permanent_scrub_areas: true,
+            pitch_lock: false,
             follow_behavior: FollowBehavior::Page,
             sample_editor: None,
             record: RecordSettings::default(),
@@ -593,6 +596,7 @@ mod tests {
             clip: ClipSettings::default(),
             clip_panel_layout: Default::default(),
             permanent_scrub_areas: true,
+            pitch_lock: false,
             follow_behavior: FollowBehavior::Scroll,
             sample_editor: None,
             record_session_automation_in: SessionAutomationIn::AllTracks,

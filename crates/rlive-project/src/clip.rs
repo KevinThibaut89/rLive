@@ -40,6 +40,9 @@ pub struct NoteData {
     /// A deactivated note is kept but does not play.
     #[serde(default, skip_serializing_if = "is_default")]
     pub muted: bool,
+    /// The probability group the note is in, if any (manual p. 283).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub group: Option<NoteGroup>,
     /// Per-note expression. Most notes have none, so it costs one pointer.
     #[serde(default, skip_serializing_if = "is_default")]
     pub expr: Option<Box<NoteExpression>>,
@@ -56,9 +59,18 @@ impl NoteData {
             probability: 1.0,
             vel_range: 0.0,
             muted: false,
+            group: None,
             expr: None,
         }
     }
+}
+
+/// A note's probability group: the notes sharing `id` share one chance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteGroup {
+    pub id: u32,
+    /// Play One: a single note of the group plays. Otherwise Play All.
+    pub one: bool,
 }
 
 /// A note's MPE dimensions. Point times are in ticks from the start of the note.

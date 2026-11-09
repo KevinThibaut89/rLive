@@ -15,7 +15,7 @@ mod launch_panel;
 #[cfg(target_os = "macos")]
 mod mac_menu;
 pub(crate) mod panels;
-mod piano_roll;
+pub(crate) mod piano_roll;
 mod rack_mixer;
 mod sample_editor;
 mod scene_view;
@@ -229,38 +229,10 @@ fn count_in_label(left: f64, sig: rlive_core::TimeSignature) -> String {
     )
 }
 
-impl RliveApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
-        theme::apply(&cc.egui_ctx);
-        let settings = Settings::load();
-        theme::begin_frame(&cc.egui_ctx, &settings.theme);
-        settings_window::apply_scroll_bars(&cc.egui_ctx, settings.scroll_bars);
-        cc.egui_ctx.set_zoom_factor(settings.zoom());
-        let (audio, mut handle) =
-            audio::start(settings.audio_device.as_deref(), &settings.audio_input);
-        let sender = handle.take_midi_sender();
-        let plugins = PluginCache::load(&PluginCache::default_path());
-        let mut session = Session::new(handle, Project::new_default(), plugins);
-        session
-            .samples
-            .configure(settings.samples.loader_config(settings.warp.auto_warp_long));
-        session.send_midi_envelope_auto_reset(settings.midi_envelope_auto_reset);
-        session.set_session_automation_in(settings.record_session_automation_in);
-        session.set_chase(settings.chase_notes);
-        let routing = MidiRouting {
-            sender: Arc::new(Mutex::new(sender)),
-            targets: session.midi_targets.clone(),
-            selected: Arc::new(Mutex::new(None)),
-            activity: Default::default(),
-            system: Default::default(),
-            mpe: Default::default(),
-        };
-        let midi = MidiInput::connect(settings.midi_input.as_deref(), routing.clone())
-            .unwrap_or_else(|e| {
-                log::info!("MIDI input: {e}");
-                MidiInput::none()
-            });
-        let mut ui = UiState {
+impl UiState {
+    /// The UI's state on opening, with `status` on the status bar.
+    pub(crate) fn initial(session: &Session, settings: &Settings, status: String) -> Self {
+        Self {
             selected: session
                 .project
                 .tracks
@@ -310,11 +282,7 @@ impl RliveApp {
             scan_status: String::new(),
             bounce_copy: None,
             pending_freezes: Vec::new(),
-            status: audio
-                .error
-                .clone()
-                .map(|e| format!("Audio: {e}"))
-                .unwrap_or_default(),
+            status,
             sample_files: Vec::new(),
             request_scan: false,
             audio_devices: None,
@@ -323,7 +291,47 @@ impl RliveApp {
             tap_times: Vec::new(),
             hardware: AudioHardware::default(),
             preview_samples: false,
+        }
+    }
+}
+
+impl RliveApp {
+    pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
+        theme::apply(&cc.egui_ctx);
+        let settings = Settings::load();
+        theme::begin_frame(&cc.egui_ctx, &settings.theme);
+        settings_window::apply_scroll_bars(&cc.egui_ctx, settings.scroll_bars);
+        cc.egui_ctx.set_zoom_factor(settings.zoom());
+        let (audio, mut handle) =
+            audio::start(settings.audio_device.as_deref(), &settings.audio_input);
+        let sender = handle.take_midi_sender();
+        let plugins = PluginCache::load(&PluginCache::default_path());
+        let mut session = Session::new(handle, Project::new_default(), plugins);
+        session
+            .samples
+            .configure(settings.samples.loader_config(settings.warp.auto_warp_long));
+        session.send_midi_envelope_auto_reset(settings.midi_envelope_auto_reset);
+        session.set_session_automation_in(settings.record_session_automation_in);
+        session.set_chase(settings.chase_notes);
+        let routing = MidiRouting {
+            sender: Arc::new(Mutex::new(sender)),
+            targets: session.midi_targets.clone(),
+            selected: Arc::new(Mutex::new(None)),
+            activity: Default::default(),
+            system: Default::default(),
+            mpe: Default::default(),
         };
+        let midi = MidiInput::connect(settings.midi_input.as_deref(), routing.clone())
+            .unwrap_or_else(|e| {
+                log::info!("MIDI input: {e}");
+                MidiInput::none()
+            });
+        let status = audio
+            .error
+            .clone()
+            .map(|e| format!("Audio: {e}"))
+            .unwrap_or_default();
+        let mut ui = UiState::initial(&session, &settings, status);
         if let Some(dir) = &settings.sample_dir {
             ui.sample_files = browser::list_samples(dir);
         }
@@ -712,6 +720,13 @@ impl RliveApp {
             track_header: self.ui.focus == FocusArea::Arrangement && self.ui.arr.header_selected,
             enter_held: ctx.input(|i| i.key_down(Key::Enter)),
             lane_focused: self.ui.arr.auto.mode && self.ui.arr.auto.focus.is_some(),
+            notes_free: self.ui.focus == FocusArea::Clip
+                && self.ui.clip_view.marker.is_none()
+                && self
+                    .ui
+                    .selected_clip
+                    .and_then(|r| self.session.clip_at(r))
+                    .is_some_and(|c| c.is_midi()),
         }
     }
 
@@ -1617,6 +1632,7 @@ impl eframe::App for RliveApp {
         );
         self.session.sample_editor = self.settings.sample_editor.clone();
         self.ui.clip_view.permanent_scrub = self.settings.permanent_scrub_areas;
+        self.ui.piano.pitch_lock = self.settings.pitch_lock;
         self.ui.follow_scrolls =
             self.settings.follow_behavior == crate::settings::FollowBehavior::Scroll;
         self.session.record = self.settings.record.clone();
@@ -1637,6 +1653,7 @@ impl eframe::App for RliveApp {
         if let Some(ChainRef::Track(t)) = self.ui.selected {
             *self.routing.selected.lock().unwrap() = Some(t);
         }
+        self.pending.append(&mut self.ui.piano.queued);
         for c in std::mem::take(&mut self.pending) {
             self.dispatch(ctx, c);
         }
@@ -1785,11 +1802,16 @@ impl eframe::App for RliveApp {
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         self.session.pointer_frame(pointer_down);
         let busy = pointer_down
+            || self.ui.piano.chop.is_some()
             || ctx.text_edit_focused()
             || self.session.is_recording()
             || self.session.any_overdubbing();
         self.session.commit_edits(busy);
         self.ui.devices.end_frame();
+        // A chop is adjusted for as long as Cmd stays down.
+        if self.ui.piano.chop.is_some() && !ctx.input(|i| i.modifiers.command) {
+            self.ui.piano.chop = None;
+        }
         #[cfg(target_os = "macos")]
         if let Some(menu) = &self.mac_menu {
             menu.publish(self.menu_state(&ctx));

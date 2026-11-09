@@ -147,6 +147,8 @@ pub enum When {
     SimilarSwap,
     /// The note editor's insert marker is set.
     NoteInsertMarker,
+    /// The note editor has the arrow keys: no marker or loop brace is selected.
+    NotesFree,
 }
 
 /// Modifier keys. `cmd` is Cmd on macOS and Ctrl elsewhere.
@@ -258,6 +260,8 @@ pub struct KeyContext {
     pub slot_selected: bool,
     /// An automation lane has the arrow keys.
     pub lane_focused: bool,
+    /// The note editor has the arrow keys.
+    pub notes_free: bool,
 }
 
 impl KeyContext {
@@ -275,6 +279,7 @@ impl KeyContext {
             When::EnterHeld => self.enter_held,
             When::ArrowsFree => !self.lane_focused,
             When::SlotSelected => self.slot_selected,
+            When::NotesFree | When::NoteInsertMarker => self.notes_free,
             // The rest are built by the milestones that need them.
             _ => false,
         }
@@ -475,8 +480,8 @@ pub fn resolve(chord: Chord, cx: &KeyContext) -> Resolution {
 
 /// Every command that has a menu item.
 fn menu_commands() -> Vec<MenuCommand> {
-    use super::commands::{app, clip, create, edit, file, options, view, Entry};
-    let menus: [&[Entry]; 8] = [
+    use super::commands::{app, clip, create, edit, file, notes, options, view, Entry};
+    let menus: [&[Entry]; 10] = [
         file::MENU,
         edit::MENU,
         create::MENU,
@@ -484,6 +489,8 @@ fn menu_commands() -> Vec<MenuCommand> {
         options::MENU,
         clip::VIEW_MENU,
         clip::EDIT_MENU,
+        notes::EDIT_ITEMS,
+        notes::VIEW_ITEMS,
         &[app::ABOUT, app::PREFERENCES, app::QUIT],
     ];
     menus

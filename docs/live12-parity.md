@@ -344,61 +344,61 @@ Overview chapter; only behaviours stated here or foundational are listed.
 **Milestones:** C9
 
 **Editor**
-- `[ ]` Note grid, time ruler, note ruler C-2 to C8 or tuning pitches or drum pad names, piano ruler [L] → Drum Rack, tuning
-- `[ ]` Velocity and Chance lanes, resize, show/hide all, Swap Lane [M]
-- `[ ]` Zoom and scroll by rulers, modifiers, double-click fit, selector, Page keys, Z/X [M]
-- `[ ]` Expand Clip View to max height [S]
-- `[ ]` Grid snap magnetic after first line; offset-preserving snap [M]
-- `[ ]` Create clip: double-click slot or track, command, record, capture [S]
-- `[ ]` Draw Mode, melodic or pitch-locked, modifier swap, erase behaviour [M]
-- `[ ]` Preview switch global, audition on edit; armed plus Preview enables step record [M]
+- `[~]` Note grid, time ruler, note ruler C-2 to C8 or tuning pitches or drum pad names, piano ruler [L] → Drum Rack, tuning
+- `[~]` Velocity and Chance lanes, resize, show/hide all, Swap Lane [M]
+- `[~]` Zoom and scroll by rulers, modifiers, double-click fit, selector, Page keys, Z/X [M]
+- `[~]` Expand Clip View to max height [S]
+- `[x]` Grid snap magnetic after first line; offset-preserving snap [M]
+- `[~]` Create clip: double-click slot or track, command, record, capture [S]
+- `[x]` Draw Mode, melodic or pitch-locked, modifier swap, erase behaviour [M]
+- `[~]` Preview switch global, audition on edit; armed plus Preview enables step record [M]
 - `[ ]` MIDI import non-destructive, undoable [S]
 
 **Selection and movement**
-- `[ ]` Insert marker, time/note selection toggle, boundary jump, Home/End [M]
-- `[ ]` Keyboard select nearest, next, same key track, extend, Select All, Invert Selection [M]
-- `[ ]` Shift-click piano ruler adds key track [S]
-- `[ ]` Find and Select filters: Pitch, Time (with repeat), Chance, Condition, Count (nth, offset, quantized), Duration, Scale, Velocity [L]
-- `[ ]` Filters combine, Invert, Select, indicator dot, repeated time selection [S]
-- `[ ]` Move by drag or arrows, octave with Shift, modifier copy mid-drag [S]
-- `[ ]` Overlap rule: covering start overwrites, covering end shortens [S]
-- `[ ]` Edge resize, keyboard length change [S]
-- `[ ]` Fit to Time Range [S]
-- `[ ]` Note Stretch markers: proportional, pseudo-marker, mirror by crossing, linked envelopes follow [M]
-- `[ ]` Deactivate notes [S]
-- `[ ]` Split by hold-drag, command, grid-snap modifier [S]
-- `[ ]` Chop on grid, count adjust by arrows or drag, power-of-two modifier [S]
-- `[ ]` Join same-pitch notes, merges MPE [S] → MPE
+- `[~]` Insert marker, time/note selection toggle, boundary jump, Home/End [M]
+- `[x]` Keyboard select nearest, next, same key track, extend, Select All, Invert Selection [M]
+- `[x]` Shift-click piano ruler adds key track [S]
+- `[x]` Find and Select filters: Pitch, Time (with repeat), Chance, Condition, Count (nth, offset, quantized), Duration, Scale, Velocity [L]
+- `[x]` Filters combine, Invert, Select, indicator dot, repeated time selection [S]
+- `[~]` Move by drag or arrows, octave with Shift, modifier copy mid-drag [S]
+- `[x]` Overlap rule: covering start overwrites, covering end shortens [S]
+- `[~]` Edge resize, keyboard length change [S]
+- `[x]` Fit to Time Range [S]
+- `[x]` Note Stretch markers: proportional, pseudo-marker, mirror by crossing, linked envelopes follow [M]
+- `[x]` Deactivate notes [S]
+- `[~]` Split by hold-drag, command, grid-snap modifier [S]
+- `[~]` Chop on grid, count adjust by arrows or drag, power-of-two modifier [S]
+- `[x]` Join same-pitch notes, merges MPE [S] → MPE
 
 **Utilities and expression**
-- `[ ]` Transpose, Fit to Scale (nearest, lower on tie), scale-relative Invert, Add Interval [S each]
-- `[ ]` Stretch, x2, /2, Duration options, Humanize, Reverse, Legato [S each]
-- `[ ]` Quantize four ways; command uses tool settings [S]
-- `[ ]` Velocity editing: drag, type, keyboard ±10, fine, Alt-drag on notes, colour saturation [M]
-- `[ ]` Velocity Randomize with amount; Ramp start/end [S]
-- `[ ]` Velocity Deviation: per-note random range per playback, shaded display, double-click reset [M] → per-note RNG in player
-- `[ ]` Draw velocities with grid, individual, line, crescendo [S]
-- `[ ]` Release velocity lane [S]
-- `[ ]` Chance per note 0-100%, corner triangle, randomize range [M]
-- `[ ]` Probability groups: Play All, Play One; markers, shortcut repeats last type, ungroup, status display [M]
+- `[x]` Transpose, Fit to Scale (nearest, lower on tie), scale-relative Invert, Add Interval [S each]
+- `[x]` Stretch, x2, /2, Duration options, Humanize, Reverse, Legato [S each]
+- `[~]` Quantize four ways; command uses tool settings [S]
+- `[~]` Velocity editing: drag, type, keyboard ±10, fine, Alt-drag on notes, colour saturation [M]
+- `[x]` Velocity Randomize with amount; Ramp start/end [S]
+- `[~]` Velocity Deviation: per-note random range per playback, shaded display, double-click reset [M] → per-note RNG in player
+- `[x]` Draw velocities with grid, individual, line, crescendo [S]
+- `[~]` Release velocity lane [S]
+- `[~]` Chance per note 0-100%, corner triangle, randomize range [M]
+- `[~]` Probability groups: Play All, Play One; markers, shortcut repeats last type, ungroup, status display [M]
 
 **Folding and clips**
-- `[ ]` Fold to Notes, global across Set; Drum Rack pad-aware [S]
-- `[ ]` Highlight Scale with root emphasis [S]
-- `[ ]` Fold to Scale; out-of-scale notes stay visible [S]
-- `[ ]` Spelling: flats, sharps, both, Auto by circle of fifths, MIDI numbers [S]
-- `[ ]` New clip inherits most recent scale, inactive if disabled [S]
-- `[ ]` Crop Clip; Duplicate/Delete/Insert Time inside clip, boundaries unchanged [S]
-- `[ ]` Loop duplicate; looped by default [S]
+- `[x]` Fold to Notes, global across Set; Drum Rack pad-aware [S]
+- `[~]` Highlight Scale with root emphasis [S]
+- `[x]` Fold to Scale; out-of-scale notes stay visible [S]
+- `[x]` Spelling: flats, sharps, both, Auto by circle of fifths, MIDI numbers [S]
+- `[x]` New clip inherits most recent scale, inactive if disabled [S]
+- `[x]` Crop Clip; Duplicate/Delete/Insert Time inside clip, boundaries unchanged [S]
+- `[x]` Loop duplicate; looped by default [S]
 
 **Multi-clip**
-- `[ ]` Up to eight clips shown together; loop bars, resize, select, duplicate [L]
-- `[ ]` Focus Mode, toggle and momentary; inactive grey; hover reveal [M]
-- `[ ]` Non-focus: edit across clips and loop boundaries, cross-clip paste [L]
-- `[ ]` Velocity and Chance apply to foreground clip only [S]
-- `[ ]` Shared loop, signature, groove, scale; asterisk on mixed [S]
-- `[ ]` Session: looped clips only, realign display, ordered by track then scene [M]
-- `[ ]` Arrangement: up to eight tracks, draw across boundaries, half-lit Loop state [M]
+- `[~]` Up to eight clips shown together; loop bars, resize, select, duplicate [L]
+- `[~]` Focus Mode, toggle and momentary; inactive grey; hover reveal [M]
+- `[x]` Non-focus: edit across clips and loop boundaries, cross-clip paste [L]
+- `[x]` Velocity and Chance apply to foreground clip only [S]
+- `[~]` Shared loop, signature, groove, scale; asterisk on mixed [S]
+- `[x]` Session: looped clips only, realign display, ordered by track then scene [M]
+- `[~]` Arrangement: up to eight tracks, draw across boundaries, half-lit Loop state [M]
 
 
 ## 11. MIDI Tools (pp. 293-329)
@@ -1342,7 +1342,6 @@ Shortcuts declared in the keymap that do nothing yet, by milestone. This list is
 - `[ ]` **C18:** Hide/show video window
 - `[ ]` **C19:** Cancel value entry; Confirm value entry; Current scene from the last track; Decrement value; Delete track from title bar; Eight scenes down; Eight scenes up; First track of the scene; Focus Mixer; Increment value; Jump to highlighted track title; Last track of the scene; Move nonadjacent tracks down; Move nonadjacent tracks left; Move nonadjacent tracks right; Move nonadjacent tracks up; Next control; Next field; Next name while renaming; Next neighbouring control; Next track while renaming; Previous control; Previous neighbouring control; Return to default; Scene down; Scene up; Select all clips and slots; Select clip above; Select clip below; Select clip left; Select clip right; Type a value; Value down by an octave or fine step; Value up by an octave or fine step
 - `[ ]` **C6:** Add take area to the main lane; Add take lane; Audition take lane; Duplicate take lane; Next take into the main clip; Previous take into the main clip; Show take lanes
-- `[ ]` **C9:** Change velocity from the note editor; Chop notes or split at time selection; Chop notes, one at a time; Chop notes, two at a time; Copy notes; Fit notes to time range; Fit notes to view height; Fit notes to view width; Group notes (play all); Highlight scale; Insert marker to beginning; Insert marker to end; Invert note selection; Join notes; Lower note chance; Lower note velocity; Lower velocity deviation; Quantize; Quantize settings; Raise note chance; Raise note velocity; Raise velocity deviation; Scroll editor down; Scroll editor down, fine; Scroll editor left; Scroll editor right; Scroll editor up; Scroll editor up, fine; Select next note; Select next note in key track; Select previous note; Select previous note in key track; Set note velocity by typing; Show/hide note filters; Split notes at an exact place; Ungroup notes; Zoom back from clip selection; Zoom in horizontally; Zoom out horizontally; Zoom to clip selection
 - `[ ]` **out:** Focus Learn View; Hide/show Learn View
 <!-- pending-shortcuts:end -->
 

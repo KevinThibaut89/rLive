@@ -135,6 +135,8 @@ pub struct Session {
     pub clip_defaults: ClipDefaults,
     /// The program Edit opens a sample in.
     pub sample_editor: Option<PathBuf>,
+    /// The scale of the clip last shown in the Clip View, which new clips take on.
+    pub recent_scale: rlive_project::ClipScale,
     /// The file Manage Sample File asked the File Manager (C13) to show.
     pub file_manager_target: Option<PathBuf>,
     /// Reversing and cropping running off the audio thread, and what they've learned.
@@ -236,6 +238,7 @@ impl Session {
             overdubs: takes::OverdubState::default(),
             captures: HashMap::new(),
             step_keys: HashMap::new(),
+            recent_scale: rlive_project::ClipScale::default(),
             temp_recordings: Vec::new(),
             render_job: None,
             discarded_files: Vec::new(),

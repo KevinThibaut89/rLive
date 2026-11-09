@@ -1306,7 +1306,7 @@ fn create_midi_clip(
     let color = session.new_clip_color(id);
     let sig = session.project.time_signature;
     let start = grid::grid_floor(axis.tick(pos.x), grid, bars);
-    let placed = ArrangementClip::new(Clip::new_midi("MIDI Clip", color, 1, sig), start);
+    let placed = ArrangementClip::new(session.new_midi_clip(color, sig), start);
     let clip_id = placed.id;
     session.arr_place(id, placed);
     state.arr.selection = vec![(id, clip_id)];

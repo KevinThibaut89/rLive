@@ -3,6 +3,10 @@
 use super::data::{ClipData, ExprPoint, MidiClip, Note, NoteExpression};
 use super::BlockTime;
 use rlive_core::{ClipRegion, ExprKind, MidiEvent, MidiMessage, NoteId, NoteIds, NoteSpace};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// The softest a note with Velocity Deviation can come out: a velocity of 0 would be a note-off.
+const MIN_VELOCITY: f32 = 1.0 / 127.0;
 
 /// How many clip notes can sound at once. A further note simply doesn't start, so that every
 /// note which does start can always be released.
@@ -33,7 +37,13 @@ pub(crate) struct Voices {
     sounding: [Sounding; MAX_SOUNDING],
     len: usize,
     ids: NoteIds,
+    /// What this run of playback draws its Chance and Velocity Deviation from. Moves on each time
+    /// everything is released, so the next run comes out differently.
+    luck: u64,
 }
+
+/// Each player starts somewhere different, so two tracks playing the same clip don't agree.
+static NEXT_LUCK: AtomicU64 = AtomicU64::new(0x51ed_270b_3f9a_16c7);
 
 impl Voices {
     pub fn new(space: NoteSpace) -> Self {
@@ -41,7 +51,54 @@ impl Voices {
             sounding: [SILENT; MAX_SOUNDING],
             len: 0,
             ids: NoteIds::new(space),
+            luck: NEXT_LUCK.fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed),
         }
+    }
+
+    /// Sets what Chance and Velocity Deviation draw from, so a test can repeat them.
+    #[cfg(test)]
+    pub fn seed(&mut self, seed: u64) {
+        self.luck = seed;
+    }
+
+    /// A number in `0..1`, always the same for one pass of one thing in one run of playback.
+    /// Nothing is stored per note or group, so it can't allocate and a chord split across blocks,
+    /// a chase and a loop all see the same answer.
+    fn draw(&self, pass: i64, what: u64, salt: u64) -> f32 {
+        let mix = |mut x: u64| {
+            x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            x ^ (x >> 31)
+        };
+        let h = mix(self
+            .luck
+            .wrapping_add((pass as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)));
+        let h = mix(h
+            .wrapping_add(what.wrapping_mul(0xd6e8_feb8_6659_fd93))
+            .wrapping_add(salt));
+        (h >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    /// Whether note `index` plays on this pass, and how hard.
+    pub(super) fn fate(&self, note: &Note, index: u32, pass: i64) -> Option<f32> {
+        if note.probability >= 1.0 && note.vel_range == 0.0 && note.group.is_none() {
+            return Some(note.velocity);
+        }
+        let plays = match note.group {
+            None => note.probability >= 1.0 || self.draw(pass, index as u64, 0) < note.probability,
+            Some(g) => {
+                let id = g.id as u64;
+                let chance = note.probability >= 1.0 || self.draw(pass, id, 1) < note.probability;
+                let picked = !g.one
+                    || ((self.draw(pass, id, 2) * g.size as f32) as u16).min(g.size - 1)
+                        == g.member;
+                chance && picked
+            }
+        };
+        plays.then(|| {
+            let spread = self.draw(pass, index as u64, 3) * note.vel_range;
+            (note.velocity + spread).clamp(MIN_VELOCITY, 1.0)
+        })
     }
 
     /// Start note `note` of the clip. Returns its new id, or `None` if too many are sounding.
@@ -87,6 +144,10 @@ impl Voices {
             push_event(events, MidiEvent::new(offset, note_off(v)));
         }
         self.len = 0;
+        self.luck = self
+            .luck
+            .wrapping_mul(0x2545_f491_4f6c_dd1d)
+            .wrapping_add(1);
     }
 }
 
@@ -99,11 +160,11 @@ fn note_off(v: &Sounding) -> MidiMessage {
     }
 }
 
-fn note_on(note: &Note, key: u8, note_id: NoteId) -> MidiMessage {
+fn note_on(velocity: f32, key: u8, note_id: NoteId) -> MidiMessage {
     MidiMessage::NoteOn {
         channel: 0,
         key,
-        velocity: note.velocity,
+        velocity,
         note_id,
         tuning: 0.0,
     }
@@ -170,9 +231,12 @@ pub(super) fn render_midi(
             // Notes meeting at a boundary still come off first: the earlier one is earlier here
             // (and in event order, once the block is sorted).
             if on >= a && on < seg_end {
-                if let Some(id) = voices.on(index, key, note.release) {
+                let velocity = voices.fate(note, index, k);
+                if let Some((velocity, id)) =
+                    velocity.and_then(|v| Some((v, voices.on(index, key, note.release)?)))
+                {
                     let frame = time.event_offset(on);
-                    push_event(ev, MidiEvent::new(frame, note_on(note, key, id)));
+                    push_event(ev, MidiEvent::new(frame, note_on(velocity, key, id)));
                     if let Some(expr) = &note.expr {
                         push_expression(expr, key, id, 0.0, frame, ev);
                     }
@@ -228,8 +292,11 @@ pub(crate) fn chase(
         let off = base + ((note.start + note.length.max(1)) as f64).min(window_to);
         if off > at {
             let key = note.key & 127;
-            if let Some(id) = voices.on(i as u32, key, note.release) {
-                push_event(ev, MidiEvent::new(offset, note_on(note, key, id)));
+            let velocity = voices.fate(note, i as u32, k);
+            if let Some((velocity, id)) =
+                velocity.and_then(|v| Some((v, voices.on(i as u32, key, note.release)?)))
+            {
+                push_event(ev, MidiEvent::new(offset, note_on(velocity, key, id)));
                 if let Some(expr) = &note.expr {
                     push_expression(expr, key, id, at - (base + start), offset, ev);
                 }

@@ -246,8 +246,19 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, state: &mut UiState) {
         let start = piano.scroll.x as f64 * per_px;
         let ticks = piano.view_width as f64 * per_px;
         let total = clip.loop_end().max(clip.end_marker()) as f64;
-        if let Some(to) = markers::overview_strip(ui, strip, total, start, ticks) {
+        let (scrolled, zoom) = markers::overview_strip(ui, strip, total, start, ticks);
+        if let Some(to) = scrolled {
             piano.scroll.x = (to / per_px) as f32;
+        }
+        if zoom != 0.0 {
+            let (ppb, scroll) = piano_roll::zoom_about(
+                piano.scroll.x,
+                piano.view_width / 2.0,
+                piano.px_per_beat,
+                1.0 + zoom * 0.01,
+            );
+            piano.px_per_beat = ppb;
+            piano.scroll.x = scroll;
         }
     }
     let body = Rect::from_min_max(Pos2::new(editor.left(), top), editor.max);
@@ -461,8 +472,12 @@ fn title_bar(
             }
         }
     } else {
-        let name = if multi {
-            format!("{} Clips", group.len())
+        // Names the clip being edited, or its track if it has no name (manual p. 290).
+        let name = if clip.name.is_empty() {
+            session
+                .project
+                .track(cref.track())
+                .map_or_else(String::new, |t| t.name.clone())
         } else {
             clip.name.clone()
         };
@@ -659,6 +674,9 @@ pub(super) fn time_selection(
 ) -> Option<(u64, u64)> {
     let clip = session.clip_at(cref)?;
     if clip.is_midi() {
+        if let Some(t) = state.piano.time.filter(|(a, b)| b > a) {
+            return Some(t);
+        }
         let notes = clip.notes();
         let chosen: Vec<&rlive_project::NoteData> = state
             .piano

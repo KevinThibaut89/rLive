@@ -13,8 +13,8 @@ mod midi;
 
 pub(crate) use audio::{AudioCursor, LANE_CROSSFADE_VOICE, LANE_VOICE};
 pub use data::{
-    AudioClip, ClipData, ExprPoint, FrozenClip, MidiClip, Note, NoteExpression, ProgramChange,
-    WarpedClip,
+    AudioClip, ClipData, ExprPoint, FrozenClip, MidiClip, Note, NoteExpression, PlayGroup,
+    ProgramChange, WarpedClip,
 };
 pub use envelopes::{ClipCurve, ClipEnvelopes, EnvCurve, EnvTiming, EnvelopedClip};
 pub use launcher::{velocity_gain, SlotLaunch};

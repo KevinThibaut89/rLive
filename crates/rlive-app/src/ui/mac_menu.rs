@@ -281,10 +281,12 @@ impl MacMenu {
         let edit = b.submenu(&bar, "Edit");
         b.entries(&edit, commands::edit::MENU);
         b.entries(&edit, commands::clip::EDIT_MENU);
+        b.entries(&edit, commands::notes::EDIT_ITEMS);
         b.entries(&b.submenu(&bar, "Create"), commands::create::MENU);
         let view = b.submenu(&bar, "View");
         b.entries(&view, commands::view::MENU);
         b.entries(&view, commands::clip::VIEW_MENU);
+        b.entries(&view, commands::notes::VIEW_ITEMS);
         b.entries(&b.submenu(&bar, "Options"), commands::options::MENU);
 
         let window = b.submenu(&bar, "Window");

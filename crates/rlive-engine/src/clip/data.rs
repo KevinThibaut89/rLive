@@ -32,7 +32,24 @@ pub struct Note {
     pub velocity: f32,
     /// Velocity of the note-off, 0..1.
     pub release: f32,
+    /// The chance the note plays each time it comes round, 0..1.
+    pub probability: f32,
+    /// Each playback adds a random amount up to this to the velocity, downward if negative.
+    pub vel_range: f32,
+    /// The probability group the note is in, if any.
+    pub group: Option<PlayGroup>,
     pub expr: Option<Box<NoteExpression>>,
+}
+
+/// A note's place in a probability group, which all its members decide together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayGroup {
+    pub id: u32,
+    /// Play One: only the member the group picks sounds.
+    pub one: bool,
+    /// This note's place in the group and the size of the group, filled in by [`MidiClip::new`].
+    pub member: u16,
+    pub size: u16,
 }
 
 impl Default for Note {
@@ -43,8 +60,24 @@ impl Default for Note {
             key: 60,
             velocity: 1.0,
             release: 0.5,
+            probability: 1.0,
+            vel_range: 0.0,
+            group: None,
             expr: None,
         }
+    }
+}
+
+/// Says who each group's members are, so playback can pick one without looking at the others.
+fn number_groups(notes: &mut [Note]) {
+    let mut sizes = std::collections::HashMap::<u32, u16>::new();
+    for g in notes.iter_mut().filter_map(|n| n.group.as_mut()) {
+        let count = sizes.entry(g.id).or_insert(0);
+        g.member = *count;
+        *count += 1;
+    }
+    for g in notes.iter_mut().filter_map(|n| n.group.as_mut()) {
+        g.size = sizes[&g.id];
     }
 }
 
@@ -75,6 +108,7 @@ impl MidiClip {
     /// Build a clip, sorting `notes` by start and key.
     pub fn new(length: u64, mut notes: Vec<Note>, looped: bool) -> Self {
         notes.sort_by_key(|n| (n.start, n.key));
+        number_groups(&mut notes);
         let max_len = notes.iter().map(|n| n.length.max(1)).max().unwrap_or(1);
         Self {
             length,

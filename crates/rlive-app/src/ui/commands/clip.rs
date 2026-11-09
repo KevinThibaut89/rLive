@@ -53,6 +53,7 @@ super::domain! {
 }
 
 pub const VIEW_MENU: &[Entry] = &[
+    Item("Expand Clip View", M::Clip(Clip::ToggleFullSize)),
     Item(
         "Arrange Clip View Panels Automatically",
         M::Clip(Clip::ArrangePanelsAutomatically),
@@ -101,6 +102,7 @@ impl RliveApp {
             layout == P::Vertical,
         );
         s.check(M::Clip(Clip::ToggleFollow), self.ui.clip_view.follow);
+        s.check(M::Clip(Clip::ToggleFullSize), self.ui.clip_view.full_size);
     }
 
     /// Where a Set shortcut puts a marker: the playhead while it plays, or the insert marker.
